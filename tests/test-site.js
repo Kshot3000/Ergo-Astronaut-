@@ -33,7 +33,7 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
 check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=16"));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=17"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -398,6 +398,7 @@ check("box id rejects malformed expected id", app.analyzeBoxId(BOX1, "1234") ===
 check("big vlq reads 64-bit amounts", (() => { const v = app.readVlqBig(app.hexToBytes("ffffffffffffffffff01"), 0); return v.value === 18446744073709551615n && v.length === 10; })());
 check("big vlq rejects truncated/overlong", app.readVlqBig(app.hexToBytes("80"), 0) === null && app.readVlqBig(new Uint8Array(0), 0) === null);
 check("zigzag decode", app.zigzagDecode(1705148n) === 852574n && app.zigzagDecode(1n) === -1n && app.zigzagDecode(2n) === 1n && app.zigzagDecode(0n) === 0n);
+check("zigzag 32-bit decode truncates like fleet readI16/readI32", app.zigzagDecode32(18446744073709551614n) === 2147483647n && app.zigzagDecode32(18446744073709551615n) === -2147483648n && app.zigzagDecode32(65535n) === -32768n && app.zigzagDecode32(1705148n) === 852574n && app.zigzagDecode32(1n) === -1n);
 const parsed1 = app.parseErgoBox(BOX1);
 check("parser fleet vector 1 fields", parsed1.valid === true && parsed1.boxId === BOX1_ID && parsed1.byteLength === 110 && parsed1.valueNano === "1000000" && parsed1.valueErg === "0.001" && parsed1.creationHeight === 849741 && parsed1.index === 0 && parsed1.transactionId === "ae11d207f0989945f63909d2f703b2640acf4f654a8fdadd23570a640f9d12ee");
 check("parser fleet vector 1 tree and token", parsed1.ergoTree === "0008cd038d39af8c37583609ff51c6a577efe60684119da2fbd0d75f9c72372886a58a63" && parsed1.tokens.length === 1 && parsed1.tokens[0].tokenId === "50fdc80e168c153e472bd7e3dd18a4a0b9e90c550206fdbdb789ee8afdd3b1a9" && parsed1.tokens[0].amount === "1" && parsed1.registers.length === 0);
@@ -417,6 +418,17 @@ const parsedA = app.parseErgoBox(SYNTH_A);
 check("parser size-flagged tree box fields", parsedA.valid === true && parsedA.boxId === "cd46ba3fb988549c4be66b6e31eeeb8886ba377f6867bc368345ef43470219ce" && parsedA.byteLength === 126 && parsedA.valueNano === "2000000" && parsedA.ergoTree === "0806d191a304c801" && parsedA.creationHeight === 900000 && parsedA.index === 1 && parsedA.tokens[0].amount === "42");
 check("parser decodes SLong and SInt registers", parsedA.registers.length === 3 && parsedA.registers[0].name === "R4" && parsedA.registers[0].type === "SLong" && parsedA.registers[0].value === "430550309" && parsedA.registers[0].rawHex === "05cab4cd9a03" && parsedA.registers[1].name === "R5" && parsedA.registers[1].type === "SInt" && parsedA.registers[1].value === "852574" && parsedA.registers[1].rawHex === "04bc8968");
 check("parser decodes Coll[SByte] register", parsedA.registers[2].name === "R6" && parsedA.registers[2].type === "Coll[SByte]" && parsedA.registers[2].value === "0xf7ef73c4a4ab91b84bb0a2905108d534114472ec057be3a57a9dfc9b1fbd85c1" && parsedA.registers[2].rawHex === "0e20f7ef73c4a4ab91b84bb0a2905108d534114472ec057be3a57a9dfc9b1fbd85c1");
+/* Regression (fixed 2026-10-07): fleet encodes SInt extremes as a
+   64-bit-wide VLQ whose low 32 bits carry the zigzag; decoding it in
+   64-bit space returned 9223372036854775807 for SInt max. The parser
+   now decodes Short/Int through fleet's 32-bit zigzag, exactly like
+   its readI16/readI32. Vector built byte-by-byte for this test and
+   cross-checked against fleet's published constant vectors
+   (04feffffffffffffffff01 = SInt max). */
+const BOX_EXTREME = "80897a0008cd038d39af8c37583609ff51c6a577efe60684119da2fbd0d75f9c72372886a58a63a0f736000404feffffffffffffffff0104ffffffffffffffffff011002feffffffffffffffff01ffffffffffffffffff0103ffff03ae11d207f0989945f63909d2f703b2640acf4f654a8fdadd23570a640f9d12ee00";
+const parsedX = app.parseErgoBox(BOX_EXTREME);
+check("parser decodes SInt extremes at fleet width", parsedX.valid === true && parsedX.boxId === "c2024c38602bdc5d7571989703d2292a7829e39a84a48b5f64c8aa7d4029b280" && parsedX.registers[0].type === "SInt" && parsedX.registers[0].value === "2147483647" && parsedX.registers[1].value === "-2147483648");
+check("parser decodes Coll[SInt] extremes and SShort min", parsedX.registers[2].type === "Coll[SInt]" && parsedX.registers[2].value === "[2147483647, -2147483648]" && parsedX.registers[3].type === "SShort" && parsedX.registers[3].value === "-32768");
 const SYNTH_B = "c0843d" + "1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304" + "cdee330000ae11d207f0989945f63909d2f703b2640acf4f654a8fdadd23570a640f9d12ee00";
 check("parser fee-contract tree box", (() => { const p = app.parseErgoBox(SYNTH_B); return p.valid === true && p.boxId === "2bd17795c004f44c3530fe232707b781f3efdc135736ffe5bde7f6944b4207c0" && p.byteLength === 146 && p.ergoTree === app.FEE_CONTRACT_HEX && p.tokens.length === 0 && p.registers.length === 0 && p.creationHeight === 849741; })());
 check("parser tolerates whitespace, 0x and uppercase", app.parseErgoBox(" 0x" + BOX1.toUpperCase().slice(0, 60) + "\n" + BOX1.toUpperCase().slice(60) + " ").boxId === BOX1_ID);

@@ -200,7 +200,11 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   flag); a no-size-field tree that is neither recognised form, and a
   register holding an exotic constant type (Option, Box, AvlTree),
   both stop the parse with the reason stated plainly rather than a
-  guessed field boundary. Verified against fleet-sdk's published box
+  guessed field boundary. Integer registers decode at fleet's own
+  widths — Short/Int through its 32-bit zigzag (its `readI16` /
+  `readI32` truncate the raw VLQ to 32 bits first, which matters at
+  the extremes, where fleet's encoder emits a 64-bit-wide VLQ) and
+  Long through its 64-bit zigzag. Verified against fleet-sdk's published box
   test vectors — all six parseable vectors reproduce their recorded
   fields and box IDs, including the 24-token box — and cross-checked
   with an independent Python parser.

@@ -326,7 +326,7 @@
 
       <form class="tool" id="boxparse-calc">
         <h3>15 · Serialized box parser (box bytes → every field)</h3>
-        <p>The full read-back of tool 14: paste a box's full serialized bytes and I take them apart locally, field by field, in the exact layout Ergo serializes a box — the value (a VLQ integer), the ErgoTree, the creation height, each token's 32-byte ID and raw amount, the non-mandatory registers R4–R9 decoded as the Sigma constants they hold, then the creating transaction's ID and the box's output index — and I recompute the box ID from the same bytes, so it always agrees with tool 14. Two honest limits, the same ones fleet-sdk's own box deserializer has: a script with no size field that is not the standard P2PK tree or the miner fee contract cannot be delimited without parsing the full script, and a register holding an exotic constant type (an Option, Box or AvlTree constant) stops the parse — both are reported plainly rather than guessed past, because a wrong field boundary would silently corrupt every field after it.</p>
+        <p>The full read-back of tool 14: paste a box's full serialized bytes and I take them apart locally, field by field, in the exact layout Ergo serializes a box — the value (a VLQ integer), the ErgoTree, the creation height, each token's 32-byte ID and raw amount, the non-mandatory registers R4–R9 decoded as the Sigma constants they hold, then the creating transaction's ID and the box's output index — and I recompute the box ID from the same bytes, so it always agrees with tool 14. Two honest limits, the same ones fleet-sdk's own box deserializer has: a script with no size field that is not the standard P2PK tree or the miner fee contract cannot be delimited without parsing the full script, and a register holding an exotic constant type (an Option, Box or AvlTree constant) stops the parse — both are reported plainly rather than guessed past, because a wrong field boundary would silently corrupt every field after it. Integer registers decode at the same widths fleet-sdk's reader uses — Short and Int through its 32-bit zigzag, Long through its 64-bit one — so even an SInt sitting at a 32-bit extreme reads back as the value that was actually written.</p>
         <label for="boxparse-bytes">Serialized box bytes (hex)</label>
         <textarea id="boxparse-bytes" rows="3" spellcheck="false" placeholder="e.g. c0843d0008cd…" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Parse the box</button>
@@ -411,6 +411,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=16"></script>
+<script src="app.js?v=17"></script>
 </body>
 </html>

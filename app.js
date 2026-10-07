@@ -777,7 +777,12 @@ function analyzeBoxId(boxHex, expectedStr) {
    followed by the constant's data (zigzag VLQ for Short/Int/Long,
    a VLQ length + bytes for BigInt, 33 bytes for a group element,
    a 0xcd ProveDlog opcode + 33 bytes for the SigmaProp form fleet
-   implements, a VLQ length + elements for collections). Constants of
+   implements, a VLQ length + elements for collections). Integer
+   constants decode at fleet's widths: Short/Int through its 32-bit
+   zigzag (fleet's readI16/readI32 both truncate the raw VLQ to
+   32 bits first — load-bearing at the extremes, where fleet's own
+   encoder emits a 64-bit-wide VLQ) and Long through its 64-bit
+   zigzag. Constants of
    types outside that set (Option, Box, AvlTree) stop the parse with
    the reason stated: the fields after such a register cannot be
    located safely. Verified against fleet-sdk's published box test
@@ -799,8 +804,27 @@ function readVlqBig(bytes, offset) {
   }
   return null;
 }
+/* fleet-sdk's zigZag64.decode (its readI64 path): decode, then wrap
+   to a signed 64-bit result. The wrap is the identity for every
+   canonical encoding; it only bites on over-wide crafted VLQs. */
 function zigzagDecode(v) {
-  return (v >> 1n) ^ (-(v & 1n));
+  var d = (v >> 1n) ^ (-(v & 1n));
+  var wrapped = d & 18446744073709551615n;
+  return wrapped >= 9223372036854775808n ? wrapped - 18446744073709551616n : wrapped;
+}
+/* fleet-sdk's zigZag32.decode (its readI16 AND readI32 paths): the
+   raw VLQ is truncated to an unsigned 32-bit value BEFORE decoding.
+   That truncation is load-bearing, not a detail: fleet encodes
+   Short/Int in signed 32-bit zigzag space and writes a negative
+   result as its unsigned 64-bit form (see sigmaIntZigzag), so an
+   extreme SInt arrives as a 64-bit-wide VLQ (SInt max is
+   feffffffffffffffff01) whose low 32 bits are the real zigzag.
+   Decoding that VLQ in 64-bit space — as this parser originally
+   did — returns a wrong huge number (9223372036854775807 for SInt
+   max). Fixed 2026-10-07 to mirror fleet's reader exactly. */
+function zigzagDecode32(v) {
+  var u = v & 4294967295n;
+  return (u >> 1n) ^ (-(u & 1n));
 }
 function sigmaTypeName(node) {
   if (node.kind === "prim") return SIGMA_PRIMITIVE_NAMES[node.code];
@@ -890,7 +914,14 @@ function parseSigmaData(node, bytes, offset) {
       if (offset + 1 > bytes.length) return null;
       return { value: String(bytes[offset] > 127 ? bytes[offset] - 256 : bytes[offset]), length: 1 };
     }
-    if (node.code === 3 || node.code === 4 || node.code === 5) {
+    if (node.code === 3 || node.code === 4) {
+      /* SShort/SInt: fleet reads both through its 32-bit zigzag —
+         see zigzagDecode32 for why the width matters at extremes. */
+      v = readVlqBig(bytes, offset);
+      if (!v) return null;
+      return { value: zigzagDecode32(v.value).toString(), length: v.length };
+    }
+    if (node.code === 5) {
       v = readVlqBig(bytes, offset);
       if (!v) return null;
       return { value: zigzagDecode(v.value).toString(), length: v.length };
@@ -1229,7 +1260,7 @@ function buildErgoBox(fields) {
     parsed.tokens.length === tokenBytes.length &&
     parsed.registers.length === regBytes.length &&
     parsed.tokens.every(function (tk, i) { return tk.tokenId === bytesToHex(tokenBytes[i].id) && tk.amount === tokenBytes[i].amount.toString(); }) &&
-    parsed.registers.every(function (rg, i) { return rg.type === regBytes[i].typeName && rg.rawHex === regBytes[i].rawHex; });
+    parsed.registers.every(function (rg, i) { return rg.type === regBytes[i].typeName && rg.value === regBytes[i].value && rg.rawHex === regBytes[i].rawHex; });
   if (!roundTripped) return fail("Internal round-trip check failed: the assembled bytes do not parse back to exactly these fields — refusing to show them rather than risk a mismatched box.");
   return {
     valid: true, reason: null,
@@ -1241,7 +1272,7 @@ function buildErgoBox(fields) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox };
 }
 
 if (typeof document !== "undefined") {

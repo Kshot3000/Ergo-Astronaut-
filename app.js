@@ -304,8 +304,41 @@ function tokenDisplayToRaw(displayStr, decStr) {
   return raw.toString();
 }
 
+/* ---------- Storage rent countdown ---------- */
+/* A box becomes eligible for storage rent once the chain height reaches
+   its creation height + STORAGE_PERIOD_BLOCKS (1,051,200 blocks, about
+   4 years at the 2-minute block target) — the same period tool 3 uses
+   for the fee itself. Both heights are user-supplied (read them off a
+   block explorer: a box's creation height is on its explorer page);
+   this tool fetches nothing and claims no live chain data. Exact
+   BigInt maths for the heights; the days figure is an approximation
+   from the block target, because real block intervals vary. */
+function parseChainHeight(heightStr) {
+  var s = (heightStr == null ? "" : String(heightStr)).trim();
+  if (!/^\d+$/.test(s)) return null;
+  return s;
+}
+function analyzeRentCountdown(creationStr, currentStr) {
+  var creation = parseChainHeight(creationStr);
+  var current = parseChainHeight(currentStr);
+  if (creation === null || current === null) return null;
+  var created = BigInt(creation);
+  var now = BigInt(current);
+  if (now < created) return null;
+  var eligibility = created + BigInt(STORAGE_PERIOD_BLOCKS);
+  var eligible = now >= eligibility;
+  var remaining = eligible ? 0n : eligibility - now;
+  return {
+    ageBlocks: (now - created).toString(),
+    eligibilityHeight: eligibility.toString(),
+    eligible: eligible,
+    blocksRemaining: remaining.toString(),
+    approxDaysRemaining: Number(remaining) / BLOCKS_PER_DAY
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw };
+  module.exports = { blake2b256, base58Decode, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown };
 }
 
 if (typeof document !== "undefined") {
@@ -459,6 +492,24 @@ if (typeof document !== "undefined") {
       } else {
         out.textContent = "Fill in one side — the raw on-chain amount or the display amount — and I will convert the other.";
       }
+    });
+
+    /* --- storage rent countdown --- */
+    document.getElementById("rent-clock-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("rent-clock-result");
+      var res = analyzeRentCountdown(document.getElementById("rentclock-created").value, document.getElementById("rentclock-current").value);
+      if (res === null) {
+        out.textContent = "Enter both heights as whole block numbers, with the current height at or above the box's creation height — both are on the box's and the chain's explorer pages.";
+        return;
+      }
+      var msg = "This box is " + res.ageBlocks + " blocks old. It becomes eligible for storage rent at height " + res.eligibilityHeight + " (its creation height + 1,051,200 blocks). ";
+      if (res.eligible) {
+        msg += "⚠ It is already past that height: a miner may now deduct storage rent from it (tool 3 estimates the fee), or spend it whole if its ERG does not cover the rent. Move it to a fresh box to reset the clock.";
+      } else {
+        msg += "That is " + res.blocksRemaining + " blocks away — roughly " + fmtEstimate(res.approxDaysRemaining) + " days at the 2-minute block target (an approximation: real block intervals vary). Spending the box before then resets the clock, because the replacement box gets a new creation height.";
+      }
+      out.textContent = msg;
     });
 
     /* --- copy donation address --- */

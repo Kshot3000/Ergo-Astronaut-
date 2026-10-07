@@ -231,6 +231,17 @@
         <button type="submit" class="btn primary">Convert</button>
         <p id="token-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="rent-clock-calc">
+        <h3>7 · Storage rent countdown</h3>
+        <p>When does a box's rent clock run out? A box becomes eligible for storage rent (tool 3) once the chain reaches its creation height + 1,051,200 blocks — about 4 years at the 2-minute block target. You supply both heights from a block explorer (a box's creation height is on its explorer page) — this tool fetches nothing and claims no live chain data.</p>
+        <label for="rentclock-created">Box creation height</label>
+        <input id="rentclock-created" inputmode="numeric" placeholder="e.g. 1000000" autocomplete="off">
+        <label for="rentclock-current">Current chain height</label>
+        <input id="rentclock-current" inputmode="numeric" placeholder="e.g. 1500000" autocomplete="off">
+        <button type="submit" class="btn primary">Check the countdown</button>
+        <p id="rent-clock-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -276,6 +287,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

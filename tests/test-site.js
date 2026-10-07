@@ -32,12 +32,13 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=2") && html.includes("app.js?v=5"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=2") && html.includes("app.js?v=6"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
 check("token converter tool on hub", html.includes('id="token-calc"') && html.includes("whole integers") && readme.includes("Token amount converter"));
+check("rent countdown tool on hub, no live-data claim", html.includes('id="rent-clock-calc"') && html.includes("claims no live chain data") && readme.includes("Storage rent countdown"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -163,6 +164,21 @@ check("display to raw at 0 decimals", app.tokenDisplayToRaw("777", "0") === "777
 check("display to raw rejects sub-raw-unit precision", app.tokenDisplayToRaw("0.001", "2") === null && app.tokenDisplayToRaw("1.234", "2") === null);
 check("display to raw rejects junk", app.tokenDisplayToRaw("x", "2") === null && app.tokenDisplayToRaw("", "2") === null && app.tokenDisplayToRaw("-1", "2") === null && app.tokenDisplayToRaw("1", "99") === null);
 check("token round trip exact", app.tokenDisplayToRaw(app.tokenRawToDisplay("987654321", "6"), "6") === "987654321" && app.tokenRawToDisplay(app.tokenDisplayToRaw("42.42", "4"), "4") === "42.42");
+
+/* storage rent countdown — a box is rent-eligible at creation height +
+   STORAGE_PERIOD_BLOCKS (1,051,200); days from the 720 blocks/day target */
+check("parse chain height", app.parseChainHeight("0") === "0" && app.parseChainHeight(" 123 ") === "123" && app.parseChainHeight("1.5") === null && app.parseChainHeight("-1") === null && app.parseChainHeight("") === null && app.parseChainHeight(null) === null);
+const fresh = app.analyzeRentCountdown("1000000", "1000000");
+check("new box has full period remaining", fresh.ageBlocks === "0" && fresh.eligibilityHeight === "2051200" && fresh.eligible === false && fresh.blocksRemaining === "1051200");
+check("full period is ~1460 days at target", close(fresh.approxDaysRemaining, 1460));
+const halfway = app.analyzeRentCountdown("1000000", "1525600");
+check("halfway box age and remaining", halfway.ageBlocks === "525600" && halfway.blocksRemaining === "525600" && halfway.eligible === false && close(halfway.approxDaysRemaining, 730));
+const due = app.analyzeRentCountdown("0", "1051200");
+check("box at eligibility height is eligible", due.eligible === true && due.blocksRemaining === "0" && due.approxDaysRemaining === 0 && due.eligibilityHeight === "1051200");
+check("box past eligibility is eligible", app.analyzeRentCountdown("500", "2000000").eligible === true);
+check("one block before eligibility is not eligible", app.analyzeRentCountdown("0", "1051199").eligible === false && app.analyzeRentCountdown("0", "1051199").blocksRemaining === "1");
+check("countdown rejects current before creation", app.analyzeRentCountdown("100", "99") === null);
+check("countdown rejects junk", app.analyzeRentCountdown("x", "100") === null && app.analyzeRentCountdown("100", "") === null && app.analyzeRentCountdown(null, null) === null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

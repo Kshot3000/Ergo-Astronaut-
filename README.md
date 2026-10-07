@@ -98,6 +98,13 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   the 9-decimal case: nanoERG is the raw unit). Exact BigInt maths both
   ways; display amounts smaller than one raw unit are rejected because
   they cannot exist on-chain.
+- **Storage rent countdown** — a box becomes eligible for storage rent
+  once the chain height reaches its creation height + 1,051,200 blocks
+  (~4 years at the 2-minute block target). You supply both heights from
+  a block explorer; the tool fetches nothing, claims no live chain
+  data, and shows the box's age, its eligibility height, and the
+  blocks (and approximate days) remaining — or warns that it is already
+  rent-eligible. Exact BigInt maths for the heights.
 
 ## Cross-chain integration
 

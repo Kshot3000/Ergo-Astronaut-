@@ -290,6 +290,19 @@
         <button type="submit" class="btn primary">Decode this address</button>
         <p id="addrtree-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="babel-calc">
+        <h3>12 · Babel fee calculator (pay the fee in a token)</h3>
+        <p>No ERG for the transaction fee? A babel box solves that: it is a box holding ERG whose contract lets you swap a native token for ERG at a stated price — the price sits in the box's R5 register, in nanoERG per raw token unit (read it off the box's explorer page). Enter the ERG amount you need, that price, and the token's decimals, and I work out the smallest whole number of raw tokens whose swap covers it — exact ceiling maths with BigInt, done locally. This tool fetches nothing and claims no live babel-box data.</p>
+        <label for="babel-fee">ERG amount you need (fee, plus any ERG the transaction must carry)</label>
+        <input id="babel-fee" inputmode="decimal" placeholder="e.g. 0.0021" autocomplete="off">
+        <label for="babel-price">Babel price (nanoERG per raw token unit, from the box's R5)</label>
+        <input id="babel-price" inputmode="numeric" placeholder="e.g. 1000" autocomplete="off">
+        <label for="babel-decimals">Token decimals (from its explorer listing)</label>
+        <input id="babel-decimals" inputmode="numeric" placeholder="e.g. 2" autocomplete="off">
+        <button type="submit" class="btn primary">Work out the tokens</button>
+        <p id="babel-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -335,6 +348,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>

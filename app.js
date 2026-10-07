@@ -600,8 +600,53 @@ function decodeErgoAddress(raw) {
   return out;
 }
 
+/* ---------- Babel fee calculator ---------- */
+/* Babel fees let a transaction pay its fee in a native token instead of
+   ERG: a babel box holds ERG and its contract swaps tokens for that ERG
+   at a fixed price. In the standard babel-box layout that price is
+   stored in the box's R5 register as an integer count of nanoERG per
+   raw token unit — the raw unit, so a token's decimals (tool 6) only
+   affect how the resulting token count is displayed, never the swap
+   maths. Covering a fee therefore takes a ceiling division: the
+   smallest whole number of raw tokens whose price total is at least
+   the ERG needed. One token fewer would come up short; any overhang
+   above the fee stays in the transaction as ERG. All figures are
+   user-supplied from the babel box's explorer page — this tool fetches
+   nothing, and it does not check that the box actually holds enough
+   ERG to pay out, which the explorer page also shows. Exact BigInt
+   maths throughout. */
+function parseBabelPrice(priceStr) {
+  var s = (priceStr == null ? "" : String(priceStr)).trim();
+  if (!/^\d+$/.test(s)) return null;
+  return BigInt(s) > 0n ? s : null;
+}
+function analyzeBabelFee(feeStr, priceStr, decStr) {
+  var feeNanoStr = ergToNano(feeStr);
+  var priceNanoStr = parseBabelPrice(priceStr);
+  var d = parseTokenDecimals(decStr);
+  if (feeNanoStr === null || priceNanoStr === null || d === null) return null;
+  var fee = BigInt(feeNanoStr);
+  if (fee <= 0n) return null;
+  var price = BigInt(priceNanoStr);
+  var tokensRaw = (fee + price - 1n) / price; /* ceiling division */
+  var covered = tokensRaw * price;
+  var excess = covered - fee;
+  return {
+    feeNano: feeNanoStr,
+    feeErg: nanoToErg(feeNanoStr),
+    priceNano: priceNanoStr,
+    decimals: d,
+    tokensRaw: tokensRaw.toString(),
+    tokensDisplay: tokenRawToDisplay(tokensRaw.toString(), decStr),
+    coveredNano: covered.toString(),
+    coveredErg: nanoToErg(covered.toString()),
+    excessNano: excess.toString(),
+    excessErg: nanoToErg(excess.toString())
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee };
 }
 
 if (typeof document !== "undefined") {
@@ -867,6 +912,23 @@ if (typeof document !== "undefined") {
         }
         out.textContent = msg + "Decoding only, done locally: it shows what the address carries, not who can spend a box it guards.";
       }
+    });
+
+    /* --- Babel fee calculator --- */
+    document.getElementById("babel-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("babel-result");
+      var res = analyzeBabelFee(document.getElementById("babel-fee").value, document.getElementById("babel-price").value, document.getElementById("babel-decimals").value);
+      if (res === null) {
+        out.textContent = "Enter the ERG amount you need (above zero, up to 9 decimal places), the babel box's price as a whole number of nanoERG per raw token unit (its R5 register on the explorer), and the token's decimals (0 to 18).";
+        return;
+      }
+      var msg = "Swapping " + res.tokensRaw + " raw tokens (" + res.tokensDisplay + " displayed at " + res.decimals + " decimals) at " + res.priceNano + " nanoERG per raw token unit releases " + res.coveredErg + " ERG (" + res.coveredNano + " nanoERG) from the babel box. ";
+      msg += res.excessNano === "0"
+        ? "That covers the " + res.feeErg + " ERG you need exactly — no overhang. "
+        : "That covers the " + res.feeErg + " ERG you need, with " + res.excessErg + " ERG (" + res.excessNano + " nanoERG) to spare — one token fewer would come up short, and the spare ERG stays in your transaction. ";
+      msg += "Planning only, done locally: check on the explorer that the babel box actually holds at least " + res.coveredErg + " ERG and still quotes this price before building a transaction — boxes get spent and recreated at new prices. Nothing was signed or sent.";
+      out.textContent = msg;
     });
 
     /* --- copy donation address --- */

@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=10"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=11"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -43,6 +43,7 @@ check("p2pk builder tool on hub", html.includes('id="p2pk-calc"') && html.includ
 check("payment planner tool on hub", html.includes('id="payplan-calc"') && html.includes("spends boxes whole") && readme.includes("UTXO payment planner"));
 check("ergoTree inspector tool on hub", html.includes('id="tree-calc"') && html.includes("ErgoTree inspector") && readme.includes("ErgoTree inspector"));
 check("address decoder tool on hub", html.includes('id="addrtree-calc"') && html.includes("one-way") && readme.includes("Address-to-ErgoTree decoder"));
+check("babel fee tool on hub", html.includes('id="babel-calc"') && html.includes("nanoERG per raw token unit") && readme.includes("Babel fee calculator"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -297,6 +298,22 @@ const decMalformed = app.decodeErgoAddress(malformedP2pk);
 check("checksum-valid but non-key P2PK content gets no tree", decMalformed.valid === true && decMalformed.typeCode === 1 && decMalformed.ergoTree === null && decMalformed.publicKey === null && /not a standard 33-byte public key/.test(decMalformed.note));
 check("decoder rejects tampered address", app.decodeErgoAddress("9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvz").valid === false && app.decodeErgoAddress("9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvz").ergoTree === null);
 check("decoder rejects junk", app.decodeErgoAddress("").valid === false && app.decodeErgoAddress(null).valid === false && app.decodeErgoAddress("9fc").valid === false && app.decodeErgoAddress("hello world").valid === false);
+
+/* Babel fee calculator — a babel box's R5 register states its price in
+   nanoERG per raw token unit; covering an ERG amount takes the ceiling
+   of amount / price whole raw tokens, releasing tokens * price nanoERG.
+   Decimals (tool 6) affect only the display form of the token count. */
+check("babel price parses whole nanoERG", app.parseBabelPrice("1000") === "1000" && app.parseBabelPrice(" 1 ") === "1");
+check("babel price rejects junk", app.parseBabelPrice("0") === null && app.parseBabelPrice("1.5") === null && app.parseBabelPrice("-5") === null && app.parseBabelPrice("") === null && app.parseBabelPrice(null) === null);
+const babelExact = app.analyzeBabelFee("0.001", "1000", "2");
+check("babel exact division needs no overhang", babelExact.tokensRaw === "1000" && babelExact.coveredNano === "1000000" && babelExact.excessNano === "0" && babelExact.coveredErg === "0.001");
+check("babel display form uses the decimals", babelExact.tokensDisplay === "10" && babelExact.decimals === 2 && babelExact.feeErg === "0.001" && babelExact.priceNano === "1000");
+const babelCeil = app.analyzeBabelFee("0.001", "300", "2");
+check("babel rounds the token count up", babelCeil.tokensRaw === "3334" && babelCeil.coveredNano === "1000200" && babelCeil.excessNano === "200" && babelCeil.excessErg === "0.0000002");
+check("babel ceiling display form", babelCeil.tokensDisplay === "33.34");
+check("babel one token can cover a smaller fee", (() => { const r = app.analyzeBabelFee("0.001", "2000000", "0"); return r.tokensRaw === "1" && r.coveredNano === "2000000" && r.excessNano === "1000000" && r.tokensDisplay === "1"; })());
+check("babel larger fee scales exactly", (() => { const r = app.analyzeBabelFee("2.1", "1000000", "9"); return r.tokensRaw === "2100" && r.coveredNano === "2100000000" && r.excessNano === "0"; })());
+check("babel rejects junk", app.analyzeBabelFee("0", "1000", "2") === null && app.analyzeBabelFee("x", "1000", "2") === null && app.analyzeBabelFee("0.001", "0", "2") === null && app.analyzeBabelFee("0.001", "1.5", "2") === null && app.analyzeBabelFee("0.001", "1000", "19") === null && app.analyzeBabelFee(null, null, null) === null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

@@ -153,6 +153,17 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   from it, rather than inventing one. Verified against Kyle's P2PK
   address, the fleet #219 P2SH reference addresses on both networks,
   and the fleet-sdk fee-contract P2S address.
+- **Babel fee calculator** — Babel fees let a transaction pay its fee in
+  a native token instead of ERG, swapped through a babel box holding
+  ERG. The box's price is stated in its R5 register in nanoERG per raw
+  token unit; you supply the ERG amount you need, that price, and the
+  token's decimals (from its explorer listing), and the calculator works
+  out the smallest whole number of raw tokens whose swap covers the
+  amount — exact BigInt ceiling maths — plus the ERG that swap releases
+  and any overhang above the amount (one token fewer would come up
+  short). Planning only: it fetches nothing, claims no live babel-box
+  data, and does not check a box's ERG balance or current price — both
+  are on the box's explorer page.
 
 ## Cross-chain integration
 

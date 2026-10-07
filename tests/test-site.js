@@ -33,7 +33,7 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
 check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=11"));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=12"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -44,6 +44,7 @@ check("payment planner tool on hub", html.includes('id="payplan-calc"') && html.
 check("ergoTree inspector tool on hub", html.includes('id="tree-calc"') && html.includes("ErgoTree inspector") && readme.includes("ErgoTree inspector"));
 check("address decoder tool on hub", html.includes('id="addrtree-calc"') && html.includes("one-way") && readme.includes("Address-to-ErgoTree decoder"));
 check("babel fee tool on hub", html.includes('id="babel-calc"') && html.includes("nanoERG per raw token unit") && readme.includes("Babel fee calculator"));
+check("network converter tool on hub", html.includes('id="netconv-calc"') && html.includes("separate worlds") && readme.includes("Address network converter"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -314,6 +315,27 @@ check("babel ceiling display form", babelCeil.tokensDisplay === "33.34");
 check("babel one token can cover a smaller fee", (() => { const r = app.analyzeBabelFee("0.001", "2000000", "0"); return r.tokensRaw === "1" && r.coveredNano === "2000000" && r.excessNano === "1000000" && r.tokensDisplay === "1"; })());
 check("babel larger fee scales exactly", (() => { const r = app.analyzeBabelFee("2.1", "1000000", "9"); return r.tokensRaw === "2100" && r.coveredNano === "2100000000" && r.excessNano === "0"; })());
 check("babel rejects junk", app.analyzeBabelFee("0", "1000", "2") === null && app.analyzeBabelFee("x", "1000", "2") === null && app.analyzeBabelFee("0.001", "0", "2") === null && app.analyzeBabelFee("0.001", "1.5", "2") === null && app.analyzeBabelFee("0.001", "1000", "19") === null && app.analyzeBabelFee(null, null, null) === null);
+
+/* Address network converter — only the prefix byte's high nibble
+   carries the network (0x0 mainnet, 0x1 testnet); the content is
+   byte-identical on both networks and the checksum is recomputed over
+   the new prefix + content. Vectors: the fleet #219 key's P2PK
+   addresses are published on both networks (tool 8), as are the #219
+   P2SH reference addresses (tool 10); Kyle's address and the
+   fee-contract P2S conversion were cross-checked with an independent
+   Python (hashlib) build. */
+const convFleetM = app.convertAddressNetwork("9iJm5XdNBFk14jXE6CWfP3MAWgwA2oNXCPGiVddGzWnxpqZLhLT");
+check("converter fleet mainnet P2PK -> known testnet address", convFleetM.valid === true && convFleetM.network === "Mainnet" && convFleetM.typeCode === 1 && convFleetM.convertedNetwork === "Testnet" && convFleetM.converted === "3WzPufJ2AduwbLwp5JWoQAZ99TuNWj918GMMfmB98eaBU87o7sxR" && convFleetM.contentHex === FLEET_PK);
+check("converter testnet P2PK -> known mainnet address", app.convertAddressNetwork("3WzPufJ2AduwbLwp5JWoQAZ99TuNWj918GMMfmB98eaBU87o7sxR").converted === "9iJm5XdNBFk14jXE6CWfP3MAWgwA2oNXCPGiVddGzWnxpqZLhLT");
+check("converter mainnet P2SH reference -> testnet reference", app.convertAddressNetwork("7HP8obUp83sMkvaem5zXHNBq8rrt6nQRukXFYY9").converted === "qQqAgn6N6hrNTTu2s19HJg52NK37GENqoeo2W6i");
+check("converter testnet P2SH reference -> mainnet reference", app.convertAddressNetwork("qQqAgn6N6hrNTTu2s19HJg52NK37GENqoeo2W6i").converted === "7HP8obUp83sMkvaem5zXHNBq8rrt6nQRukXFYY9");
+check("converter Kyle mainnet -> testnet (python cross-check)", app.convertAddressNetwork(ERG).converted === "3WwhVfBuadPxyM9Evp6nqmKVA3Vax3AmUNZfLbqQoDQGugGD8BaP");
+check("converter fee-contract P2S -> testnet (python cross-check)", app.convertAddressNetwork(FEE_MAINNET_P2S).converted === "Bf1X9JgQTUtgntaer91B24n6kP8L2kqEiQqNf1z97BKo9UbnW3WRP9VXu8BXd1LsYCiYbHJEdWKxkF5YNx5n7m31wsDjbEuB3B13ZMDVBWkepGmWfGa71otpFViHDCuvbw1uNicAQnfuWfnj8fbCa4");
+check("converter round-trips on every type", [ERG, "7HP8obUp83sMkvaem5zXHNBq8rrt6nQRukXFYY9", FEE_MAINNET_P2S].every((a) => app.convertAddressNetwork(app.convertAddressNetwork(a).converted).converted === a));
+check("converted address passes the checker on the other network", (() => { const c = app.checkErgoAddress(app.convertAddressNetwork(ERG).converted); return c.valid === true && c.network === "Testnet" && c.typeCode === 1; })());
+check("converter preserves the content bytes", app.convertAddressNetwork(ERG).contentHex === app.decodeErgoAddress(ERG).contentHex && app.convertAddressNetwork(FEE_MAINNET_P2S).contentHex === app.decodeErgoAddress(FEE_MAINNET_P2S).contentHex);
+check("converter rejects tampered address", app.convertAddressNetwork("9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvz").valid === false && app.convertAddressNetwork("9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvz").converted === null);
+check("converter rejects junk", app.convertAddressNetwork("").valid === false && app.convertAddressNetwork(null).valid === false && app.convertAddressNetwork("hello world").valid === false);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

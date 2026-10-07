@@ -164,6 +164,17 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   short). Planning only: it fetches nothing, claims no live babel-box
   data, and does not check a box's ERG balance or current price — both
   are on the box's explorer page.
+- **Address network converter** — the same address on the other network.
+  Only the prefix byte's high nibble carries the network (0x0 mainnet,
+  0x1 testnet); the content bytes are identical on both, so the
+  converter verifies the checksum, swaps the nibble, and recomputes the
+  checksum over the new prefix. Works for P2PK, P2SH and P2S addresses,
+  with the warning stated plainly on the page: the converted address
+  guards boxes on that network only, and sending mainnet ERG to a
+  testnet address loses it. Verified against the fleet #219 P2PK and
+  P2SH address pairs published on both networks, Kyle's address, and
+  the fee-contract P2S address, cross-checked with an independent
+  Python (hashlib) build.
 
 ## Cross-chain integration
 

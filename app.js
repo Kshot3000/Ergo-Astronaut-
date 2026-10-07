@@ -600,6 +600,42 @@ function decodeErgoAddress(raw) {
   return out;
 }
 
+/* ---------- Address network converter ---------- */
+/* The same address on the other network: an Ergo address is
+   [prefix byte][content][4-byte checksum] (tool 2), and the prefix
+   byte is the network in its high nibble (0x0 mainnet, 0x1 testnet)
+   plus the type in its low nibble (1 P2PK, 2 P2SH, 3 P2S). Nothing
+   else about an address is network-specific — the content bytes are
+   identical on both networks — so the equivalent address on the other
+   network is the same content under the other network nibble, with
+   the checksum recomputed over the new prefix + content. That is
+   exactly how sigmastate's ErgoAddress re-derives an address when the
+   network type changes. Converting changes no ownership and moves no
+   funds: a testnet address guards testnet boxes only, and sending
+   mainnet ERG to a testnet address (or vice versa) loses it — wallets
+   and explorers treat the two networks as separate worlds. The input
+   checksum is verified first (tool 2), so a mistyped address is
+   refused rather than converted into a plausible wrong one. Verified
+   in the tests against the fleet #219 key/address pairs, which are
+   published on both networks, Kyle's address, and the fleet-sdk
+   fee-contract P2S address, cross-checked with an independent Python
+   (hashlib) build. */
+function convertAddressNetwork(raw) {
+  var check = checkErgoAddress(raw);
+  var out = { valid: false, reason: null, network: null, type: null, typeCode: null, converted: null, convertedNetwork: null, contentHex: null };
+  out.network = check.network; out.type = check.type; out.typeCode = check.typeCode;
+  if (!check.valid) { out.reason = check.reason; return out; }
+  var decoded = base58Decode(String(raw).trim());
+  var content = decoded.subarray(1, decoded.length - 4);
+  var newPrefix = (check.network === "Mainnet" ? 0x10 : 0x00) | check.typeCode;
+  out.converted = addressFromContent(newPrefix, content);
+  out.convertedNetwork = check.network === "Mainnet" ? "Testnet" : "Mainnet";
+  out.contentHex = bytesToHex(content);
+  out.valid = true;
+  out.reason = check.reason;
+  return out;
+}
+
 /* ---------- Babel fee calculator ---------- */
 /* Babel fees let a transaction pay its fee in a native token instead of
    ERG: a babel box holds ERG and its contract swaps tokens for that ERG
@@ -646,7 +682,7 @@ function analyzeBabelFee(feeStr, priceStr, decStr) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee };
 }
 
 if (typeof document !== "undefined") {
@@ -929,6 +965,18 @@ if (typeof document !== "undefined") {
         : "That covers the " + res.feeErg + " ERG you need, with " + res.excessErg + " ERG (" + res.excessNano + " nanoERG) to spare — one token fewer would come up short, and the spare ERG stays in your transaction. ";
       msg += "Planning only, done locally: check on the explorer that the babel box actually holds at least " + res.coveredErg + " ERG and still quotes this price before building a transaction — boxes get spent and recreated at new prices. Nothing was signed or sent.";
       out.textContent = msg;
+    });
+
+    /* --- Address network converter --- */
+    document.getElementById("netconv-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("netconv-result");
+      var res = convertAddressNetwork(document.getElementById("netconv-in").value);
+      if (!res.valid) {
+        out.textContent = res.reason + " Fix the address and try again — I only convert addresses whose checksum verifies.";
+        return;
+      }
+      out.textContent = "That is a " + res.network + " " + res.type + " address, and its content is identical on both networks — only the prefix byte changes. The same address on " + res.convertedNetwork + " is: " + res.converted + " — Converting moves no funds and proves no ownership: the converted address guards boxes on " + res.convertedNetwork + " only, and sending " + res.network + " ERG to it would lose them. Converted locally; nothing was signed or sent.";
     });
 
     /* --- copy donation address --- */

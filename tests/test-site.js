@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network", "p2shbuild-hex", "p2shbuild-network"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=20"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network", "p2shbuild-hex", "p2shbuild-network", "hash-input", "hash-mode", "hash-expected"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=21"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -52,6 +52,7 @@ check("box builder tool on hub", html.includes('id="boxbuild-calc"') && html.inc
 check("sigma constant tool on hub", html.includes('id="sigma-calc"') && html.includes("Sigma constant inspector") && readme.includes("Sigma constant inspector"));
 check("p2pk tree builder tool on hub", html.includes('id="treebuild-calc"') && html.includes("P2PK ErgoTree builder") && readme.includes("P2PK ErgoTree builder"));
 check("p2sh builder tool on hub", html.includes('id="p2shbuild-calc"') && html.includes("P2SH address builder") && html.includes("can never be spent") && readme.includes("P2SH address builder"));
+check("blake2b hash tool on hub", html.includes('id="hash-calc"') && html.includes("Blake2b-256 hash calculator") && html.includes("proves no ownership") && readme.includes("Blake2b-256 hash calculator"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -523,6 +524,20 @@ check("p2sh builder agrees with the inspector and the tree builder", p2shMain.ad
 check("p2sh builder refuses segregated trees plainly", app.buildP2SHAddress(FEE_CONTRACT_TREE, "mainnet").valid === false && app.buildP2SHAddress(FEE_CONTRACT_TREE, "mainnet").address === null && /Constant-segregated/.test(app.buildP2SHAddress(FEE_CONTRACT_TREE, "mainnet").reason) && app.buildP2SHAddress(SEG_TREE, "mainnet").valid === false);
 check("p2sh builder tolerates whitespace, 0x and uppercase", app.buildP2SHAddress(" 0X" + P2PK_TREE.toUpperCase() + " ", "Mainnet").address === "7HP8obUp83sMkvaem5zXHNBq8rrt6nQRukXFYY9");
 check("p2sh builder rejects junk, bad networks and size mismatches", app.buildP2SHAddress("zz", "mainnet").valid === false && app.buildP2SHAddress("", "mainnet").valid === false && app.buildP2SHAddress(P2PK_TREE, "mars").valid === false && app.buildP2SHAddress("082408cd" + FLEET_PK, "mainnet").valid === false && app.buildP2SHAddress(P2PK_TREE, "mars").address === null);
+
+/* Blake2b-256 hash calculator — the primitive behind box IDs
+   (tool 14), address checksums and the P2SH hash192. All digests are
+   Python hashlib (blake2b, digest_size=32) vectors computed before
+   coding; the proposition vector's digest must start with the fleet
+   #219 script hash the P2SH tests already pin. */
+check("blake2b hex abc matches the python vector", app.analyzeBlake2b("616263", "hex", "").digest === "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319" && app.analyzeBlake2b("616263", "hex", "").byteLength === 3);
+check("blake2b text mode hashes the utf-8 bytes", app.analyzeBlake2b("abc", "text", "").digest === app.analyzeBlake2b("616263", "hex", "").digest && app.analyzeBlake2b("hello ergo", "text", "").digest === "0a51a581cbb3000b8943585369a4848ca921271606342dc4ad73da38bff52355");
+check("blake2b empty input is hashed, not rejected", app.analyzeBlake2b("", "hex", "").digest === "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8" && app.analyzeBlake2b("", "text", "").digest === "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8" && app.analyzeBlake2b("", "hex", "").byteLength === 0);
+check("blake2b proposition digest starts with the fleet script hash", (() => { const r = app.analyzeBlake2b("08cd" + FLEET_PK, "hex", ""); return r.digest === "62d1e48400494bfedf9bf70d4af152428fb46f32bf05d19907b6fe958144d101" && r.hash192 === P2SH_HASH192; })());
+check("blake2b agrees with the box id tool", app.analyzeBlake2b(BOX1, "hex", "").digest === BOX1_ID && app.analyzeBlake2b("00", "hex", "").digest === "03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314");
+check("blake2b expected match and mismatch reported", app.analyzeBlake2b("616263", "hex", "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319").matches === true && app.analyzeBlake2b("616263", "hex", BOX1_ID).matches === false && app.analyzeBlake2b("616263", "hex", "").matches === null);
+check("blake2b tolerates whitespace, 0x and uppercase in hex mode", app.analyzeBlake2b(" 0x61 6263\n", "HEX", "").digest === "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319");
+check("blake2b rejects junk plainly", app.analyzeBlake2b("abc", "hex", "") === null && app.analyzeBlake2b("zz", "hex", "") === null && app.analyzeBlake2b("616263", "base64", "") === null && app.analyzeBlake2b("616263", "hex", "abcd") === null && app.analyzeBlake2b(null, null, null) === null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

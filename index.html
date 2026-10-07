@@ -403,6 +403,21 @@
         <button type="submit" class="btn primary">Build the P2SH address</button>
         <p id="p2shbuild-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="hash-calc">
+        <h3>21 · Blake2b-256 hash calculator (the hash behind box IDs)</h3>
+        <p>One hash sits underneath almost everything on this page: a box ID is the Blake2b-256 of the box's serialized bytes (tool 14), an address checksum is the first 4 bytes of Blake2b-256 over the address prefix and content (tools 2 and 8), and a P2SH script hash is its first 24 bytes over the script's proposition (tools 10 and 20). This tool is that primitive on its own: paste bytes as hex — a box, a script proposition, anything — or type plain text (hashed as its UTF-8 bytes), and get the full 32-byte digest plus the 24-byte hash192 form. Empty input is hashed, not rejected: the digest of zero bytes is a well-defined value. An optional expected digest reports a match or a mismatch plainly. Verified against Python's hashlib before it shipped here. Hashing is not encryption and proves no ownership — it signs and sends nothing.</p>
+        <label for="hash-input">Input (hex bytes or text)</label>
+        <textarea id="hash-input" rows="3" spellcheck="false" placeholder="e.g. 08cd02… in hex mode, or any text in text mode" autocomplete="off"></textarea>
+        <label for="hash-mode">Input type</label>
+        <select id="hash-mode">
+          <option value="hex" selected>Hex bytes</option><option value="text">Text (UTF-8)</option>
+        </select>
+        <label for="hash-expected">Expected digest (optional)</label>
+        <input id="hash-expected" spellcheck="false" placeholder="Optional — leave empty to just compute the digest" autocomplete="off">
+        <button type="submit" class="btn primary">Hash it</button>
+        <p id="hash-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -448,6 +463,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=20"></script>
+<script src="app.js?v=21"></script>
 </body>
 </html>

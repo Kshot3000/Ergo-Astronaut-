@@ -289,6 +289,19 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   reference addresses on both networks, a size-flagged tree and a
   generic script, cross-checked with an independent Python
   (hashlib) build. Construction only — it signs and sends nothing.
+- **Blake2b-256 hash calculator** — the primitive underneath the
+  rest of the hub, exposed on its own: hex bytes or UTF-8 text in,
+  the full 32-byte digest plus its first 24 bytes (the hash192 form
+  a P2SH address carries) out, with an optional expected digest
+  reported as a plain match or mismatch. A box ID is this hash of
+  the box bytes, an address checksum is its first 4 bytes, and a
+  P2SH script hash is its first 24 bytes over the proposition.
+  Empty input is hashed, not rejected — the digest of zero bytes
+  is well-defined. Verified against Python (hashlib) vectors,
+  including the empty input and the fleet #219 proposition whose
+  digest starts with the known script hash, and it agrees with
+  the box ID calculator on the published box vectors by
+  construction. Hashing only — it signs and sends nothing.
 
 ## Cross-chain integration
 

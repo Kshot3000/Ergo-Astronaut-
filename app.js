@@ -852,6 +852,54 @@ function analyzeBoxId(boxHex, expectedStr) {
   };
 }
 
+/* ---------- Blake2b-256 hash calculator ---------- */
+/* Blake2b-256 is the one hash behind almost everything on this hub:
+   a box ID is the Blake2b-256 of the box bytes (tool 14), an address
+   checksum is its first 4 bytes over prefix + content (tools 2/8),
+   and a P2SH script hash is its first 24 bytes over the proposition
+   (tools 10/20). This tool exposes that primitive directly: hex
+   bytes or UTF-8 text in, the 32-byte digest out, plus the truncated
+   hash192 form P2SH addresses carry. Empty input is hashed, not
+   rejected — the digest of zero bytes is well-defined. Verified
+   against Python hashlib (blake2b, digest_size=32) vectors before
+   coding, including the empty input and the fleet #219 proposition
+   whose full digest must start with the known script hash. */
+function utf8Bytes(str) {
+  if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(str);
+  var s = unescape(encodeURIComponent(str));
+  var out = new Uint8Array(s.length);
+  for (var i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
+  return out;
+}
+function analyzeBlake2b(inputStr, modeStr, expectedStr) {
+  var mode = (modeStr == null ? "" : String(modeStr)).trim().toLowerCase();
+  if (mode !== "hex" && mode !== "text") return null;
+  var bytes;
+  if (mode === "text") {
+    bytes = utf8Bytes(inputStr == null ? "" : String(inputStr));
+  } else {
+    var cleaned = (inputStr == null ? "" : String(inputStr)).replace(/\s+/g, "");
+    if (cleaned === "" || cleaned.toLowerCase() === "0x") {
+      bytes = new Uint8Array(0);
+    } else {
+      bytes = hexToBytes(cleaned);
+      if (!bytes) return null;
+    }
+  }
+  var expected = expectedStr == null ? "" : String(expectedStr).trim().toLowerCase();
+  if (expected.indexOf("0x") === 0) expected = expected.slice(2);
+  if (expected !== "" && !/^[0-9a-f]{64}$/.test(expected)) return null;
+  var digest = bytesToHex(blake2b256(bytes));
+  return {
+    digest: digest,
+    hash192: digest.slice(0, 48),
+    byteLength: bytes.length,
+    mode: mode,
+    expected: expected === "" ? null : expected,
+    matches: expected === "" ? null : digest === expected
+  };
+}
+
 /* ---------- Serialized box parser ---------- */
 /* The field-by-field inverse of tool 14: a serialized ErgoBox is
    [value: BigInt VLQ][ErgoTree][creation height: VLQ][token count:
@@ -1409,7 +1457,7 @@ function buildErgoBox(fields) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b };
 }
 
 if (typeof document !== "undefined") {
@@ -1719,6 +1767,22 @@ if (typeof document !== "undefined") {
       if (res.matches === true) msg += "That matches the expected box ID you entered — the bytes are exactly that box. ";
       else if (res.matches === false) msg += "That does NOT match the expected box ID you entered (" + res.expected + ") — the bytes differ from that box somewhere: a single changed byte changes the whole ID. ";
       msg += "Remember a token minted in a transaction takes this same value — the box ID of the transaction's first input — as its token ID. Computed locally with Blake2b-256; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Blake2b-256 hash calculator --- */
+    document.getElementById("hash-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("hash-result");
+      var res = analyzeBlake2b(document.getElementById("hash-input").value, document.getElementById("hash-mode").value, document.getElementById("hash-expected").value);
+      if (!res) {
+        out.textContent = "I could not hash that: hex mode needs even-length hex bytes (or empty, to hash zero bytes), and an expected digest, if entered, must be a full 64-character hex digest. Nothing was hashed.";
+        return;
+      }
+      var msg = "Blake2b-256 of those " + res.byteLength + " byte(s) (" + res.mode + " input) is: " + res.digest + ". Its first 24 bytes — the hash192 form a P2SH address carries (tools 10 and 20) — are: " + res.hash192 + ". ";
+      if (res.matches === true) msg += "That matches the expected digest you entered. ";
+      else if (res.matches === false) msg += "That does NOT match the expected digest you entered (" + res.expected + ") — a single changed byte changes the whole digest. ";
+      msg += "This is the same hash behind box IDs (tool 14) and address checksums. Computed locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

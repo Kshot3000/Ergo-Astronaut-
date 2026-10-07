@@ -712,8 +712,290 @@ function analyzeBoxId(boxHex, expectedStr) {
   };
 }
 
+/* ---------- Serialized box parser ---------- */
+/* The field-by-field inverse of tool 14: a serialized ErgoBox is
+   [value: BigInt VLQ][ErgoTree][creation height: VLQ][token count:
+   VLQ, then per token a 32-byte ID + a VLQ amount][register count:
+   VLQ, then that many Sigma constants for R4, R5, ...][creating
+   transaction ID: 32 bytes][output index: VLQ] — exactly the layout
+   fleet-sdk's serializeBox writes and deserializeBox reads, and the
+   box ID is the Blake2b-256 of the whole thing (tool 14).
+   The ErgoTree is delimited the same way fleet's reader delimits it:
+   the miner fee contract is recognised by its exact bytes (fleet's
+   FEE_CONTRACT constant), a P2PK tree is 0008cd + a 33-byte
+   compressed key (fleet's validateEcPoint checks only the 02/03
+   prefix and length), and any other tree must carry the 0x08 size
+   flag, whose VLQ size says where it ends. A tree with no size flag
+   that is neither of the two recognised forms cannot be delimited
+   without parsing the full script — fleet's deserializer throws
+   there, and this parser likewise declines plainly instead of
+   guessing where the tree ends. Registers hold Sigma constants:
+   a type byte (primitive codes 1-8; collection and tuple types are
+   constructor-coded as constructor * 12 + embedded primitive code)
+   followed by the constant's data (zigzag VLQ for Short/Int/Long,
+   a VLQ length + bytes for BigInt, 33 bytes for a group element,
+   a 0xcd ProveDlog opcode + 33 bytes for the SigmaProp form fleet
+   implements, a VLQ length + elements for collections). Constants of
+   types outside that set (Option, Box, AvlTree) stop the parse with
+   the reason stated: the fields after such a register cannot be
+   located safely. Verified against fleet-sdk's published box test
+   vectors (their recorded box IDs, values, trees, heights, tokens,
+   transaction IDs and indexes all reproduce) and cross-checked with
+   an independent Python build on 2026-10-07. */
+var FEE_CONTRACT_HEX = "1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304";
+var SIGMA_PRIMITIVE_NAMES = { 1: "SBoolean", 2: "SByte", 3: "SShort", 4: "SInt", 5: "SLong", 6: "SBigInt", 7: "SGroupElement", 8: "SSigmaProp" };
+function readVlqBig(bytes, offset) {
+  var value = 0n;
+  var shift = 0n;
+  var i = offset;
+  while (i < bytes.length && i - offset < 10) {
+    var b = bytes[i];
+    value |= BigInt(b & 0x7f) << shift;
+    shift += 7n;
+    i++;
+    if ((b & 0x80) === 0) return { value: value, length: i - offset };
+  }
+  return null;
+}
+function zigzagDecode(v) {
+  return (v >> 1n) ^ (-(v & 1n));
+}
+function sigmaTypeName(node) {
+  if (node.kind === "prim") return SIGMA_PRIMITIVE_NAMES[node.code];
+  if (node.kind === "coll") return "Coll[" + sigmaTypeName(node.elem) + "]";
+  var names = [];
+  for (var i = 0; i < node.elems.length; i++) names.push(sigmaTypeName(node.elems[i]));
+  return "(" + names.join(", ") + ")";
+}
+function parseSigmaType(bytes, offset) {
+  if (offset >= bytes.length) return null;
+  var b = bytes[offset];
+  if (b === 0) return null;
+  var prim = function (code, len) {
+    if (!SIGMA_PRIMITIVE_NAMES[code]) return null;
+    return { node: { kind: "prim", code: code }, length: len };
+  };
+  if (b < 0x60) {
+    var ctor = Math.floor(b / 12);
+    var embd = b % 12;
+    var sub, i;
+    if (ctor === 0) return prim(embd, 1);
+    if (ctor === 1) {
+      if (embd !== 0) { var p1 = prim(embd, 1); return p1 ? { node: { kind: "coll", elem: p1.node }, length: 1 } : null; }
+      sub = parseSigmaType(bytes, offset + 1);
+      return sub ? { node: { kind: "coll", elem: sub.node }, length: 1 + sub.length } : null;
+    }
+    if (ctor === 2) {
+      var p2 = prim(embd, 0);
+      return p2 ? { node: { kind: "coll", elem: { kind: "coll", elem: p2.node } }, length: 1 } : null;
+    }
+    if (ctor === 3 || ctor === 4) return null; /* Option types: outside this parser's set */
+    if (ctor === 5) {
+      if (embd !== 0) {
+        var p5 = prim(embd, 0);
+        if (!p5) return null;
+        sub = parseSigmaType(bytes, offset + 1);
+        return sub ? { node: { kind: "tuple", elems: [p5.node, sub.node] }, length: 1 + sub.length } : null;
+      }
+      var l5 = parseSigmaType(bytes, offset + 1);
+      if (!l5) return null;
+      var r5 = parseSigmaType(bytes, offset + 1 + l5.length);
+      return r5 ? { node: { kind: "tuple", elems: [l5.node, r5.node] }, length: 1 + l5.length + r5.length } : null;
+    }
+    if (ctor === 6) {
+      if (embd !== 0) {
+        var p6 = prim(embd, 0);
+        if (!p6) return null;
+        sub = parseSigmaType(bytes, offset + 1);
+        return sub ? { node: { kind: "tuple", elems: [sub.node, p6.node] }, length: 1 + sub.length } : null;
+      }
+      var elems6 = [], used6 = 1;
+      for (i = 0; i < 3; i++) { sub = parseSigmaType(bytes, offset + used6); if (!sub) return null; elems6.push(sub.node); used6 += sub.length; }
+      return { node: { kind: "tuple", elems: elems6 }, length: used6 };
+    }
+    if (ctor === 7) {
+      if (embd !== 0) {
+        var p7 = prim(embd, 0);
+        return p7 ? { node: { kind: "tuple", elems: [p7.node, p7.node] }, length: 1 } : null;
+      }
+      var elems7 = [], used7 = 1;
+      for (i = 0; i < 4; i++) { sub = parseSigmaType(bytes, offset + used7); if (!sub) return null; elems7.push(sub.node); used7 += sub.length; }
+      return { node: { kind: "tuple", elems: elems7 }, length: used7 };
+    }
+    return null;
+  }
+  if (b === 0x60) {
+    var lenVlq = readVlqSize(bytes, offset + 1);
+    if (!lenVlq || lenVlq.value < 2 || lenVlq.value > 255) return null;
+    var elems = [], used = 1 + lenVlq.length;
+    for (var k = 0; k < lenVlq.value; k++) {
+      var st = parseSigmaType(bytes, offset + used);
+      if (!st) return null;
+      elems.push(st.node); used += st.length;
+    }
+    return { node: { kind: "tuple", elems: elems }, length: used };
+  }
+  return null; /* 0x62 SUnit / 0x63 SBox / 0x64 SAvlTree and beyond: outside this parser's set */
+}
+function parseSigmaData(node, bytes, offset) {
+  var v, i, sub;
+  if (node.kind === "prim") {
+    if (node.code === 1) {
+      if (offset + 1 > bytes.length) return null;
+      return { value: bytes[offset] === 1 ? "true" : "false", length: 1 };
+    }
+    if (node.code === 2) {
+      if (offset + 1 > bytes.length) return null;
+      return { value: String(bytes[offset] > 127 ? bytes[offset] - 256 : bytes[offset]), length: 1 };
+    }
+    if (node.code === 3 || node.code === 4 || node.code === 5) {
+      v = readVlqBig(bytes, offset);
+      if (!v) return null;
+      return { value: zigzagDecode(v.value).toString(), length: v.length };
+    }
+    if (node.code === 6) {
+      v = readVlqBig(bytes, offset);
+      if (!v) return null;
+      var n = Number(v.value);
+      if (offset + v.length + n > bytes.length) return null;
+      return { value: "0x" + bytesToHex(bytes.subarray(offset + v.length, offset + v.length + n)), length: v.length + n };
+    }
+    if (node.code === 7) {
+      if (offset + 33 > bytes.length) return null;
+      return { value: bytesToHex(bytes.subarray(offset, offset + 33)), length: 33 };
+    }
+    /* SSigmaProp: only the ProveDlog form (0xcd + group element) that fleet implements */
+    if (offset + 34 > bytes.length || bytes[offset] !== 0xcd) return null;
+    return { value: "proveDlog(" + bytesToHex(bytes.subarray(offset + 1, offset + 34)) + ")", length: 34 };
+  }
+  if (node.kind === "coll") {
+    v = readVlqBig(bytes, offset);
+    if (!v) return null;
+    var count = Number(v.value);
+    if (count > 1000000) return null;
+    var elem = node.elem;
+    if (elem.kind === "prim" && elem.code === 2) {
+      if (offset + v.length + count > bytes.length) return null;
+      return { value: "0x" + bytesToHex(bytes.subarray(offset + v.length, offset + v.length + count)), length: v.length + count };
+    }
+    if (elem.kind === "prim" && elem.code === 1) {
+      var nbytes = Math.ceil(count / 8);
+      if (offset + v.length + nbytes > bytes.length) return null;
+      return { value: count + (count === 1 ? " boolean" : " booleans"), length: v.length + nbytes };
+    }
+    var off = offset + v.length;
+    var shown = [];
+    for (i = 0; i < count; i++) {
+      sub = parseSigmaData(elem, bytes, off);
+      if (!sub) return null;
+      if (i < 8) shown.push(sub.value);
+      off += sub.length;
+    }
+    if (count > 8) shown.push("… +" + (count - 8) + " more");
+    return { value: "[" + shown.join(", ") + "]", length: off - offset };
+  }
+  var parts = [], off2 = offset;
+  for (i = 0; i < node.elems.length; i++) {
+    sub = parseSigmaData(node.elems[i], bytes, off2);
+    if (!sub) return null;
+    parts.push(sub.value);
+    off2 += sub.length;
+  }
+  return { value: "(" + parts.join(", ") + ")", length: off2 - offset };
+}
+function parseErgoBox(boxHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, boxId: null, byteLength: null, valueNano: null, valueErg: null, ergoTree: null, creationHeight: null, tokens: null, registers: null, transactionId: null, index: null };
+  };
+  var cleaned = boxHex == null ? "" : String(boxHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  if (!bytes) return fail("Enter the box's full serialized bytes as hex (an even number of 0-9/a-f characters, with or without a 0x prefix) — SDKs and node APIs produce them, and explorers link them from a box's page.");
+  var pos = 0;
+  var step = function (what) { return fail("Truncated box: the bytes end in the middle of the " + what + ". A full serialized box carries its value, ErgoTree, creation height, tokens, registers, creating transaction ID and output index — check the hex is complete."); };
+  var valVlq = readVlqBig(bytes, pos);
+  if (!valVlq) return step("value");
+  var valueNano = valVlq.value;
+  pos += valVlq.length;
+  /* ErgoTree, delimited exactly as fleet-sdk's box reader delimits it */
+  var feeBytes = hexToBytes(FEE_CONTRACT_HEX);
+  var isFee = bytes.length - pos >= feeBytes.length;
+  if (isFee) { for (var f = 0; f < feeBytes.length; f++) { if (bytes[pos + f] !== feeBytes[f]) { isFee = false; break; } } }
+  var treeEnd;
+  if (isFee) {
+    treeEnd = pos + feeBytes.length;
+  } else if (bytes.length - pos >= 36 && bytes[pos] === 0 && bytes[pos + 1] === 0x08 && bytes[pos + 2] === 0xcd && (bytes[pos + 3] === 0x02 || bytes[pos + 3] === 0x03)) {
+    treeEnd = pos + 36;
+  } else {
+    if (pos >= bytes.length) return step("ErgoTree");
+    var headerByte = bytes[pos];
+    if ((headerByte & ERGOTREE_SIZE_FLAG) === 0) return fail("This box's ErgoTree (header byte 0x" + headerByte.toString(16).padStart(2, "0") + ") carries no size field and is not the standard P2PK tree or the miner fee contract — like fleet-sdk's box deserializer, this parser cannot tell where such a tree ends without parsing the full script, so the box is not decoded rather than guessed at.");
+    var sizeVlq = readVlqBig(bytes, pos + 1);
+    if (!sizeVlq) return step("ErgoTree size");
+    treeEnd = pos + 1 + sizeVlq.length + Number(sizeVlq.value);
+    if (treeEnd > bytes.length) return step("ErgoTree");
+  }
+  var ergoTreeHex = bytesToHex(bytes.subarray(pos, treeEnd));
+  pos = treeEnd;
+  var heightVlq = readVlqBig(bytes, pos);
+  if (!heightVlq) return step("creation height");
+  var creationHeight = heightVlq.value;
+  pos += heightVlq.length;
+  var tokCountVlq = readVlqBig(bytes, pos);
+  if (!tokCountVlq) return step("token count");
+  pos += tokCountVlq.length;
+  var tokenCount = Number(tokCountVlq.value);
+  if (tokenCount > 10000) return fail("Implausible token count (" + tokCountVlq.value.toString() + ") — these bytes do not parse as a serialized box from the token count onward; check the hex is a full box serialization, not a transaction or a candidate fragment.");
+  var tokens = [];
+  for (var t = 0; t < tokenCount; t++) {
+    if (pos + 32 > bytes.length) return step("token ID");
+    var tokenId = bytesToHex(bytes.subarray(pos, pos + 32));
+    pos += 32;
+    var amtVlq = readVlqBig(bytes, pos);
+    if (!amtVlq) return step("token amount");
+    tokens.push({ tokenId: tokenId, amount: amtVlq.value.toString() });
+    pos += amtVlq.length;
+  }
+  var regCountVlq = readVlqBig(bytes, pos);
+  if (!regCountVlq) return step("register count");
+  pos += regCountVlq.length;
+  var regCount = Number(regCountVlq.value);
+  if (regCount > 6) return fail("Implausible register count (" + regCountVlq.value.toString() + ") — a box carries at most the six non-mandatory registers R4–R9, so these bytes do not parse as a serialized box from the registers onward.");
+  var registers = [];
+  for (var r = 0; r < regCount; r++) {
+    var regName = "R" + (4 + r);
+    var regStart = pos;
+    var typeParsed = parseSigmaType(bytes, pos);
+    if (!typeParsed) return fail("Register " + regName + " holds a Sigma constant whose type is outside the set this parser decodes (the primitive, collection and tuple types — for example an Option, Box or AvlTree constant). Because a register's length comes from its type, the fields after it cannot be located safely, so the box is not decoded rather than guessed at.");
+    pos += typeParsed.length;
+    var dataParsed = parseSigmaData(typeParsed.node, bytes, pos);
+    if (!dataParsed) return fail("Register " + regName + " (" + sigmaTypeName(typeParsed.node) + ") is truncated or holds a constant form this parser does not decode, so the fields after it cannot be located safely — the box is not decoded rather than guessed at.");
+    pos += dataParsed.length;
+    registers.push({ name: regName, type: sigmaTypeName(typeParsed.node), value: dataParsed.value, rawHex: bytesToHex(bytes.subarray(regStart, pos)) });
+  }
+  if (pos + 32 > bytes.length) return step("creating transaction ID");
+  var transactionId = bytesToHex(bytes.subarray(pos, pos + 32));
+  pos += 32;
+  var indexVlq = readVlqBig(bytes, pos);
+  if (!indexVlq) return step("output index");
+  pos += indexVlq.length;
+  if (pos !== bytes.length) return fail("There are " + (bytes.length - pos) + " extra byte(s) after the output index — a full serialized box ends exactly there, so this hex carries trailing data (it may be a whole transaction, or two boxes pasted together).");
+  return {
+    valid: true, reason: null,
+    boxId: bytesToHex(blake2b256(bytes)),
+    byteLength: bytes.length,
+    valueNano: valueNano.toString(),
+    valueErg: nanoToErg(valueNano.toString()),
+    ergoTree: ergoTreeHex,
+    creationHeight: Number(creationHeight),
+    tokens: tokens,
+    registers: registers,
+    transactionId: transactionId,
+    index: Number(indexVlq.value)
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox };
 }
 
 if (typeof document !== "undefined") {
@@ -1023,6 +1305,33 @@ if (typeof document !== "undefined") {
       if (res.matches === true) msg += "That matches the expected box ID you entered — the bytes are exactly that box. ";
       else if (res.matches === false) msg += "That does NOT match the expected box ID you entered (" + res.expected + ") — the bytes differ from that box somewhere: a single changed byte changes the whole ID. ";
       msg += "Remember a token minted in a transaction takes this same value — the box ID of the transaction's first input — as its token ID. Computed locally with Blake2b-256; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Serialized box parser --- */
+    document.getElementById("boxparse-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("boxparse-result");
+      var res = parseErgoBox(document.getElementById("boxparse-bytes").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Parsed " + res.byteLength + " bytes — box ID " + res.boxId + " (the same Blake2b-256 tool 14 computes, so the two tools agree by construction). " +
+        "Value: " + res.valueErg + " ERG (" + res.valueNano + " nanoERG). " +
+        "ErgoTree (" + (res.ergoTree.length / 2) + " bytes): " + res.ergoTree + " — paste it into tool 10 to inspect the script and derive its addresses. " +
+        "Created at height " + res.creationHeight + " by transaction " + res.transactionId + ", output index " + res.index + ". ";
+      if (res.tokens.length === 0) {
+        msg += "Tokens: none. ";
+      } else {
+        msg += "Tokens (" + res.tokens.length + "): " + res.tokens.map(function (tk) { return tk.amount + " raw of " + tk.tokenId; }).join("; ") + ". Token amounts are the raw on-chain integers — tool 6 converts them to display form once you know each token's decimals. ";
+      }
+      if (res.registers.length === 0) {
+        msg += "Registers: none set (only the mandatory R0–R3, which are the value, script, tokens and creation height already shown). ";
+      } else {
+        msg += "Registers: " + res.registers.map(function (rg) { return rg.name + " = " + rg.value + " (" + rg.type + ", raw " + rg.rawHex + ")"; }).join("; ") + ". ";
+      }
+      msg += "Parsed locally, field by field; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

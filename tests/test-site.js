@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=13"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=14"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -46,6 +46,7 @@ check("address decoder tool on hub", html.includes('id="addrtree-calc"') && html
 check("babel fee tool on hub", html.includes('id="babel-calc"') && html.includes("nanoERG per raw token unit") && readme.includes("Babel fee calculator"));
 check("network converter tool on hub", html.includes('id="netconv-calc"') && html.includes("separate worlds") && readme.includes("Address network converter"));
 check("box id tool on hub", html.includes('id="boxid-calc"') && html.includes("Blake2b-256 of the box's serialized bytes") && readme.includes("Box ID calculator"));
+check("box parser tool on hub", html.includes('id="boxparse-calc"') && html.includes("Serialized box parser") && readme.includes("Serialized box parser"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -361,6 +362,48 @@ check("box id expected mismatch reported plainly", (() => { const r = app.analyz
 check("box id changes when one byte changes", app.analyzeBoxId(BOX1.slice(0, -2) + "01", "").boxId !== BOX1_ID);
 check("box id rejects junk", app.analyzeBoxId("", "") === null && app.analyzeBoxId(null, null) === null && app.analyzeBoxId("abc", "") === null && app.analyzeBoxId("zz00", "") === null && app.analyzeBoxId("0x", "") === null);
 check("box id rejects malformed expected id", app.analyzeBoxId(BOX1, "1234") === null && app.analyzeBoxId(BOX1, "z".repeat(64)) === null);
+
+/* Serialized box parser — the field layout fleet-sdk's serializeBox /
+   deserializeBox use: [value VLQ][ErgoTree][creation height VLQ]
+   [token count VLQ + (32-byte ID + VLQ amount) per token][register
+   count VLQ + Sigma constants][32-byte creating tx ID][index VLQ].
+   Vectors are fleet-sdk's published box test vectors (their recorded
+   fields AND box IDs must reproduce), plus two synthetic boxes built
+   byte-by-byte for the size-flagged-tree and fee-contract paths and
+   the register decoding (fleet's own register-bearing vector uses a
+   segregated tree its deserializer refuses — mirrored below). Every
+   expectation was cross-checked with an independent Python parser
+   (hashlib) on 2026-10-07 before being written here. */
+check("big vlq reads 64-bit amounts", (() => { const v = app.readVlqBig(app.hexToBytes("ffffffffffffffffff01"), 0); return v.value === 18446744073709551615n && v.length === 10; })());
+check("big vlq rejects truncated/overlong", app.readVlqBig(app.hexToBytes("80"), 0) === null && app.readVlqBig(new Uint8Array(0), 0) === null);
+check("zigzag decode", app.zigzagDecode(1705148n) === 852574n && app.zigzagDecode(1n) === -1n && app.zigzagDecode(2n) === 1n && app.zigzagDecode(0n) === 0n);
+const parsed1 = app.parseErgoBox(BOX1);
+check("parser fleet vector 1 fields", parsed1.valid === true && parsed1.boxId === BOX1_ID && parsed1.byteLength === 110 && parsed1.valueNano === "1000000" && parsed1.valueErg === "0.001" && parsed1.creationHeight === 849741 && parsed1.index === 0 && parsed1.transactionId === "ae11d207f0989945f63909d2f703b2640acf4f654a8fdadd23570a640f9d12ee");
+check("parser fleet vector 1 tree and token", parsed1.ergoTree === "0008cd038d39af8c37583609ff51c6a577efe60684119da2fbd0d75f9c72372886a58a63" && parsed1.tokens.length === 1 && parsed1.tokens[0].tokenId === "50fdc80e168c153e472bd7e3dd18a4a0b9e90c550206fdbdb789ee8afdd3b1a9" && parsed1.tokens[0].amount === "1" && parsed1.registers.length === 0);
+check("parser agrees with the box ID tool", parsed1.boxId === app.analyzeBoxId(BOX1, "").boxId);
+check("parsed tree feeds the inspector", (() => { const t = app.analyzeErgoTree(parsed1.ergoTree, "mainnet"); return t.isP2PK === true && t.publicKey === "038d39af8c37583609ff51c6a577efe60684119da2fbd0d75f9c72372886a58a63"; })());
+const parsed3 = app.parseErgoBox(BOX3);
+check("parser fleet vector 3 fields", parsed3.valid === true && parsed3.boxId === BOX3_ID && parsed3.valueNano === "143459798" && parsed3.creationHeight === 800000 && parsed3.index === 2 && parsed3.tokens[0].amount === "359420" && parsed3.transactionId === "8d210ec0a43662a397b1a35cf3091b246927eba1a51bae6696c8a640491eecd6");
+const BOX_NO_TOK = "c0843d0008cd0357ab5c00616362607d7d9e7000f35f4451a35dd99228b36a38f1461e4308e48480ea3000008d210ec0a43662a397b1a35cf3091b246927eba1a51bae6696c8a640491eecd600";
+check("parser box with no tokens or registers", (() => { const p = app.parseErgoBox(BOX_NO_TOK); return p.valid === true && p.boxId === "321a7fffeb3ccde9c694b711e2ea2982ddcc39a97d41151513b07c6276711a51" && p.byteLength === 77 && p.tokens.length === 0 && p.registers.length === 0; })());
+const BOX_24TOK = "caf0ca330008cd038d39af8c37583609ff51c6a577efe60684119da2fbd0d75f9c72372886a58a639fbf3318de5ee573c6a492c129d51119649bfeaedfc9afa6f54af576e62e1f7f3bbd42078e87f9f1051fd6e032e8476c4aa54c18c1a308dce83940e8f4a28f576440513ed7326ad4898a993d03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf043274251ce2cb4eb2024a1a155e19ad1d1f58ff8b9e6eb034a3bb1fd58802757d2380a0b787e905003bd19d0187117f130b62e1bcab0939929ff5c7709f843c5c4dd158949285d00136aba4b4a97b65be491cf9f5ca57b5408b0da8d0194f30ec8330d1e8946161c103c5d6629329285b14ed3eac1dba0e07dbd1e61ee332c2039a7a9c04e8be0cb74eb6f6b1c7ae03a3b3fa62124ef52209a46121e3f93ca98d7fc24198009e90fde8205ef9d3fc330100bd762484086cf560d3127eb53f0769d76244d9737636b2699d55c56cd470bfa589015a34d53ca483924b9a6aa0c771f11888881b516a8d1a9cdc535d063fe26d065e21d601123e8838b95cdaebe24e594276b2a89cd38e98add98405bb5327520ecf6cacf2cb07bf59773def7e08375a553be4cbd862de85f66e6dd3dccb8f87f53158f9255bf59582a6efc79e84911102f31739e2e4937bb9afb552943753d1e3e9cdd1a5e5661949cb0cef93f907eade9e0d30974274078845f263b4f21787e33cc99e9ec19a17ad85a5bc6da2cca91c5a2ec7c98b8c850b0cd8c9f416e5b1ca9f986a7f10a84191dfb85941619e49e53c0dc30ebf83324bfc1c1c51c3a53abfe87e6db9a03c649e8360f255ffc4bd34303d30fc7db23ae551db9c04fbbaac7337d051c10fc3da0ccb864f4d32d40027551e1c3ea3ce361f39b91e40c10fef802b475c06189fdbf844153cdc1d449a5ba87cce13d11bb47b5a539f27f12bfdecfad1f82a472c3d4ecaa08fb7392ff041ee2e6af75f4a558810a74b28600549d5392810e880ade204bf2afb01fde7e373e22f24032434a7b883913bd87a23b62ee8b43eba53c9f6c201bf337a2ce726259ad31e043c5b3d432e31b403fc6686691171e0e0a319b9ae7a0100b1e236b60b95c2c6f8007a9d89bc460fc9e78f98b09faec9449007b40bccf3888124d71693c49a84fbbecd4908c94813b46514b18b67a99952dc1e6e4791556de413db0eee105e8290b090a773b7c56756507d45a76743d73bce54e8a915e95d9eb97360b681e596010089b758cfed2b9eac6721fb4576d8ba016202fdd939f32425aa7e2aefcbdde32e01";
+const parsed24 = app.parseErgoBox(BOX_24TOK);
+check("parser 24-token box (924 bytes)", parsed24.valid === true && parsed24.boxId === "6a83a25cc07a1bb7a0c763f94ede470010c8129ddfa248d8ce645ae5d7bb95d4" && parsed24.byteLength === 924 && parsed24.valueNano === "108181578" && parsed24.creationHeight === 843679 && parsed24.index === 1 && parsed24.tokens.length === 24);
+check("parser 24-token box first and last tokens", parsed24.tokens[0].tokenId === "de5ee573c6a492c129d51119649bfeaedfc9afa6f54af576e62e1f7f3bbd4207" && parsed24.tokens[0].amount === "1581138830" && parsed24.tokens[23].tokenId === "ee105e8290b090a773b7c56756507d45a76743d73bce54e8a915e95d9eb97360" && parsed24.tokens[23].amount === "316227766");
+check("parser reads a >64-bit-range token amount exactly", parsed24.tokens.some(tk => tk.tokenId === "bf59773def7e08375a553be4cbd862de85f66e6dd3dccb8f87f53158f9255bf5" && tk.amount === "1234567890123456789"));
+const SYNTH_A = "80897a0806d191a304c801a0f7360150fdc80e168c153e472bd7e3dd18a4a0b9e90c550206fdbdb789ee8afdd3b1a92a0305cab4cd9a0304bc89680e20f7ef73c4a4ab91b84bb0a2905108d534114472ec057be3a57a9dfc9b1fbd85c1ae11d207f0989945f63909d2f703b2640acf4f654a8fdadd23570a640f9d12ee01";
+const parsedA = app.parseErgoBox(SYNTH_A);
+check("parser size-flagged tree box fields", parsedA.valid === true && parsedA.boxId === "cd46ba3fb988549c4be66b6e31eeeb8886ba377f6867bc368345ef43470219ce" && parsedA.byteLength === 126 && parsedA.valueNano === "2000000" && parsedA.ergoTree === "0806d191a304c801" && parsedA.creationHeight === 900000 && parsedA.index === 1 && parsedA.tokens[0].amount === "42");
+check("parser decodes SLong and SInt registers", parsedA.registers.length === 3 && parsedA.registers[0].name === "R4" && parsedA.registers[0].type === "SLong" && parsedA.registers[0].value === "430550309" && parsedA.registers[0].rawHex === "05cab4cd9a03" && parsedA.registers[1].name === "R5" && parsedA.registers[1].type === "SInt" && parsedA.registers[1].value === "852574" && parsedA.registers[1].rawHex === "04bc8968");
+check("parser decodes Coll[SByte] register", parsedA.registers[2].name === "R6" && parsedA.registers[2].type === "Coll[SByte]" && parsedA.registers[2].value === "0xf7ef73c4a4ab91b84bb0a2905108d534114472ec057be3a57a9dfc9b1fbd85c1" && parsedA.registers[2].rawHex === "0e20f7ef73c4a4ab91b84bb0a2905108d534114472ec057be3a57a9dfc9b1fbd85c1");
+const SYNTH_B = "c0843d" + "1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304" + "cdee330000ae11d207f0989945f63909d2f703b2640acf4f654a8fdadd23570a640f9d12ee00";
+check("parser fee-contract tree box", (() => { const p = app.parseErgoBox(SYNTH_B); return p.valid === true && p.boxId === "2bd17795c004f44c3530fe232707b781f3efdc135736ffe5bde7f6944b4207c0" && p.byteLength === 146 && p.ergoTree === app.FEE_CONTRACT_HEX && p.tokens.length === 0 && p.registers.length === 0 && p.creationHeight === 849741; })());
+check("parser tolerates whitespace, 0x and uppercase", app.parseErgoBox(" 0x" + BOX1.toUpperCase().slice(0, 60) + "\n" + BOX1.toUpperCase().slice(60) + " ").boxId === BOX1_ID);
+check("parser declines a no-size-flag segregated tree like fleet does", (() => { const p = app.parseErgoBox("c0843d1005040004000e36"); return p.valid === false && /no size field/.test(p.reason); })());
+check("parser declines an exotic register constant plainly", (() => { const p = app.parseErgoBox("80897a0806d191a304c801a0f736000163ae11d207f0989945f63909d2f703b2640acf4f654a8fdadd23570a640f9d12ee01"); return p.valid === false && /outside the set/.test(p.reason); })());
+check("parser rejects truncated box", app.parseErgoBox(BOX1.slice(0, -4)).valid === false && app.parseErgoBox(BOX1.slice(0, 40)).valid === false);
+check("parser rejects trailing bytes", (() => { const p = app.parseErgoBox(BOX1 + "00"); return p.valid === false && /extra byte/.test(p.reason); })());
+check("parser rejects junk", app.parseErgoBox("").valid === false && app.parseErgoBox(null).valid === false && app.parseErgoBox("zz00").valid === false && app.parseErgoBox("abc").valid === false);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

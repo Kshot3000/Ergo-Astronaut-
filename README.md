@@ -187,6 +187,23 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   hashing to something that is not the box ID. Verified against three
   of the fleet-sdk serializer's published box test vectors and
   cross-checked with an independent Python (hashlib) build.
+- **Serialized box parser** — the full read-back of the box ID
+  calculator: paste a box's full serialized bytes and it parses them
+  locally in the exact layout fleet-sdk's `serializeBox` /
+  `deserializeBox` use — value, ErgoTree, creation height, every
+  token's ID and raw amount, the R4–R9 registers decoded as the Sigma
+  constants they hold (primitives, collections and tuples, with
+  zigzag-VLQ integers), the creating transaction's ID and the output
+  index — and recomputes the box ID from the same bytes. The tree is
+  delimited exactly as fleet's reader delimits it (fee contract by
+  its exact bytes, P2PK by its 0008cd prefix, otherwise the 0x08 size
+  flag); a no-size-field tree that is neither recognised form, and a
+  register holding an exotic constant type (Option, Box, AvlTree),
+  both stop the parse with the reason stated plainly rather than a
+  guessed field boundary. Verified against fleet-sdk's published box
+  test vectors — all six parseable vectors reproduce their recorded
+  fields and box IDs, including the 24-token box — and cross-checked
+  with an independent Python parser.
 
 ## Cross-chain integration
 

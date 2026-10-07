@@ -312,6 +312,17 @@
         <button type="submit" class="btn primary">Convert to the other network</button>
         <p id="netconv-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="boxid-calc">
+        <h3>14 · Box ID calculator (box bytes → box ID)</h3>
+        <p>Every box has an ID, and it is not assigned or stored inside the box — it is derived: a box ID is the Blake2b-256 of the box's serialized bytes, meaning the full serialization (value, script, creation height, tokens and registers, followed by the creating transaction's ID and the box's index in it). Paste those full serialized bytes — SDKs and node APIs produce them, and explorers link them from a box's page — and I hash them locally and show the ID. Hashing only the candidate bytes gives a different value that is not the box ID. The same derivation names tokens: a token minted in a transaction takes the box ID of that transaction's first input as its token ID. Optionally paste an expected ID and I will tell you plainly whether the bytes match it.</p>
+        <label for="boxid-bytes">Serialized box bytes (hex)</label>
+        <textarea id="boxid-bytes" rows="3" spellcheck="false" placeholder="e.g. c0843d0008cd…" autocomplete="off"></textarea>
+        <label for="boxid-expected">Expected box ID (optional, 64 hex characters)</label>
+        <input id="boxid-expected" spellcheck="false" placeholder="Optional — leave empty to just compute the ID" autocomplete="off">
+        <button type="submit" class="btn primary">Compute the box ID</button>
+        <p id="boxid-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -357,6 +368,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=12"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>

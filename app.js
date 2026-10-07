@@ -681,8 +681,39 @@ function analyzeBabelFee(feeStr, priceStr, decStr) {
   };
 }
 
+/* ---------- Box ID calculator ---------- */
+/* A box's ID is the Blake2b-256 of the box's serialized bytes — the
+   full ErgoBox serialization: the candidate (value, ErgoTree, creation
+   height, tokens, registers) followed by the creating transaction's
+   32-byte ID and the box's output index. That is exactly how the
+   reference implementations derive it (fleet-sdk's ErgoBox.boxId is
+   hex(blake2b256(serializeBox(box))), and ErgoBox.validate recomputes
+   it the same way). Two consequences worth knowing: the candidate
+   bytes alone hash to something else, so only the full serialization
+   gives the ID; and a token minted in a transaction takes its token
+   ID from the box ID of that transaction's first input. Verified
+   against the fleet-sdk serializer's published box test vectors —
+   three real boxes whose serialized bytes reproduce their recorded
+   box IDs exactly under this page's own Blake2b-256 — and cross-checked
+   with an independent Python (hashlib) build on 2026-10-07. */
+function analyzeBoxId(boxHex, expectedStr) {
+  var cleaned = boxHex == null ? "" : String(boxHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  if (!bytes) return null;
+  var expected = expectedStr == null ? "" : String(expectedStr).trim().toLowerCase();
+  if (expected.indexOf("0x") === 0) expected = expected.slice(2);
+  if (expected !== "" && !/^[0-9a-f]{64}$/.test(expected)) return null;
+  var id = bytesToHex(blake2b256(bytes));
+  return {
+    boxId: id,
+    byteLength: bytes.length,
+    expected: expected === "" ? null : expected,
+    matches: expected === "" ? null : id === expected
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId };
 }
 
 if (typeof document !== "undefined") {
@@ -977,6 +1008,22 @@ if (typeof document !== "undefined") {
         return;
       }
       out.textContent = "That is a " + res.network + " " + res.type + " address, and its content is identical on both networks — only the prefix byte changes. The same address on " + res.convertedNetwork + " is: " + res.converted + " — Converting moves no funds and proves no ownership: the converted address guards boxes on " + res.convertedNetwork + " only, and sending " + res.network + " ERG to it would lose them. Converted locally; nothing was signed or sent.";
+    });
+
+    /* --- Box ID calculator --- */
+    document.getElementById("boxid-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("boxid-result");
+      var res = analyzeBoxId(document.getElementById("boxid-bytes").value, document.getElementById("boxid-expected").value);
+      if (!res) {
+        out.textContent = "That is not a valid serialized box: I need the full box bytes as even-length hex (and, if you enter an expected ID, a full 64-character hex ID). Nothing was hashed.";
+        return;
+      }
+      var msg = "Those " + res.byteLength + " bytes hash to box ID: " + res.boxId + ". ";
+      if (res.matches === true) msg += "That matches the expected box ID you entered — the bytes are exactly that box. ";
+      else if (res.matches === false) msg += "That does NOT match the expected box ID you entered (" + res.expected + ") — the bytes differ from that box somewhere: a single changed byte changes the whole ID. ";
+      msg += "Remember a token minted in a transaction takes this same value — the box ID of the transaction's first input — as its token ID. Computed locally with Blake2b-256; nothing was fetched, signed or sent.";
+      out.textContent = msg;
     });
 
     /* --- copy donation address --- */

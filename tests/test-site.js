@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=12"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=13"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -45,6 +45,7 @@ check("ergoTree inspector tool on hub", html.includes('id="tree-calc"') && html.
 check("address decoder tool on hub", html.includes('id="addrtree-calc"') && html.includes("one-way") && readme.includes("Address-to-ErgoTree decoder"));
 check("babel fee tool on hub", html.includes('id="babel-calc"') && html.includes("nanoERG per raw token unit") && readme.includes("Babel fee calculator"));
 check("network converter tool on hub", html.includes('id="netconv-calc"') && html.includes("separate worlds") && readme.includes("Address network converter"));
+check("box id tool on hub", html.includes('id="boxid-calc"') && html.includes("Blake2b-256 of the box's serialized bytes") && readme.includes("Box ID calculator"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -336,6 +337,30 @@ check("converted address passes the checker on the other network", (() => { cons
 check("converter preserves the content bytes", app.convertAddressNetwork(ERG).contentHex === app.decodeErgoAddress(ERG).contentHex && app.convertAddressNetwork(FEE_MAINNET_P2S).contentHex === app.decodeErgoAddress(FEE_MAINNET_P2S).contentHex);
 check("converter rejects tampered address", app.convertAddressNetwork("9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvz").valid === false && app.convertAddressNetwork("9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvz").converted === null);
 check("converter rejects junk", app.convertAddressNetwork("").valid === false && app.convertAddressNetwork(null).valid === false && app.convertAddressNetwork("hello world").valid === false);
+
+/* Box ID calculator — a box ID is the Blake2b-256 of the full
+   serialized box bytes (candidate + creating tx ID + output index),
+   the derivation fleet-sdk's ErgoBox.boxId / ErgoBox.validate use.
+   Vectors are three of the fleet-sdk serializer's published box test
+   vectors, cross-checked with an independent Python (hashlib) build
+   on 2026-10-07: their serialized bytes reproduce their recorded box
+   IDs exactly. A minted token's ID is the box ID of its creating
+   transaction's first input. */
+const BOX1 = "c0843d0008cd038d39af8c37583609ff51c6a577efe60684119da2fbd0d75f9c72372886a58a63cdee330150fdc80e168c153e472bd7e3dd18a4a0b9e90c550206fdbdb789ee8afdd3b1a90100ae11d207f0989945f63909d2f703b2640acf4f654a8fdadd23570a640f9d12ee00";
+const BOX1_ID = "135baecae94f7ec20caf981800166d450bd1dde4b959e5fdd0e2751b679d94dd";
+const BOX2 = "c0843d0008cd02200a1c1b8fa17ec82de54bcaef96f23d7b34196c0410f6f578abdbf163b14b258abd33010cd8c9f416e5b1ca9f986a7f10a84191dfb85941619e49e53c0dc30ebf83324b0100b66aab1e43874ad8c5583f685a7d6d947238c373f615aee1d04ee604ba2c934000";
+const BOX2_ID = "69a2f4067392572ed355179f6b7c0e8f74fb8e34503926e6f836531e79ab13f5";
+const BOX3 = "d68bb4440008cd038d39af8c37583609ff51c6a577efe60684119da2fbd0d75f9c72372886a58a6380ea30011fd6e032e8476c4aa54c18c1a308dce83940e8f4a28f576440513ed7326ad489fcf715008d210ec0a43662a397b1a35cf3091b246927eba1a51bae6696c8a640491eecd602";
+const BOX3_ID = "809b5275a983aa188f376f5b3bffbc9ddaf19739a49f64467b15d47bc5369969";
+check("box id fleet vector 1 (110 bytes)", (() => { const r = app.analyzeBoxId(BOX1, ""); return r.boxId === BOX1_ID && r.byteLength === 110 && r.expected === null && r.matches === null; })());
+check("box id fleet vector 2 (110 bytes)", app.analyzeBoxId(BOX2, "").boxId === BOX2_ID && app.analyzeBoxId(BOX2, "").byteLength === 110);
+check("box id fleet vector 3 (113 bytes)", app.analyzeBoxId(BOX3, "").boxId === BOX3_ID && app.analyzeBoxId(BOX3, "").byteLength === 113);
+check("box id tolerates whitespace, 0x and uppercase", app.analyzeBoxId(" 0x" + BOX1.toUpperCase().slice(0, 100) + "\n" + BOX1.toUpperCase().slice(100) + " ", "").boxId === BOX1_ID);
+check("box id expected match reported", (() => { const r = app.analyzeBoxId(BOX1, BOX1_ID); return r.matches === true && r.expected === BOX1_ID; })());
+check("box id expected mismatch reported plainly", (() => { const r = app.analyzeBoxId(BOX1, BOX2_ID); return r.matches === false && r.boxId === BOX1_ID; })());
+check("box id changes when one byte changes", app.analyzeBoxId(BOX1.slice(0, -2) + "01", "").boxId !== BOX1_ID);
+check("box id rejects junk", app.analyzeBoxId("", "") === null && app.analyzeBoxId(null, null) === null && app.analyzeBoxId("abc", "") === null && app.analyzeBoxId("zz00", "") === null && app.analyzeBoxId("0x", "") === null);
+check("box id rejects malformed expected id", app.analyzeBoxId(BOX1, "1234") === null && app.analyzeBoxId(BOX1, "z".repeat(64)) === null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

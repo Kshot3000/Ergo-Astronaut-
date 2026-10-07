@@ -175,6 +175,18 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   P2SH address pairs published on both networks, Kyle's address, and
   the fee-contract P2S address, cross-checked with an independent
   Python (hashlib) build.
+- **Box ID calculator** — a box's ID is derived, not stored: it is the
+  Blake2b-256 of the box's serialized bytes, the full serialization
+  (candidate, then the creating transaction's ID and the box's output
+  index) — exactly how fleet-sdk's `ErgoBox.boxId` derives and
+  validates it. Paste the full serialized box bytes and the calculator
+  hashes them locally and shows the ID, with an optional expected-ID
+  field that reports a match or a plain mismatch; it also notes the
+  naming rule that a minted token's ID is the box ID of the creating
+  transaction's first input. Candidate-only bytes are called out as
+  hashing to something that is not the box ID. Verified against three
+  of the fleet-sdk serializer's published box test vectors and
+  cross-checked with an independent Python (hashlib) build.
 
 ## Cross-chain integration
 

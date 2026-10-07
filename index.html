@@ -175,6 +175,17 @@
         <button type="submit" class="btn primary">Check this address</button>
         <p id="addr-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="rent-calc">
+        <h3>3 · Storage rent estimator</h3>
+        <p>Ergo charges rent on boxes left unspent for 1,051,200 blocks (about 4 years): the fee is the box's serialized size × the storage fee factor — currently 1,250,000 nanoERG per byte on mainnet, a votable chain parameter I verified against live network params. A simple ERG-only box is roughly 100 bytes serialized; boxes carrying tokens or register data are larger. Tokens cannot pay rent — only the box's ERG can.</p>
+        <label for="rent-bytes">Box size (serialized bytes)</label>
+        <input id="rent-bytes" inputmode="numeric" placeholder="e.g. 112" autocomplete="off">
+        <label for="rent-erg">ERG held in the box</label>
+        <input id="rent-erg" inputmode="decimal" placeholder="e.g. 1" autocomplete="off">
+        <button type="submit" class="btn primary">Estimate rent</button>
+        <p id="rent-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -220,6 +231,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=1"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

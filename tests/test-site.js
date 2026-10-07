@@ -32,8 +32,9 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=1") && html.includes("app.js?v=1"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=1") && html.includes("app.js?v=2"));
+check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -88,6 +89,22 @@ check("1.5 ERG round trip", app.nanoToErg("1500000000") === "1.5");
 check("fractional nanoERG rejected", app.nanoToErg("1.5") === null && app.nanoToErg("-5") === null);
 check("round trip exact", app.nanoToErg(app.ergToNano("42.123456789")) === "42.123456789");
 check("nano constant is 1e9", app.NANO_PER_ERG === 1000000000n);
+
+/* storage rent — protocol formula: bytes * storage_fee_factor (1,250,000
+   nanoERG/byte, live mainnet param 2026-10-06), period 1,051,200 blocks */
+check("rent factor constant", app.STORAGE_FEE_FACTOR_NANO_PER_BYTE === 1250000n);
+check("rent period constant", app.STORAGE_PERIOD_BLOCKS === 1051200);
+check("rent for 100-byte box", app.storageRentNano("100") === "125000000");
+check("rent for 112-byte minimal box is 0.14 ERG", app.storageRentNano("112") === "140000000");
+check("rent rejects junk", app.storageRentNano("0") === null && app.storageRentNano("-3") === null && app.storageRentNano("1.5") === null && app.storageRentNano("") === null);
+const rich = app.analyzeStorageRent("112", "10");
+check("10 ERG in 112-byte box covers 71 payments", rich.payments === "71" && rich.approxYears === "284" && rich.consumableAtFirstRent === false);
+check("rent shown in ERG", rich.rentErg === "0.14" && rich.rentNano === "140000000");
+const dust = app.analyzeStorageRent("112", "0.001");
+check("0.001 ERG box consumable at first rent", dust.consumableAtFirstRent === true && dust.payments === "0");
+const edge = app.analyzeStorageRent("112", "0.28");
+check("exactly 2x rent covers exactly 1 payment", edge.payments === "1" && edge.consumableAtFirstRent === false);
+check("rent analysis rejects junk", app.analyzeStorageRent("abc", "1") === null && app.analyzeStorageRent("112", "x") === null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

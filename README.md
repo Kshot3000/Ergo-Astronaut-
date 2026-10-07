@@ -72,6 +72,13 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   verifies its real checksum (the first 4 bytes of Blake2b-256 over the
   address bytes, stored as the last 4 bytes) and reports the network and
   address type (P2PK / P2SH / P2S) from the prefix byte.
+- **Storage rent estimator** — the protocol fee for a box left unspent for
+  1,051,200 blocks (~4 years) is its serialized size × the storage fee
+  factor (1,250,000 nanoERG per byte on mainnet — a votable chain
+  parameter, verified against live network params on 2026-10-06). The
+  estimator shows the rent per cycle, how many full payments a box's ERG
+  covers, and warns when a box — tokens and NFTs included — could be
+  consumed whole at its first rent date.
 
 ## Cross-chain integration
 

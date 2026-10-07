@@ -159,8 +159,43 @@ function nanoToErg(nanoStr) {
   return frac ? whole.toString() + "." + frac : whole.toString();
 }
 
+/* ---------- Storage rent estimator ---------- */
+/* Protocol rule (sigma-rust, ergo-lib storage_rent.rs): once a box has sat
+   unspent for STORAGE_PERIOD blocks, a miner may deduct
+   fee = serialized box size in bytes * storage_fee_factor, recreating the
+   box with what is left. If the box value is <= the fee, the miner may
+   spend the whole box (ERG and any tokens in it). The factor is a votable
+   chain parameter: 1,250,000 nanoERG per byte, confirmed against live
+   mainnet epoch params (api.ergoplatform.com) on 2026-10-06. */
+var STORAGE_FEE_FACTOR_NANO_PER_BYTE = 1250000n;
+var STORAGE_PERIOD_BLOCKS = 1051200;
+function storageRentNano(sizeStr) {
+  var s = (sizeStr == null ? "" : String(sizeStr)).trim();
+  if (!/^\d+$/.test(s)) return null;
+  var bytes = BigInt(s);
+  if (bytes <= 0n) return null;
+  return (bytes * STORAGE_FEE_FACTOR_NANO_PER_BYTE).toString();
+}
+function analyzeStorageRent(sizeStr, ergStr) {
+  var rentStr = storageRentNano(sizeStr);
+  var valueStr = ergToNano(ergStr);
+  if (rentStr === null || valueStr === null) return null;
+  var rent = BigInt(rentStr);
+  var value = BigInt(valueStr);
+  /* Full rent payments the box can make: it pays while its value is
+     strictly greater than one fee, and is consumable once value <= fee. */
+  var payments = value > rent ? (value - 1n) / rent : 0n;
+  return {
+    rentNano: rentStr,
+    rentErg: nanoToErg(rentStr),
+    payments: payments.toString(),
+    approxYears: (payments * 4n).toString(),
+    consumableAtFirstRent: value <= rent
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES };
+  module.exports = { blake2b256, base58Decode, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS };
 }
 
 if (typeof document !== "undefined") {
@@ -230,6 +265,24 @@ if (typeof document !== "undefined") {
       } else {
         out.textContent = "✗ " + (res.network ? res.network + ", " + res.type + " — but: " : "") + res.reason;
       }
+    });
+
+    /* --- storage rent estimator --- */
+    document.getElementById("rent-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var res = analyzeStorageRent(document.getElementById("rent-bytes").value, document.getElementById("rent-erg").value);
+      var out = document.getElementById("rent-result");
+      if (res === null) {
+        out.textContent = "Enter a box size in whole bytes (above zero) and the box's ERG value (up to 9 decimal places).";
+        return;
+      }
+      var msg = "Storage rent for this box: " + res.rentErg + " ERG (" + res.rentNano + " nanoERG) per 4-year cycle — its serialized size × 1,250,000 nanoERG per byte, the current mainnet storage fee factor (a votable chain parameter). ";
+      if (res.consumableAtFirstRent) {
+        msg += "⚠ This box's ERG does not cover even one rent payment: once it has sat unspent for 1,051,200 blocks (~4 years), a miner may spend the whole box — including any tokens or NFTs inside it. Top it up or move it before then.";
+      } else {
+        msg += "Left untouched, it covers " + res.payments + (res.payments === "1" ? " full rent payment" : " full rent payments") + " — roughly " + res.approxYears + " years of inactivity — before a miner could consume what remains, tokens included. Moving the box resets the 4-year clock. Estimate only: the fee factor can change by miner vote.";
+      }
+      out.textContent = msg;
     });
 
     /* --- copy donation address --- */

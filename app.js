@@ -141,6 +141,41 @@ function checkErgoAddress(raw) {
   };
 }
 
+/* ---------- Base58 encode ---------- */
+function base58Encode(bytes) {
+  if (!bytes || bytes.length === 0) return "";
+  var n = 0n;
+  for (var i = 0; i < bytes.length; i++) n = (n << 8n) | BigInt(bytes[i]);
+  var out = "";
+  while (n > 0n) { out = B58_ALPHABET[Number(n % 58n)] + out; n /= 58n; }
+  for (var z = 0; z < bytes.length && bytes[z] === 0; z++) out = "1" + out;
+  return out;
+}
+
+/* ---------- P2PK address builder (public key -> address) ---------- */
+/* The inverse of the checker above, for P2PK (type 1) addresses only:
+   address bytes = [prefix byte][33-byte compressed public key][checksum],
+   where the prefix is 0x01 on mainnet and 0x11 on testnet (network nibble
+   + type 1) and the checksum is the first 4 bytes of Blake2b-256 over
+   prefix + key — the exact construction sigmastate's ErgoAddress uses.
+   Compressed secp256k1 public keys are 33 bytes starting 0x02 or 0x03.
+   Verified against the documented mainnet/testnet P2PK vectors in the
+   tests, cross-checked with an independent Python (hashlib) build.
+   This builds an address from a PUBLIC key only — never a private key
+   or seed phrase; construction proves nothing about who owns the key. */
+function p2pkAddressFromPublicKey(pubkeyHex, networkStr) {
+  var s = (pubkeyHex == null ? "" : String(pubkeyHex)).trim().toLowerCase();
+  var net = (networkStr == null ? "" : String(networkStr)).trim().toLowerCase();
+  if (net !== "mainnet" && net !== "testnet") return null;
+  if (!/^[0-9a-f]{66}$/.test(s)) return null;
+  if (s.slice(0, 2) !== "02" && s.slice(0, 2) !== "03") return null;
+  var body = [net === "mainnet" ? 0x01 : 0x11];
+  for (var i = 0; i < s.length; i += 2) body.push(parseInt(s.slice(i, i + 2), 16));
+  var digest = blake2b256(Uint8Array.from(body));
+  for (var c = 0; c < 4; c++) body.push(digest[c]);
+  return base58Encode(Uint8Array.from(body));
+}
+
 /* ---------- ERG <-> nanoERG converter (exact BigInt) ---------- */
 var NANO_PER_ERG = 1000000000n;
 function ergToNano(ergStr) {
@@ -338,7 +373,7 @@ function analyzeRentCountdown(creationStr, currentStr) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown };
 }
 
 if (typeof document !== "undefined") {
@@ -510,6 +545,20 @@ if (typeof document !== "undefined") {
         msg += "That is " + res.blocksRemaining + " blocks away — roughly " + fmtEstimate(res.approxDaysRemaining) + " days at the 2-minute block target (an approximation: real block intervals vary). Spending the box before then resets the clock, because the replacement box gets a new creation height.";
       }
       out.textContent = msg;
+    });
+
+    /* --- P2PK address builder --- */
+    document.getElementById("p2pk-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("p2pk-result");
+      var netLabel = document.getElementById("p2pk-network").value;
+      var addr = p2pkAddressFromPublicKey(document.getElementById("p2pk-pubkey").value, netLabel);
+      if (addr === null) {
+        out.textContent = "Enter a compressed public key as 66 hex characters starting 02 or 03 — public keys only: never enter a private key or seed phrase anywhere, including here.";
+        return;
+      }
+      var check = checkErgoAddress(addr);
+      out.textContent = "Your " + netLabel + " P2PK address: " + addr + " — built locally as prefix byte + your key + the Blake2b-256 checksum, and it passes the checker in tool 2 (" + (check.valid ? check.network + ", " + check.type : "verification failed") + "). Construction only: it proves the address is well-formed for that key, not who owns the key.";
     });
 
     /* --- copy donation address --- */

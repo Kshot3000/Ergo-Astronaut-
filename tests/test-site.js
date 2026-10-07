@@ -32,13 +32,14 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=2") && html.includes("app.js?v=6"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=2") && html.includes("app.js?v=7"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
 check("token converter tool on hub", html.includes('id="token-calc"') && html.includes("whole integers") && readme.includes("Token amount converter"));
 check("rent countdown tool on hub, no live-data claim", html.includes('id="rent-clock-calc"') && html.includes("claims no live chain data") && readme.includes("Storage rent countdown"));
+check("p2pk builder tool on hub", html.includes('id="p2pk-calc"') && html.includes("never type a private key") && readme.includes("P2PK address builder"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -179,6 +180,29 @@ check("box past eligibility is eligible", app.analyzeRentCountdown("500", "20000
 check("one block before eligibility is not eligible", app.analyzeRentCountdown("0", "1051199").eligible === false && app.analyzeRentCountdown("0", "1051199").blocksRemaining === "1");
 check("countdown rejects current before creation", app.analyzeRentCountdown("100", "99") === null);
 check("countdown rejects junk", app.analyzeRentCountdown("x", "100") === null && app.analyzeRentCountdown("100", "") === null && app.analyzeRentCountdown(null, null) === null);
+
+/* P2PK address builder — address = prefix byte (0x01 mainnet / 0x11
+   testnet, type 1) + 33-byte compressed key + first 4 bytes of
+   Blake2b-256(prefix + key), Base58-encoded. Vectors: the documented
+   mainnet/testnet P2PK addresses already used by the checker tests
+   (keys recovered by decoding them), plus the fleet-sdk issue #219
+   public key, cross-checked against an independent Python build
+   (hashlib blake2b-256 + manual base58) on 2026-10-07. */
+const KYLE_PK = "028fb2952e7373271f598b6a993038c4058e8d9f67f8f2a23ed6acfbc51446b455";
+check("base58 encode round-trips Kyle's address", app.base58Encode(app.base58Decode(ERG)) === ERG);
+check("base58 encode handles leading zero bytes", app.base58Encode(Uint8Array.from([0, 0, 1])) === "112" && app.base58Encode(new Uint8Array(0)) === "");
+check("builder reproduces Kyle's mainnet address", app.p2pkAddressFromPublicKey(KYLE_PK, "mainnet") === ERG);
+check("builder reproduces documented mainnet P2PK", app.p2pkAddressFromPublicKey("02764ea2b0b9b06b5730a4257bba71fd7797eb1ec12bc3ae6025a01d7fba53830e", "Mainnet") === "9fRAWhdxEsTcdb8PhGNrZfwqa65zfkuYHAMmkQLcic1gdLSV5vA");
+check("builder reproduces documented testnet P2PK", app.p2pkAddressFromPublicKey("02229ac0a22560d7bdfa4eb1de64e688390e85339c08aaf018b22d5ce93593192f", "testnet") === "3WvsT2Gm4EpsM9Pg18PdY6XyhNNMqXDsvJTbbf6ihLvAmSb7u5RN");
+check("builder fleet-issue key mainnet (python cross-check)", app.p2pkAddressFromPublicKey("03f2dab42d7333f37f527841998d5212468d0e7a0b7e091709501ed9be8e2fc7f3", "mainnet") === "9iJm5XdNBFk14jXE6CWfP3MAWgwA2oNXCPGiVddGzWnxpqZLhLT");
+check("builder fleet-issue key testnet (python cross-check)", app.p2pkAddressFromPublicKey("03f2dab42d7333f37f527841998d5212468d0e7a0b7e091709501ed9be8e2fc7f3", "testnet") === "3WzPufJ2AduwbLwp5JWoQAZ99TuNWj918GMMfmB98eaBU87o7sxR");
+const builtKyle = app.checkErgoAddress(app.p2pkAddressFromPublicKey(KYLE_PK, "mainnet"));
+check("built address passes the checker", builtKyle.valid === true && builtKyle.network === "Mainnet" && builtKyle.typeCode === 1);
+check("builder accepts uppercase hex and trims space", app.p2pkAddressFromPublicKey("  " + KYLE_PK.toUpperCase() + " ", "MAINNET") === ERG);
+check("builder rejects uncompressed 04-prefixed key", app.p2pkAddressFromPublicKey("04" + KYLE_PK.slice(2) + "ab".repeat(32), "mainnet") === null);
+check("builder rejects 33-byte key with wrong first byte", app.p2pkAddressFromPublicKey("05" + KYLE_PK.slice(2), "mainnet") === null);
+check("builder rejects short/long/non-hex keys", app.p2pkAddressFromPublicKey("02ab", "mainnet") === null && app.p2pkAddressFromPublicKey(KYLE_PK + "ab", "mainnet") === null && app.p2pkAddressFromPublicKey("zz" + KYLE_PK.slice(2), "mainnet") === null && app.p2pkAddressFromPublicKey("", "mainnet") === null && app.p2pkAddressFromPublicKey(null, "mainnet") === null);
+check("builder rejects unknown network", app.p2pkAddressFromPublicKey(KYLE_PK, "devnet") === null && app.p2pkAddressFromPublicKey(KYLE_PK, "") === null && app.p2pkAddressFromPublicKey(KYLE_PK, null) === null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

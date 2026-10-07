@@ -242,6 +242,19 @@
         <button type="submit" class="btn primary">Check the countdown</button>
         <p id="rent-clock-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="p2pk-calc">
+        <h3>8 · P2PK address builder (public key → address)</h3>
+        <p>The other direction from tool 2: give me a compressed public key (33 bytes, 66 hex characters, starting 02 or 03) and I build its P2PK address locally — prefix byte for the network, your key, and the Blake2b-256 checksum over both, Base58-encoded, exactly as Ergo defines it. Public keys only — never type a private key or seed phrase into any website, this one included.</p>
+        <label for="p2pk-pubkey">Compressed public key (hex)</label>
+        <input id="p2pk-pubkey" spellcheck="false" placeholder="e.g. 02…" autocomplete="off">
+        <label for="p2pk-network">Network</label>
+        <select id="p2pk-network">
+          <option selected>Mainnet</option><option>Testnet</option>
+        </select>
+        <button type="submit" class="btn primary">Build the address</button>
+        <p id="p2pk-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -287,6 +300,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=6"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

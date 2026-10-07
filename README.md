@@ -105,6 +105,14 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   data, and shows the box's age, its eligibility height, and the
   blocks (and approximate days) remaining — or warns that it is already
   rent-eligible. Exact BigInt maths for the heights.
+- **P2PK address builder** — the inverse of the address checker: a
+  33-byte compressed public key (66 hex characters, starting 02 or 03)
+  becomes its P2PK address — network prefix byte (0x01 mainnet /
+  0x11 testnet) + key + the first 4 bytes of Blake2b-256 over both,
+  Base58-encoded, exactly as Ergo defines it. Verified against the
+  documented mainnet/testnet P2PK test vectors and cross-checked with
+  an independent Python build. Public keys only — the page warns
+  against ever entering a private key or seed phrase anywhere.
 
 ## Cross-chain integration
 

@@ -92,6 +92,12 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   checker shows the exact minimum for a box's size, whether a value
   clears it (and by how much, or the shortfall), and how it compares
   with the recommended safe user minimum of 0.001 ERG per box.
+- **Token amount converter** — on-chain token amounts are whole integers;
+  a token's display amount is its raw integer divided by 10^decimals,
+  with the decimals declared in the token's own metadata (ERG itself is
+  the 9-decimal case: nanoERG is the raw unit). Exact BigInt maths both
+  ways; display amounts smaller than one raw unit are rejected because
+  they cannot exist on-chain.
 
 ## Cross-chain integration
 

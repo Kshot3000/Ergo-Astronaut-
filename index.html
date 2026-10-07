@@ -218,6 +218,19 @@
         <button type="submit" class="btn primary">Check the minimum</button>
         <p id="minbox-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="token-calc">
+        <h3>6 · Token amount converter (raw ⇄ display)</h3>
+        <p>On-chain, Ergo token amounts are whole integers — no decimals. Each token's metadata declares its decimal places (ERG itself is the 9-decimal case from tool 1: nanoERG is the raw unit), and wallets divide the raw integer by 10<sup>decimals</sup> to show it. Enter the decimals exactly as the token's explorer listing shows them, then convert either way — exact BigInt maths, and a display amount smaller than one raw unit is rejected, because it cannot exist on-chain.</p>
+        <label for="token-decimals">Token decimals (from its explorer listing)</label>
+        <input id="token-decimals" inputmode="numeric" placeholder="e.g. 2" autocomplete="off">
+        <label for="token-raw">Raw on-chain amount (whole number)</label>
+        <input id="token-raw" inputmode="numeric" placeholder="e.g. 12345" autocomplete="off">
+        <label for="token-display">Display amount</label>
+        <input id="token-display" inputmode="decimal" placeholder="e.g. 123.45" autocomplete="off">
+        <button type="submit" class="btn primary">Convert</button>
+        <p id="token-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -263,6 +276,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

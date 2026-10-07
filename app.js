@@ -264,8 +264,48 @@ function fmtEstimate(x) {
   return x.toPrecision(3);
 }
 
+/* ---------- Token amount converter (raw <-> display, exact) ---------- */
+/* Ergo boxes store token amounts as whole integers — there are no decimals
+   on-chain. Each token's metadata declares how many decimal places its
+   display amount has (the same idea as ERG's 9: nanoERG is the raw unit).
+   Wallets and explorers divide the raw integer by 10^decimals to display
+   it, and multiply back when building a transaction. Getting this wrong
+   by the decimals factor is a classic costly mistake, so both directions
+   here are exact BigInt/string maths — no floating point. The user
+   supplies the decimals from the token's explorer listing; the sanity
+   cap of 18 covers every real token and catches typos. */
+var TOKEN_MAX_DECIMALS = 18;
+function parseTokenDecimals(decStr) {
+  var s = (decStr == null ? "" : String(decStr)).trim();
+  if (!/^\d{1,2}$/.test(s)) return null;
+  var d = Number(s);
+  return d <= TOKEN_MAX_DECIMALS ? d : null;
+}
+function tokenRawToDisplay(rawStr, decStr) {
+  var d = parseTokenDecimals(decStr);
+  var s = (rawStr == null ? "" : String(rawStr)).trim();
+  if (d === null || !/^\d+$/.test(s)) return null;
+  var raw = BigInt(s);
+  if (d === 0) return raw.toString();
+  var scale = 10n ** BigInt(d);
+  var whole = raw / scale;
+  var frac = (raw % scale).toString().padStart(d, "0").replace(/0+$/, "");
+  return frac ? whole.toString() + "." + frac : whole.toString();
+}
+function tokenDisplayToRaw(displayStr, decStr) {
+  var d = parseTokenDecimals(decStr);
+  var s = (displayStr == null ? "" : String(displayStr)).trim();
+  if (d === null || !/^\d+(\.\d+)?$/.test(s)) return null;
+  var parts = s.split(".");
+  var fracPart = parts[1] || "";
+  if (fracPart.length > d) return null; /* smaller than one raw unit */
+  var scale = 10n ** BigInt(d);
+  var raw = BigInt(parts[0]) * scale + BigInt((fracPart + "0".repeat(d)).slice(0, d) || "0");
+  return raw.toString();
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate };
+  module.exports = { blake2b256, base58Decode, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw };
 }
 
 if (typeof document !== "undefined") {
@@ -391,6 +431,34 @@ if (typeof document !== "undefined") {
         "At Ergo's 2-minute block target (~720 blocks/day) that is an expected ~" + fmtEstimate(res.blocksPerDay) +
         " blocks/day, or ~" + fmtEstimate(res.ergPerDay) + " ERG/day at the reward you entered — about one block every " +
         fmtEstimate(res.daysPerBlock) + " days if you solo-mine. Estimate only: it assumes both hashrates and the reward stay constant, and ignores pool fees, transaction fees, difficulty drift and luck.";
+    });
+
+    /* --- token amount converter --- */
+    document.getElementById("token-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("token-result");
+      var decVal = document.getElementById("token-decimals").value;
+      var rawVal = document.getElementById("token-raw").value;
+      var dispVal = document.getElementById("token-display").value;
+      if (parseTokenDecimals(decVal) === null) {
+        out.textContent = "Enter the token's decimals first — a whole number from 0 to 18, exactly as listed for the token on the explorer. The conversion depends on it entirely.";
+        return;
+      }
+      if (rawVal.trim() !== "") {
+        var disp = tokenRawToDisplay(rawVal, decVal);
+        out.textContent = disp === null
+          ? "Enter the raw amount as a whole number — on-chain token amounts are integers, with no decimal point."
+          : rawVal.trim() + " raw = " + disp + " displayed, at " + decVal.trim() + " decimals. Exact maths, done locally.";
+        if (disp !== null) document.getElementById("token-display").value = disp;
+      } else if (dispVal.trim() !== "") {
+        var raw = tokenDisplayToRaw(dispVal, decVal);
+        out.textContent = raw === null
+          ? "Enter a display amount with no more decimal places than the token's decimals — anything smaller than one raw unit cannot exist on-chain."
+          : dispVal.trim() + " displayed = " + raw + " raw, at " + decVal.trim() + " decimals. Exact maths, done locally.";
+        if (raw !== null) document.getElementById("token-raw").value = raw;
+      } else {
+        out.textContent = "Fill in one side — the raw on-chain amount or the display amount — and I will convert the other.";
+      }
     });
 
     /* --- copy donation address --- */

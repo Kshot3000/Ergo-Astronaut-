@@ -32,11 +32,12 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=2") && html.includes("app.js?v=4"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=2") && html.includes("app.js?v=5"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
+check("token converter tool on hub", html.includes('id="token-calc"') && html.includes("whole integers") && readme.includes("Token amount converter"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -144,6 +145,24 @@ check("box below minimum fails with shortfall", belowMin.meetsMinimum === false 
 const safeBox = app.analyzeMinBoxValue("112", "0.001");
 check("0.001 ERG box clears both minimums", safeBox.meetsMinimum === true && safeBox.meetsSafeUserMin === true && safeBox.differenceNano === "959680");
 check("min box analysis rejects junk", app.analyzeMinBoxValue("abc", "1") === null && app.analyzeMinBoxValue("112", "x") === null);
+
+/* token converter — on-chain amounts are integers; display = raw / 10^decimals,
+   exact both ways; ERG itself is the 9-decimal case (raw unit nanoERG) */
+check("token decimals cap is 18", app.TOKEN_MAX_DECIMALS === 18);
+check("parse token decimals", app.parseTokenDecimals("0") === 0 && app.parseTokenDecimals("9") === 9 && app.parseTokenDecimals("18") === 18);
+check("parse token decimals rejects junk", app.parseTokenDecimals("19") === null && app.parseTokenDecimals("-1") === null && app.parseTokenDecimals("2.5") === null && app.parseTokenDecimals("") === null && app.parseTokenDecimals(null) === null);
+check("raw to display at 2 decimals", app.tokenRawToDisplay("12345", "2") === "123.45");
+check("raw to display trims trailing zeros", app.tokenRawToDisplay("100", "2") === "1" && app.tokenRawToDisplay("150", "2") === "1.5");
+check("raw to display below one unit", app.tokenRawToDisplay("5", "2") === "0.05" && app.tokenRawToDisplay("0", "2") === "0");
+check("raw to display at 0 decimals is identity", app.tokenRawToDisplay("777", "0") === "777");
+check("raw to display matches nanoERG at 9 decimals", app.tokenRawToDisplay("1500000000", "9") === "1.5" && app.tokenRawToDisplay("1", "9") === "0.000000001");
+check("raw to display rejects junk", app.tokenRawToDisplay("1.5", "2") === null && app.tokenRawToDisplay("-5", "2") === null && app.tokenRawToDisplay("", "2") === null && app.tokenRawToDisplay("100", "x") === null);
+check("display to raw at 2 decimals", app.tokenDisplayToRaw("123.45", "2") === "12345");
+check("display to raw whole amount", app.tokenDisplayToRaw("1", "2") === "100" && app.tokenDisplayToRaw("0.05", "2") === "5");
+check("display to raw at 0 decimals", app.tokenDisplayToRaw("777", "0") === "777" && app.tokenDisplayToRaw("7.5", "0") === null);
+check("display to raw rejects sub-raw-unit precision", app.tokenDisplayToRaw("0.001", "2") === null && app.tokenDisplayToRaw("1.234", "2") === null);
+check("display to raw rejects junk", app.tokenDisplayToRaw("x", "2") === null && app.tokenDisplayToRaw("", "2") === null && app.tokenDisplayToRaw("-1", "2") === null && app.tokenDisplayToRaw("1", "99") === null);
+check("token round trip exact", app.tokenDisplayToRaw(app.tokenRawToDisplay("987654321", "6"), "6") === "987654321" && app.tokenRawToDisplay(app.tokenDisplayToRaw("42.42", "4"), "4") === "42.42");
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

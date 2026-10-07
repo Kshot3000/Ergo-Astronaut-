@@ -217,6 +217,25 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   before it is shown. Verified against the fleet-sdk fee-contract P2S
   address on both networks and the fleet #219 P2PK tree,
   cross-checked with an independent Python (hashlib) build.
+- **Serialized box builder** — the encode-side inverse of the
+  serialized box parser: supply a box's fields — value, ErgoTree,
+  creation height, tokens, the creating transaction's ID and the
+  output index — and it assembles the serialized bytes locally in
+  exactly the layout fleet-sdk's `serializeBox` writes, then derives
+  the box ID from them. Registers R4–R9 are entered as typed values
+  (`long:430550309`, `int:852574`, `bytes:<hex>` for a Coll[SByte],
+  `bigint:…`, `group:…`, `dlog:…`, `ints:…`, `longs:…`, `bool:…`,
+  `byte:…`, `short:…`) and encoded as Sigma constants the way
+  fleet-sdk's `dataSerializer` encodes them — including its SInt
+  zigzag quirk at the 32-bit extremes, mirrored deliberately because
+  fleet's published constant vectors are the compatibility target.
+  The assembled bytes are round-tripped through the box parser and
+  every field must read back exactly before anything is shown.
+  Verified by rebuilding fleet-sdk's published box test vectors
+  byte-for-byte from their recorded fields and fleet's published
+  Sigma constant vectors for every register type, cross-checked with
+  an independent Python build. Construction only — it signs and
+  sends nothing.
 
 ## Cross-chain integration
 

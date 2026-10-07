@@ -1036,8 +1036,212 @@ function parseErgoBox(boxHex) {
   };
 }
 
+/* ---------- Serialized box builder ---------- */
+/* The encode-side inverse of tool 15, in the exact layout fleet-sdk's
+   serializeBox writes: [value: unsigned BigInt VLQ][ErgoTree bytes
+   verbatim][creation height: VLQ][token count VLQ, then per token a
+   32-byte ID + an unsigned VLQ amount][register count VLQ, then that
+   many Sigma constants for R4, R5, ...][creating transaction ID:
+   32 bytes][output index: VLQ], and the box ID is the Blake2b-256 of
+   the whole thing (tool 14). Registers are entered as typed specs and
+   encoded the way fleet-sdk's dataSerializer encodes constants: a
+   type byte (primitive codes 1-8; a collection is constructor-coded
+   12 + the element's primitive code), then the data — one byte for a
+   boolean (01/00) or a byte, a zigzag VLQ for Short/Int/Long, a VLQ
+   byte-length + minimal two's-complement big-endian bytes for BigInt,
+   33 bytes for a group element, the 0xcd ProveDlog opcode + 33 bytes
+   for a SigmaProp, a VLQ length + elements for collections. One
+   reference quirk is mirrored deliberately, because fleet's published
+   constant vectors are the compatibility target: SInt (and SShort,
+   which shares the code path) zigzag in signed 32-bit space and a
+   negative 32-bit result is then written as its unsigned 64-bit form,
+   so SInt 2147483647 serializes as 04feffffffffffffffff01 — exactly
+   fleet's vector — and not as the shorter clean zigzag. The built
+   bytes are round-tripped through tool 15's parser before they are
+   shown, and every field (including each register's type and raw
+   bytes) must read back exactly, so a tree the parser cannot delimit
+   (tool 15's stated limits) is refused rather than emitted
+   unverified. Verified in the tests by rebuilding fleet-sdk's
+   published box vectors byte-for-byte from their recorded fields and
+   fleet's published Sigma constant vectors for every register type,
+   cross-checked with an independent Python build on 2026-10-07. A
+   built box is just bytes: it exists on no chain until a signed
+   transaction creating it is accepted, and this tool signs nothing. */
+function writeVlqBig(value) {
+  var v = value;
+  var out = [];
+  do {
+    var b = Number(v & 0x7fn);
+    v >>= 7n;
+    if (v > 0n) b |= 0x80;
+    out.push(b);
+  } while (v > 0n);
+  return out;
+}
+function zigzagEncode(v) {
+  return v >= 0n ? (v << 1n) : ((-v << 1n) - 1n);
+}
+/* fleet-sdk writeI16/writeI32: zigzag in signed 32-bit space, then a
+   negative result is written as its unsigned 64-bit form. */
+function sigmaIntZigzag(v) {
+  var z = (v << 1) ^ (v >> 31);
+  return z >= 0 ? BigInt(z) : BigInt(z) + 18446744073709551616n;
+}
+/* Minimal two's-complement big-endian bytes (fleet-sdk bigIntToHex). */
+function bigIntToSigmaBytes(v) {
+  var n = 1;
+  while (n <= 64) {
+    var lo = -(1n << BigInt(8 * n - 1));
+    var hi = (1n << BigInt(8 * n - 1)) - 1n;
+    if (v >= lo && v <= hi) break;
+    n++;
+  }
+  var u = v < 0n ? (1n << BigInt(8 * n)) + v : v;
+  var out = [];
+  for (var i = n - 1; i >= 0; i--) out.push(Number((u >> BigInt(8 * i)) & 0xffn));
+  return out;
+}
+var SIGMA_SPEC_KINDS = "bool:true|false, byte:<-128..127>, short:<-32768..32767>, int:<-2147483648..2147483647>, long:<integer>, bigint:<integer>, group:<66 hex chars>, dlog:<66 hex chars>, bytes:<hex>, ints:<n,n,...>, longs:<n,n,...>";
+function encodeSigmaConstant(spec) {
+  var fail = function (reason) { return { valid: false, reason: reason }; };
+  var s = spec == null ? "" : String(spec).trim();
+  var colon = s.indexOf(":");
+  if (colon < 1) return fail("Register spec \"" + s + "\" is not in kind:value form — use one of: " + SIGMA_SPEC_KINDS + ".");
+  var kind = s.slice(0, colon).trim().toLowerCase();
+  var val = s.slice(colon + 1).trim();
+  var intStr = function (x) { return /^-?\d+$/.test(x); };
+  var ranged = function (x, lo, hi) { return intStr(x) && BigInt(x) >= lo && BigInt(x) <= hi; };
+  var done = function (typeByte, data, typeName, value) {
+    return { valid: true, typeName: typeName, value: value, bytes: [typeByte].concat(data), rawHex: bytesToHex(Uint8Array.from([typeByte].concat(data))) };
+  };
+  if (kind === "bool") {
+    if (val !== "true" && val !== "false") return fail("A bool register is bool:true or bool:false — got \"" + s + "\".");
+    return done(1, [val === "true" ? 1 : 0], "SBoolean", val);
+  }
+  if (kind === "byte") {
+    if (!ranged(val, -128n, 127n)) return fail("A byte register is a signed byte, -128 to 127 — got \"" + s + "\".");
+    return done(2, [Number(BigInt(val)) & 0xff], "SByte", String(Number(BigInt(val))));
+  }
+  if (kind === "short") {
+    if (!ranged(val, -32768n, 32767n)) return fail("A short register is a signed 16-bit integer — got \"" + s + "\".");
+    return done(3, writeVlqBig(sigmaIntZigzag(Number(val))), "SShort", String(Number(val)));
+  }
+  if (kind === "int") {
+    if (!ranged(val, -2147483648n, 2147483647n)) return fail("An int register is a signed 32-bit integer — got \"" + s + "\".");
+    return done(4, writeVlqBig(sigmaIntZigzag(Number(val))), "SInt", String(Number(val)));
+  }
+  if (kind === "long") {
+    if (!ranged(val, -9223372036854775808n, 9223372036854775807n)) return fail("A long register is a signed 64-bit integer — got \"" + s + "\".");
+    return done(5, writeVlqBig(zigzagEncode(BigInt(val))), "SLong", BigInt(val).toString());
+  }
+  if (kind === "bigint") {
+    if (!intStr(val)) return fail("A bigint register is a decimal integer of any size (up to a 256-bit value) — got \"" + s + "\".");
+    var bb = bigIntToSigmaBytes(BigInt(val));
+    if (bb.length > 32) return fail("That bigint needs " + bb.length + " bytes — a Sigma BigInt constant holds at most a 256-bit value (32 bytes).");
+    return done(6, writeVlqBig(BigInt(bb.length)).concat(bb), "SBigInt", "0x" + bytesToHex(Uint8Array.from(bb)));
+  }
+  if (kind === "group" || kind === "dlog") {
+    var gb = hexToBytes(val.toLowerCase());
+    if (!gb || gb.length !== 33 || (gb[0] !== 0x02 && gb[0] !== 0x03)) return fail("A " + kind + " register is a compressed group element: 33 bytes, 66 hex characters, starting 02 or 03 — got \"" + s + "\".");
+    if (kind === "group") return done(7, Array.from(gb), "SGroupElement", bytesToHex(gb));
+    return done(8, [0xcd].concat(Array.from(gb)), "SSigmaProp", "proveDlog(" + bytesToHex(gb) + ")");
+  }
+  if (kind === "bytes") {
+    var cb = val === "" ? new Uint8Array(0) : hexToBytes(val.toLowerCase());
+    if (!cb) return fail("A bytes register is Coll[SByte] given as hex (possibly empty) — got \"" + s + "\".");
+    return done(14, writeVlqBig(BigInt(cb.length)).concat(Array.from(cb)), "Coll[SByte]", "0x" + bytesToHex(cb));
+  }
+  if (kind === "ints" || kind === "longs") {
+    var parts = val === "" ? [] : val.split(",").map(function (p) { return p.trim(); });
+    var isInt = kind === "ints";
+    var lo = isInt ? -2147483648n : -9223372036854775808n;
+    var hi = isInt ? 2147483647n : 9223372036854775807n;
+    for (var i = 0; i < parts.length; i++) {
+      if (!ranged(parts[i], lo, hi)) return fail("Each element of " + kind + ": must be a signed " + (isInt ? "32" : "64") + "-bit integer — got \"" + parts[i] + "\" in \"" + s + "\".");
+    }
+    var data = writeVlqBig(BigInt(parts.length));
+    var shown = [];
+    for (var j = 0; j < parts.length; j++) {
+      data = data.concat(writeVlqBig(isInt ? sigmaIntZigzag(Number(parts[j])) : zigzagEncode(BigInt(parts[j]))));
+      if (j < 8) shown.push(BigInt(parts[j]).toString());
+    }
+    if (parts.length > 8) shown.push("… +" + (parts.length - 8) + " more");
+    return done(isInt ? 16 : 17, data, isInt ? "Coll[SInt]" : "Coll[SLong]", "[" + shown.join(", ") + "]");
+  }
+  return fail("Unknown register kind \"" + kind + "\" — use one of: " + SIGMA_SPEC_KINDS + ".");
+}
+function buildErgoBox(fields) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, boxHex: null, boxId: null, byteLength: null, registers: null };
+  };
+  if (!fields) return fail("No fields supplied.");
+  var digits = function (x) { return typeof x === "string" && /^\d+$/.test(x.trim()); };
+  if (!digits(fields.valueNano)) return fail("Enter the box value as a whole number of nanoERG (digits only — tool 1 converts ERG to nanoERG).");
+  var value = BigInt(fields.valueNano.trim());
+  if (value < 1n || value > 9223372036854775807n) return fail("A box value is a positive signed 64-bit amount of nanoERG (1 to 9,223,372,036,854,775,807) — and a spendable box must also clear the minimum-value rule in tool 5.");
+  var treeBytes = hexToBytes(fields.ergoTree);
+  if (!treeBytes) return fail("Enter the guarding script's ErgoTree as hex (an even number of 0-9/a-f characters, with or without a 0x prefix) — tool 15 shows the tree of any existing box, and tools 8 and 11 produce trees from keys and addresses.");
+  if (!digits(fields.creationHeight)) return fail("Enter the creation height as a whole block number (digits only). It is normally the height of the block the creating transaction is mined in.");
+  var height = Number(fields.creationHeight.trim());
+  if (!Number.isSafeInteger(height) || height > 4294967295) return fail("A creation height is an unsigned 32-bit block number (0 to 4,294,967,295).");
+  var tokens = fields.tokens || [];
+  var tokenBytes = [];
+  for (var t = 0; t < tokens.length; t++) {
+    var idBytes = hexToBytes(tokens[t] && tokens[t].tokenId);
+    if (!idBytes || idBytes.length !== 32) return fail("Token " + (t + 1) + ": a token ID is 32 bytes, 64 hex characters — got \"" + (tokens[t] && tokens[t].tokenId) + "\".");
+    if (!digits(tokens[t].amount)) return fail("Token " + (t + 1) + ": enter the amount as a whole raw integer (digits only — tool 6 converts display amounts to raw).");
+    var amt = BigInt(tokens[t].amount.trim());
+    if (amt < 1n || amt > 9223372036854775807n) return fail("Token " + (t + 1) + ": a token amount is a positive signed 64-bit raw integer.");
+    tokenBytes.push({ id: idBytes, amount: amt });
+  }
+  var regSpecs = fields.registers || [];
+  if (regSpecs.length > 6) return fail("A box carries at most the six non-mandatory registers R4–R9 — " + regSpecs.length + " were given.");
+  var regBytes = [];
+  for (var r = 0; r < regSpecs.length; r++) {
+    var enc = encodeSigmaConstant(regSpecs[r]);
+    if (!enc.valid) return fail("Register R" + (4 + r) + ": " + enc.reason);
+    regBytes.push(enc);
+  }
+  var txBytes = hexToBytes(fields.transactionId);
+  if (!txBytes || txBytes.length !== 32) return fail("Enter the creating transaction's ID as 32 bytes, 64 hex characters. It is part of the serialization — a different ID makes a different box with a different box ID.");
+  if (!digits(fields.index)) return fail("Enter the output index as a whole number (the box's position among the creating transaction's outputs, starting at 0).");
+  var index = Number(fields.index.trim());
+  if (!Number.isSafeInteger(index) || index > 65535) return fail("An output index is an unsigned 16-bit number (0 to 65,535).");
+  var bytes = [];
+  var push = function (arr) { for (var i = 0; i < arr.length; i++) bytes.push(arr[i]); };
+  push(writeVlqBig(value));
+  push(Array.from(treeBytes));
+  push(writeVlqBig(BigInt(height)));
+  push(writeVlqBig(BigInt(tokenBytes.length)));
+  tokenBytes.forEach(function (tk) { push(Array.from(tk.id)); push(writeVlqBig(tk.amount)); });
+  push(writeVlqBig(BigInt(regBytes.length)));
+  regBytes.forEach(function (rg) { push(rg.bytes); });
+  push(Array.from(txBytes));
+  push(writeVlqBig(BigInt(index)));
+  var boxHex = bytesToHex(Uint8Array.from(bytes));
+  var parsed = parseErgoBox(boxHex);
+  if (!parsed.valid) return fail("These fields assemble, but the result does not read back through the box parser (tool 15): " + parsed.reason + " The bytes are refused rather than shown unverified.");
+  var roundTripped = parsed.valueNano === value.toString() &&
+    parsed.ergoTree === bytesToHex(treeBytes) &&
+    parsed.creationHeight === height &&
+    parsed.transactionId === bytesToHex(txBytes) &&
+    parsed.index === index &&
+    parsed.tokens.length === tokenBytes.length &&
+    parsed.registers.length === regBytes.length &&
+    parsed.tokens.every(function (tk, i) { return tk.tokenId === bytesToHex(tokenBytes[i].id) && tk.amount === tokenBytes[i].amount.toString(); }) &&
+    parsed.registers.every(function (rg, i) { return rg.type === regBytes[i].typeName && rg.rawHex === regBytes[i].rawHex; });
+  if (!roundTripped) return fail("Internal round-trip check failed: the assembled bytes do not parse back to exactly these fields — refusing to show them rather than risk a mismatched box.");
+  return {
+    valid: true, reason: null,
+    boxHex: boxHex,
+    boxId: parsed.boxId,
+    byteLength: bytes.length,
+    registers: regBytes.map(function (rg, i) { return { name: "R" + (4 + i), type: rg.typeName, value: rg.value, rawHex: rg.rawHex }; })
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox };
 }
 
 if (typeof document !== "undefined") {
@@ -1393,6 +1597,42 @@ if (typeof document !== "undefined") {
           ? "This is a constant-segregated tree — the case tool 10 honestly declines to derive a P2SH address for, because the reference script hash needs the constants substituted back in. As P2S content the bytes are unambiguous, so this address is exact. "
           : "Compare tool 10's P2SH address for the same script: short and hash-only, but the script stays hidden until a box is spent; this P2S address reveals the script to anyone who sees it. ";
       msg += "Construction only: it proves the address is well-formed for this script, not who can spend a box it guards — that depends on the script itself. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Serialized box builder --- */
+    document.getElementById("boxbuild-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("boxbuild-result");
+      var tokenLines = document.getElementById("boxbuild-tokens").value.split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+      var tokens = [];
+      for (var i = 0; i < tokenLines.length; i++) {
+        var parts = tokenLines[i].split(/[\s,]+/).filter(function (p) { return p !== ""; });
+        if (parts.length !== 2) {
+          out.textContent = "✗ Token line " + (i + 1) + " must be exactly: a 64-character token ID, a space, then the raw amount.";
+          return;
+        }
+        tokens.push({ tokenId: parts[0], amount: parts[1] });
+      }
+      var registers = document.getElementById("boxbuild-registers").value.split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+      var res = buildErgoBox({
+        valueNano: document.getElementById("boxbuild-value").value,
+        ergoTree: document.getElementById("boxbuild-tree").value,
+        creationHeight: document.getElementById("boxbuild-height").value,
+        tokens: tokens,
+        registers: registers,
+        transactionId: document.getElementById("boxbuild-txid").value,
+        index: document.getElementById("boxbuild-index").value
+      });
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Built a " + res.byteLength + "-byte serialized box, and round-tripped it through tool 15's parser — every field reads back exactly, so its box ID (tool 14) is " + res.boxId + ". Serialized bytes: " + res.boxHex + " ";
+      msg += res.registers.length === 0
+        ? "Registers: none set. "
+        : "Registers: " + res.registers.map(function (rg) { return rg.name + " = " + rg.value + " (" + rg.type + ", raw " + rg.rawHex + ")"; }).join("; ") + ". ";
+      msg += "Construction only: these bytes are a box on paper — a box exists on-chain only once a signed transaction creating it is accepted, and this tool signs and sends nothing.";
       out.textContent = msg;
     });
 

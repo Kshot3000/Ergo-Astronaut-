@@ -345,6 +345,27 @@
         <button type="submit" class="btn primary">Build the P2S address</button>
         <p id="p2s-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="boxbuild-calc">
+        <h3>17 · Serialized box builder (fields → box bytes + box ID)</h3>
+        <p>The encode-side inverse of tool 15: give me a box's fields and I assemble its serialized bytes locally, in the exact layout Ergo writes a box — value as a VLQ integer, the ErgoTree verbatim, creation height, each token's 32-byte ID and raw amount, the non-mandatory registers R4–R9 as the Sigma constants they hold, then the creating transaction's ID and the output index — and I hash the result with tool 14's derivation to show the box ID. Registers are typed values, one per line in R4, R5, … order: <code>bool:true</code>, <code>byte:-5</code>, <code>short:17</code>, <code>int:852574</code>, <code>long:430550309</code>, <code>bigint:1039</code>, <code>group:&lt;66 hex chars&gt;</code>, <code>dlog:&lt;66 hex chars&gt;</code> (a ProveDlog SigmaProp), <code>bytes:&lt;hex&gt;</code> (a Coll[SByte]), <code>ints:1,2,3</code> or <code>longs:1,2,3</code>. The assembled bytes are round-tripped through tool 15's parser before they are shown — every field must read back exactly, so a script the parser cannot delimit is refused rather than emitted unverified. Construction only: a box exists on-chain only once a signed transaction creating it is accepted, and this tool signs and sends nothing.</p>
+        <label for="boxbuild-value">Value (nanoERG, whole number)</label>
+        <input id="boxbuild-value" spellcheck="false" placeholder="e.g. 1000000" autocomplete="off" inputmode="numeric">
+        <label for="boxbuild-tree">ErgoTree (hex)</label>
+        <textarea id="boxbuild-tree" rows="3" spellcheck="false" placeholder="e.g. 0008cd…" autocomplete="off"></textarea>
+        <label for="boxbuild-height">Creation height</label>
+        <input id="boxbuild-height" spellcheck="false" placeholder="e.g. 849741" autocomplete="off" inputmode="numeric">
+        <label for="boxbuild-tokens">Tokens (optional — one per line: token ID, a space, raw amount)</label>
+        <textarea id="boxbuild-tokens" rows="3" spellcheck="false" placeholder="Leave empty for a box holding only ERG" autocomplete="off"></textarea>
+        <label for="boxbuild-registers">Registers R4–R9 (optional — one typed value per line, in order)</label>
+        <textarea id="boxbuild-registers" rows="3" spellcheck="false" placeholder="e.g. long:430550309" autocomplete="off"></textarea>
+        <label for="boxbuild-txid">Creating transaction ID (64 hex characters)</label>
+        <input id="boxbuild-txid" spellcheck="false" placeholder="The transaction that would create this box" autocomplete="off">
+        <label for="boxbuild-index">Output index</label>
+        <input id="boxbuild-index" spellcheck="false" placeholder="e.g. 0" autocomplete="off" inputmode="numeric">
+        <button type="submit" class="btn primary">Build the box</button>
+        <p id="boxbuild-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -390,6 +411,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=15"></script>
+<script src="app.js?v=16"></script>
 </body>
 </html>

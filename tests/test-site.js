@@ -32,14 +32,15 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=2") && html.includes("app.js?v=7"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=8"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
 check("token converter tool on hub", html.includes('id="token-calc"') && html.includes("whole integers") && readme.includes("Token amount converter"));
 check("rent countdown tool on hub, no live-data claim", html.includes('id="rent-clock-calc"') && html.includes("claims no live chain data") && readme.includes("Storage rent countdown"));
 check("p2pk builder tool on hub", html.includes('id="p2pk-calc"') && html.includes("never type a private key") && readme.includes("P2PK address builder"));
+check("payment planner tool on hub", html.includes('id="payplan-calc"') && html.includes("spends boxes whole") && readme.includes("UTXO payment planner"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -203,6 +204,25 @@ check("builder rejects uncompressed 04-prefixed key", app.p2pkAddressFromPublicK
 check("builder rejects 33-byte key with wrong first byte", app.p2pkAddressFromPublicKey("05" + KYLE_PK.slice(2), "mainnet") === null);
 check("builder rejects short/long/non-hex keys", app.p2pkAddressFromPublicKey("02ab", "mainnet") === null && app.p2pkAddressFromPublicKey(KYLE_PK + "ab", "mainnet") === null && app.p2pkAddressFromPublicKey("zz" + KYLE_PK.slice(2), "mainnet") === null && app.p2pkAddressFromPublicKey("", "mainnet") === null && app.p2pkAddressFromPublicKey(null, "mainnet") === null);
 check("builder rejects unknown network", app.p2pkAddressFromPublicKey(KYLE_PK, "devnet") === null && app.p2pkAddressFromPublicKey(KYLE_PK, "") === null && app.p2pkAddressFromPublicKey(KYLE_PK, null) === null);
+
+/* UTXO payment planner — eUTXO spends boxes whole: select in listed
+   order until total >= payment + fee; change = selected - needed.
+   Dust = change above zero but below SAFE_USER_MIN_BOX_NANO (tool 5). */
+check("box list parses comma/space/newline separated ERG", JSON.stringify(app.parseBoxList("1, 0.5\n2")) === JSON.stringify(["1000000000", "500000000", "2000000000"]));
+check("box list rejects junk", app.parseBoxList("1,x") === null && app.parseBoxList("") === null && app.parseBoxList("0") === null && app.parseBoxList("-1") === null && app.parseBoxList("1,,x") === null && app.parseBoxList(null) === null);
+const plan1 = app.planPayment("0.5,0.5,0.5", "0.9", "0.001");
+check("planner selects first boxes until covered", plan1.sufficient === true && plan1.selectedCount === 2 && plan1.unselectedCount === 1 && plan1.totalSelectedNano === "1000000000");
+check("planner change is exact", plan1.changeNano === "99000000" && plan1.changeErg === "0.099" && plan1.changeIsDust === false && plan1.neededNano === "901000000");
+const planExact = app.planPayment("1", "0.999", "0.001");
+check("planner exact spend has zero change", planExact.sufficient === true && planExact.selectedCount === 1 && planExact.changeNano === "0" && planExact.changeIsDust === false);
+const planShort = app.planPayment("0.1,0.1", "1", "0.001");
+check("planner reports shortfall", planShort.sufficient === false && planShort.shortfallNano === "801000000" && planShort.shortfallErg === "0.801" && planShort.totalNano === "200000000");
+const planDust = app.planPayment("1", "0.9985", "0.001");
+check("planner flags dust change", planDust.sufficient === true && planDust.changeNano === "500000" && planDust.changeIsDust === true);
+const planOrder = app.planPayment("0.1, 5", "1", "0.001");
+check("planner respects listed order", planOrder.selectedCount === 2 && planOrder.totalSelectedNano === "5100000000" && planOrder.changeNano === "4099000000");
+check("planner allows zero fee", app.planPayment("1", "1", "0").sufficient === true && app.planPayment("1", "1", "0").changeNano === "0");
+check("planner rejects junk", app.planPayment("1", "0", "0.001") === null && app.planPayment("1", "x", "0.001") === null && app.planPayment("1", "0.5", "-0.1") === null && app.planPayment("", "0.5", "0.001") === null && app.planPayment(null, null, null) === null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

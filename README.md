@@ -113,6 +113,16 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   documented mainnet/testnet P2PK test vectors and cross-checked with
   an independent Python build. Public keys only — the page warns
   against ever entering a private key or seed phrase anywhere.
+- **UTXO payment planner** — Ergo spends boxes whole: a wallet selects
+  input boxes until their total covers payment + transaction fee, and
+  the leftover returns as a change box. You list your boxes' ERG
+  values in order and the planner walks them in that order with exact
+  BigInt maths — how many boxes a payment takes, the total selected,
+  and the change — and flags dust change (above zero but below the
+  recommended 0.001 ERG safe minimum per box) that a real wallet
+  would usually fold into the fee. Planning only: it fetches nothing,
+  signs nothing, and sends nothing; real wallets may select boxes in
+  a different order.
 
 ## Cross-chain integration
 

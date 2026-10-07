@@ -372,8 +372,78 @@ function analyzeRentCountdown(creationStr, currentStr) {
   };
 }
 
+/* ---------- UTXO payment planner ---------- */
+/* Ergo's eUTXO model spends boxes whole: to pay an amount plus the
+   transaction fee, a wallet selects input boxes (in some order) until
+   their total covers payment + fee, and the leftover comes back as a
+   change box. This planner walks the boxes in the order listed — the
+   simplest deterministic strategy — with exact BigInt maths. All
+   figures are user-supplied; it fetches nothing and signs nothing.
+   A change amount above zero but below the recommended safe user
+   minimum (SAFE_USER_MIN_BOX_NANO, tool 5) is dust: a wallet would
+   normally fold it into the fee or select differently, because a
+   change box that small is impractical and may fail size-based
+   minimums for its serialized size. */
+function parseBoxList(boxesStr) {
+  var s = (boxesStr == null ? "" : String(boxesStr)).trim();
+  if (!s) return null;
+  var parts = s.split(/[\s,]+/).filter(function (p) { return p !== ""; });
+  if (parts.length === 0 || parts.length > 1000) return null;
+  var out = [];
+  for (var i = 0; i < parts.length; i++) {
+    var nano = ergToNano(parts[i]);
+    if (nano === null || BigInt(nano) <= 0n) return null;
+    out.push(nano);
+  }
+  return out;
+}
+function planPayment(boxesStr, paymentStr, feeStr) {
+  var boxes = parseBoxList(boxesStr);
+  var payment = ergToNano(paymentStr);
+  var fee = ergToNano(feeStr);
+  if (boxes === null || payment === null || fee === null) return null;
+  var payNano = BigInt(payment);
+  var feeNano = BigInt(fee);
+  if (payNano <= 0n || feeNano < 0n) return null;
+  var needed = payNano + feeNano;
+  var totalAll = 0n;
+  for (var a = 0; a < boxes.length; a++) totalAll += BigInt(boxes[a]);
+  var selected = 0;
+  var totalSelected = 0n;
+  while (selected < boxes.length && totalSelected < needed) {
+    totalSelected += BigInt(boxes[selected]);
+    selected++;
+  }
+  if (totalSelected < needed) {
+    return {
+      sufficient: false,
+      neededNano: needed.toString(),
+      neededErg: nanoToErg(needed.toString()),
+      totalNano: totalAll.toString(),
+      totalErg: nanoToErg(totalAll.toString()),
+      shortfallNano: (needed - totalAll).toString(),
+      shortfallErg: nanoToErg((needed - totalAll).toString()),
+      boxCount: boxes.length
+    };
+  }
+  var change = totalSelected - needed;
+  return {
+    sufficient: true,
+    neededNano: needed.toString(),
+    neededErg: nanoToErg(needed.toString()),
+    selectedCount: selected,
+    boxCount: boxes.length,
+    unselectedCount: boxes.length - selected,
+    totalSelectedNano: totalSelected.toString(),
+    totalSelectedErg: nanoToErg(totalSelected.toString()),
+    changeNano: change.toString(),
+    changeErg: nanoToErg(change.toString()),
+    changeIsDust: change > 0n && change < SAFE_USER_MIN_BOX_NANO
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment };
 }
 
 if (typeof document !== "undefined") {
@@ -559,6 +629,32 @@ if (typeof document !== "undefined") {
       }
       var check = checkErgoAddress(addr);
       out.textContent = "Your " + netLabel + " P2PK address: " + addr + " — built locally as prefix byte + your key + the Blake2b-256 checksum, and it passes the checker in tool 2 (" + (check.valid ? check.network + ", " + check.type : "verification failed") + "). Construction only: it proves the address is well-formed for that key, not who owns the key.";
+    });
+
+    /* --- UTXO payment planner --- */
+    document.getElementById("payplan-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("payplan-result");
+      var res = planPayment(document.getElementById("payplan-boxes").value, document.getElementById("payplan-amount").value, document.getElementById("payplan-fee").value);
+      if (res === null) {
+        out.textContent = "List your box values in ERG (comma or space separated, each above zero), a payment above zero, and the transaction fee in ERG (0 or more — 0.001 ERG is the usual minimum fee wallets charge).";
+        return;
+      }
+      if (!res.sufficient) {
+        out.textContent = "✗ Not enough: paying " + res.neededErg + " ERG including the fee needs " + res.neededNano + " nanoERG, but all " + res.boxCount + (res.boxCount === 1 ? " box holds" : " boxes hold") + " only " + res.totalErg + " ERG (" + res.totalNano + " nanoERG) — short by " + res.shortfallErg + " ERG (" + res.shortfallNano + " nanoERG). Planning only: nothing was signed or sent.";
+        return;
+      }
+      var msg = "✓ Covered: the first " + res.selectedCount + " of your " + res.boxCount + (res.boxCount === 1 ? " box" : " boxes") + " (in the order listed) total " + res.totalSelectedErg + " ERG (" + res.totalSelectedNano + " nanoERG), covering the " + res.neededErg + " ERG payment + fee. ";
+      if (res.changeNano === "0") {
+        msg += "That is an exact spend — no change box comes back. ";
+      } else if (res.changeIsDust) {
+        msg += "⚠ The change would be only " + res.changeErg + " ERG (" + res.changeNano + " nanoERG) — dust below the recommended 0.001 ERG safe minimum per box (tool 5). A real wallet would usually fold dust like this into the fee or pick different boxes rather than create a near-worthless change box. ";
+      } else {
+        msg += "Change coming back to you in a new box: " + res.changeErg + " ERG (" + res.changeNano + " nanoERG). ";
+      }
+      if (res.unselectedCount > 0) msg += res.unselectedCount + (res.unselectedCount === 1 ? " box stays" : " boxes stay") + " unspent. ";
+      msg += "Planning only, done locally: box selection order differs between wallets, and nothing was signed or sent.";
+      out.textContent = msg;
     });
 
     /* --- copy donation address --- */

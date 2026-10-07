@@ -10,7 +10,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://kshot3000.github.io/Ergo-Astronaut-/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23050810'/%3E%3Ccircle cx='16' cy='13' r='7' fill='%23fbbf24'/%3E%3Crect x='7' y='19' width='18' height='6' rx='3' fill='%237dd3fc'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=2">
+<link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
 <a class="skip" href="#main">Skip to main content</a>
@@ -255,6 +255,19 @@
         <button type="submit" class="btn primary">Build the address</button>
         <p id="p2pk-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="payplan-calc">
+        <h3>9 · UTXO payment planner (box selection + change)</h3>
+        <p>Ergo spends boxes whole: to pay, a wallet selects input boxes until their total covers the payment plus the transaction fee, and the leftover comes back as a change box. List your boxes' ERG values in order and I walk them in that order — exact BigInt maths, done locally, nothing signed or sent. A leftover above zero but below the recommended 0.001 ERG safe minimum per box (tool 5) is dust, and the planner flags it: real wallets usually fold dust into the fee instead of creating a near-worthless change box.</p>
+        <label for="payplan-boxes">Your box values (ERG, comma or space separated)</label>
+        <textarea id="payplan-boxes" rows="2" placeholder="e.g. 0.5, 0.5, 2" autocomplete="off"></textarea>
+        <label for="payplan-amount">Payment amount (ERG)</label>
+        <input id="payplan-amount" inputmode="decimal" placeholder="e.g. 0.9" autocomplete="off">
+        <label for="payplan-fee">Transaction fee (ERG)</label>
+        <input id="payplan-fee" inputmode="decimal" placeholder="e.g. 0.001" autocomplete="off">
+        <button type="submit" class="btn primary">Plan the payment</button>
+        <p id="payplan-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -300,6 +313,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

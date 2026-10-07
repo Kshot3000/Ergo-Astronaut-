@@ -123,6 +123,21 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   would usually fold into the fee. Planning only: it fetches nothing,
   signs nothing, and sends nothing; real wallets may select boxes in
   a different order.
+- **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
+  header byte locally (version, the 0x08 size flag with its VLQ-encoded
+  proposition size, the 0x10 constant-segregation flag), recognises
+  the standard P2PK proposition (08 cd + a 33-byte compressed key) and
+  shows that key's P2PK address, and derives the script's P2SH address
+  — prefix byte + the first 24 bytes of Blake2b-256 over the
+  proposition bytes + checksum. Hashing the full tree bytes instead of
+  the proposition is the funds-at-risk bug I reported as
+  fleet-sdk/fleet#219 (fixed by fleet-sdk/fleet#220); the inspector's
+  P2SH output is verified against that issue's reference vectors
+  (testnet qQqAgn6N…, mainnet 7HP8obUp…), cross-checked with an
+  independent Python build. Constant-segregated trees are reported
+  honestly with no address derived: their reference hash needs the
+  constants substituted back into the proposition, which raw tree
+  bytes alone cannot reconstruct.
 
 ## Cross-chain integration
 

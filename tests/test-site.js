@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=8"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=9"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -41,6 +41,7 @@ check("token converter tool on hub", html.includes('id="token-calc"') && html.in
 check("rent countdown tool on hub, no live-data claim", html.includes('id="rent-clock-calc"') && html.includes("claims no live chain data") && readme.includes("Storage rent countdown"));
 check("p2pk builder tool on hub", html.includes('id="p2pk-calc"') && html.includes("never type a private key") && readme.includes("P2PK address builder"));
 check("payment planner tool on hub", html.includes('id="payplan-calc"') && html.includes("spends boxes whole") && readme.includes("UTXO payment planner"));
+check("ergoTree inspector tool on hub", html.includes('id="tree-calc"') && html.includes("ErgoTree inspector") && readme.includes("ErgoTree inspector"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -223,6 +224,40 @@ const planOrder = app.planPayment("0.1, 5", "1", "0.001");
 check("planner respects listed order", planOrder.selectedCount === 2 && planOrder.totalSelectedNano === "5100000000" && planOrder.changeNano === "4099000000");
 check("planner allows zero fee", app.planPayment("1", "1", "0").sufficient === true && app.planPayment("1", "1", "0").changeNano === "0");
 check("planner rejects junk", app.planPayment("1", "0", "0.001") === null && app.planPayment("1", "x", "0.001") === null && app.planPayment("1", "0.5", "-0.1") === null && app.planPayment("", "0.5", "0.001") === null && app.planPayment(null, null, null) === null);
+
+/* ErgoTree inspector — tree = [header][optional VLQ size][proposition]
+   [optional segregated constants]; header flags 0x08 size, 0x10
+   segregation. P2SH = prefix + first 24 bytes of Blake2b-256 over the
+   PROPOSITION bytes + checksum. Reference vectors are the ones executed
+   against sigmastate-interpreter in fleet-sdk/fleet#219 (the bug this
+   guards against: hashing the full tree bytes instead), cross-checked
+   with an independent Python (hashlib) build on 2026-10-07. */
+const FLEET_PK = "03f2dab42d7333f37f527841998d5212468d0e7a0b7e091709501ed9be8e2fc7f3";
+const P2PK_TREE = "0008cd" + FLEET_PK;
+check("hex parsing", app.bytesToHex(app.hexToBytes("00ff10")) === "00ff10" && app.hexToBytes("0X0A") !== null && app.bytesToHex(app.hexToBytes("0x0a")) === "0a");
+check("hex parsing rejects junk", app.hexToBytes("") === null && app.hexToBytes("abc") === null && app.hexToBytes("zz") === null && app.hexToBytes(null) === null && app.hexToBytes("0x") === null);
+check("vlq size single byte", app.readVlqSize(Uint8Array.from([0x23, 0x00]), 0).value === 35 && app.readVlqSize(Uint8Array.from([0x23, 0x00]), 0).length === 1);
+check("vlq size multi byte", app.readVlqSize(Uint8Array.from([0x80, 0x01]), 0).value === 128 && app.readVlqSize(Uint8Array.from([0x80, 0x01]), 0).length === 2);
+check("vlq size truncated is null", app.readVlqSize(Uint8Array.from([0x80]), 0) === null && app.readVlqSize(new Uint8Array(0), 0) === null);
+check("tree flag constants", app.ERGOTREE_SIZE_FLAG === 0x08 && app.ERGOTREE_SEGREGATION_FLAG === 0x10 && app.P2SH_HASH_BYTES === 24);
+const treeMain = app.analyzeErgoTree(P2PK_TREE, "mainnet");
+check("p2pk tree recognised on mainnet", treeMain.valid === true && treeMain.isP2PK === true && treeMain.publicKey === FLEET_PK && treeMain.propositionLength === 35 && treeMain.header === 0 && treeMain.sizeFlag === false && treeMain.segregated === false);
+check("p2pk tree mainnet address matches builder", treeMain.address === "9iJm5XdNBFk14jXE6CWfP3MAWgwA2oNXCPGiVddGzWnxpqZLhLT");
+check("p2pk tree testnet address matches builder", app.analyzeErgoTree(P2PK_TREE, "testnet").address === "3WzPufJ2AduwbLwp5JWoQAZ99TuNWj918GMMfmB98eaBU87o7sxR");
+check("p2sh of p2pk script matches reference testnet vector", treeMain.p2shAddress !== null && app.analyzeErgoTree(P2PK_TREE, "testnet").p2shAddress === "qQqAgn6N6hrNTTu2s19HJg52NK37GENqoeo2W6i");
+check("p2sh of p2pk script matches reference mainnet vector", treeMain.p2shAddress === "7HP8obUp83sMkvaem5zXHNBq8rrt6nQRukXFYY9");
+const treeSized = app.analyzeErgoTree("082308cd" + FLEET_PK, "testnet");
+check("size-flagged tree skips vlq size", treeSized.valid === true && treeSized.sizeFlag === true && treeSized.declaredSize === 35 && treeSized.isP2PK === true && treeSized.p2shAddress === "qQqAgn6N6hrNTTu2s19HJg52NK37GENqoeo2W6i");
+check("derived p2sh passes the address checker as P2SH", (() => { const c = app.checkErgoAddress(treeMain.p2shAddress); return c.valid === true && c.typeCode === 2 && c.network === "Mainnet" && c.contentBytes === 24; })());
+check("derived p2pk address passes the checker", app.checkErgoAddress(treeMain.address).valid === true);
+const SEG_TREE = "100604000e2003faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf040400040005000500d803d601e30004d602e4c6a70408d603e4c6a7050595e67201d804d604b2a5e4720100d605b2db63087204730000d606db6308a7d60799c1a7c17204d1968302019683050193c27204c2a7938c720501730193e4c672040408720293e4c672040505720393e4c67204060ec5a796830201929c998c7205029591b1720673028cb272067303000273047203720792720773057202";
+const seg = app.analyzeErgoTree(SEG_TREE, "mainnet");
+check("segregated tree reported, no address invented", seg.valid === true && seg.segregated === true && seg.address === null && seg.p2shAddress === null && /segregated/i.test(seg.reason));
+check("generic script gets p2sh only", (() => { const g = app.analyzeErgoTree("00d803", "mainnet"); return g.valid === true && g.isP2PK === false && g.address === null && typeof g.p2shAddress === "string" && app.checkErgoAddress(g.p2shAddress).typeCode === 2; })());
+check("tree inspector accepts uppercase and 0x prefix", app.analyzeErgoTree("0x" + P2PK_TREE.toUpperCase(), "MAINNET").address === treeMain.address);
+check("tree inspector rejects size mismatch", app.analyzeErgoTree("082408cd" + FLEET_PK, "mainnet").valid === false);
+check("tree inspector rejects reserved header bits", app.analyzeErgoTree("e008cd" + FLEET_PK, "mainnet").valid === false);
+check("tree inspector rejects junk", app.analyzeErgoTree("", "mainnet").valid === false && app.analyzeErgoTree("zz", "mainnet").valid === false && app.analyzeErgoTree("00", "mainnet").valid === false && app.analyzeErgoTree(null, "mainnet").valid === false && app.analyzeErgoTree(P2PK_TREE, "devnet").valid === false && app.analyzeErgoTree(P2PK_TREE, null).valid === false);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

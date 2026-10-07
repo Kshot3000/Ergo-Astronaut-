@@ -442,8 +442,114 @@ function planPayment(boxesStr, paymentStr, feeStr) {
   };
 }
 
+/* ---------- ErgoTree inspector (script hex -> address) ---------- */
+/* An ErgoTree serializes as [header byte][optional VLQ size]
+   [proposition bytes][optional segregated constants]. In the header,
+   the low 3 bits are the version, 0x08 means a VLQ-encoded proposition
+   size follows the header, and 0x10 means constants are segregated
+   into a section at the end of the tree; the remaining header bits are
+   reserved and must be zero in version-0 trees. An address commits to
+   the proposition, not to the whole tree bytes:
+   - the standard P2PK proposition is 08 cd + a 33-byte compressed
+     public key (a ProveDlog), and a box guarded by it has that key's
+     P2PK address (tool 8);
+   - any non-segregated script also has a P2SH address: prefix byte
+     (type 2) + the first 24 bytes of Blake2b-256 over the proposition
+     bytes (the 192-bit script hash) + the usual checksum. Hashing the
+     full tree bytes instead of the proposition is a real funds-at-risk
+     bug — fleet-sdk/fleet#219, fixed by fleet-sdk/fleet#220 — because
+     the header and size bytes are not part of the proposition.
+   For constant-segregated trees the reference hashes the proposition
+   with the constants substituted back into it, which cannot be
+   reconstructed from the raw tree bytes alone, so this tool reports
+   the header honestly and declines to invent an address. Verified
+   against the reference P2SH vectors executed against
+   sigmastate-interpreter (the fleet-sdk issue #219 record: testnet
+   qQqAgn6N…, mainnet 7HP8obUp…) and matched with an independent
+   Python (hashlib) build on 2026-10-07. */
+var ERGOTREE_SIZE_FLAG = 0x08;
+var ERGOTREE_SEGREGATION_FLAG = 0x10;
+var P2SH_HASH_BYTES = 24;
+function hexToBytes(hexStr) {
+  var s = (hexStr == null ? "" : String(hexStr)).trim().toLowerCase();
+  if (s.indexOf("0x") === 0) s = s.slice(2);
+  if (s.length === 0 || s.length % 2 !== 0 || !/^[0-9a-f]+$/.test(s)) return null;
+  var out = new Uint8Array(s.length / 2);
+  for (var i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+function bytesToHex(bytes) {
+  var out = "";
+  for (var i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, "0");
+  return out;
+}
+/* Sigma VLQ for unsigned ints: 7 bits per byte, little-endian groups,
+   high bit set means another byte follows (fleet-sdk readVLQ). */
+function readVlqSize(bytes, offset) {
+  var value = 0;
+  var shift = 0;
+  var i = offset;
+  while (i < bytes.length && i - offset < 5) {
+    var b = bytes[i];
+    value += (b & 0x7f) * Math.pow(2, shift);
+    shift += 7;
+    i++;
+    if ((b & 0x80) === 0) return { value: value, length: i - offset };
+  }
+  return null;
+}
+function addressFromContent(prefix, content) {
+  var body = [prefix];
+  for (var i = 0; i < content.length; i++) body.push(content[i]);
+  var digest = blake2b256(Uint8Array.from(body));
+  for (var c = 0; c < 4; c++) body.push(digest[c]);
+  return base58Encode(Uint8Array.from(body));
+}
+function analyzeErgoTree(treeHex, networkStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, header: null, version: null, sizeFlag: false, segregated: false, declaredSize: null, propositionLength: null, isP2PK: false, publicKey: null, address: null, p2shAddress: null, network: null };
+  };
+  var net = (networkStr == null ? "" : String(networkStr)).trim().toLowerCase();
+  if (net !== "mainnet" && net !== "testnet") return fail("Unknown network — an ErgoTree carries no network of its own, so pick mainnet or testnet; the same script has a different address on each.");
+  var network = net === "mainnet" ? "Mainnet" : "Testnet";
+  var bytes = hexToBytes(treeHex);
+  if (!bytes) return fail("Enter the ErgoTree as hex (an even number of 0-9/a-f characters, with or without a 0x prefix) — a box's ErgoTree hex is on its explorer page.");
+  if (bytes.length < 2) return fail("Too short: an ErgoTree is at least a header byte plus one proposition byte; this is " + bytes.length + " byte(s).");
+  var header = bytes[0];
+  if ((header & 0xe0) !== 0) return fail("Header byte 0x" + header.toString(16).padStart(2, "0") + " sets reserved bits — version-0 ErgoTree headers only use the low 5 bits (version, size flag, segregation flag).");
+  var sizeFlag = (header & ERGOTREE_SIZE_FLAG) !== 0;
+  var segregated = (header & ERGOTREE_SEGREGATION_FLAG) !== 0;
+  var base = { valid: true, reason: null, header: header, version: header & 0x07, sizeFlag: sizeFlag, segregated: segregated, declaredSize: null, propositionLength: null, isP2PK: false, publicKey: null, address: null, p2shAddress: null, network: network };
+  var offset = 1;
+  if (sizeFlag) {
+    var vlq = readVlqSize(bytes, offset);
+    if (vlq === null) return fail("The header promises a VLQ-encoded proposition size, but the size field is truncated or overlong.");
+    base.declaredSize = vlq.value;
+    offset += vlq.length;
+    if (offset >= bytes.length) return fail("The tree ends right after the size field — there is no proposition.");
+    if (!segregated && vlq.value !== bytes.length - offset) return fail("The declared proposition size (" + vlq.value + " bytes) does not match the " + (bytes.length - offset) + " bytes that follow it — this tree hex is truncated or has extra bytes.");
+    if (segregated) base.propositionLength = vlq.value;
+  }
+  if (segregated) {
+    base.reason = "Constant-segregated tree: the reference script hash is taken over the proposition with its constants substituted back in, which cannot be reconstructed from the raw tree bytes alone — so no address is derived here rather than risk a wrong one. A full Ergo node or SDK parses these trees properly.";
+    return base;
+  }
+  var proposition = bytes.subarray(offset);
+  base.propositionLength = proposition.length;
+  var hash = blake2b256(proposition);
+  var scriptHash = hash.subarray(0, P2SH_HASH_BYTES);
+  base.p2shAddress = addressFromContent(net === "mainnet" ? 0x02 : 0x12, scriptHash);
+  if (proposition.length === 35 && proposition[0] === 0x08 && proposition[1] === 0xcd &&
+      (proposition[2] === 0x02 || proposition[2] === 0x03)) {
+    base.isP2PK = true;
+    base.publicKey = bytesToHex(proposition.subarray(2));
+    base.address = p2pkAddressFromPublicKey(base.publicKey, net);
+  }
+  return base;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES };
 }
 
 if (typeof document !== "undefined") {
@@ -654,6 +760,31 @@ if (typeof document !== "undefined") {
       }
       if (res.unselectedCount > 0) msg += res.unselectedCount + (res.unselectedCount === 1 ? " box stays" : " boxes stay") + " unspent. ";
       msg += "Planning only, done locally: box selection order differs between wallets, and nothing was signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- ErgoTree inspector --- */
+    document.getElementById("tree-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("tree-result");
+      var netLabel = document.getElementById("tree-network").value;
+      var res = analyzeErgoTree(document.getElementById("tree-hex").value, netLabel);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var head = "Header byte 0x" + res.header.toString(16).padStart(2, "0") + " — version " + res.version +
+        (res.sizeFlag ? ", with a VLQ proposition size (" + res.declaredSize + " bytes)" : ", no size field") +
+        (res.segregated ? ", constants segregated" : ", constants inline") + ". ";
+      if (res.segregated) {
+        out.textContent = head + res.reason;
+        return;
+      }
+      var msg = head + "Proposition: " + res.propositionLength + " bytes. ";
+      if (res.isP2PK) {
+        msg += "This is the standard P2PK script (ProveDlog) for public key " + res.publicKey + ". A box guarded by it has the " + res.network + " P2PK address " + res.address + " — it passes tool 2's checksum, and tool 8 builds the same address from the key alone. ";
+      }
+      msg += "The script's " + res.network + " P2SH (pay-to-script-hash) address is " + res.p2shAddress + " — prefix byte + the first 24 bytes of Blake2b-256 over the proposition bytes (not the whole tree: hashing the header in is the fleet-sdk #219 bug that made unspendable addresses). Inspection only, done locally: deriving an address proves nothing about who can spend the box.";
       out.textContent = msg;
     });
 

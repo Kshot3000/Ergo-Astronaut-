@@ -268,6 +268,19 @@
         <button type="submit" class="btn primary">Plan the payment</button>
         <p id="payplan-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="tree-calc">
+        <h3>10 · ErgoTree inspector (script hex → address)</h3>
+        <p>Every box is guarded by an ErgoTree script, and its address commits to that script's proposition — the tree bytes after the header byte (and the VLQ size, when the header's size flag is set). Paste a box's ErgoTree hex from its explorer page and I read the header locally, spot the standard P2PK script and its key, and derive the script's P2SH address: the first 24 bytes of Blake2b-256 over the proposition bytes. Hashing the whole tree instead is the fleet-sdk bug I reported as issue #219 — it produced addresses whose boxes can never be spent. An ErgoTree carries no network, so pick the one you want the address for. Constant-segregated trees are reported honestly, not guessed at: their hash needs the constants substituted back in, which raw bytes alone cannot do.</p>
+        <label for="tree-hex">ErgoTree (hex)</label>
+        <input id="tree-hex" spellcheck="false" placeholder="e.g. 0008cd02…" autocomplete="off">
+        <label for="tree-network">Network</label>
+        <select id="tree-network">
+          <option selected>Mainnet</option><option>Testnet</option>
+        </select>
+        <button type="submit" class="btn primary">Inspect this tree</button>
+        <p id="tree-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -313,6 +326,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=8"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

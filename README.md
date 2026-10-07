@@ -274,6 +274,21 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   vectors and the fleet-sdk/fleet#219 reference P2SH addresses on
   both networks. Public keys only — construction only, it signs
   and sends nothing.
+- **P2SH address builder** — ErgoTree → pay-to-script-hash address,
+  the dedicated form of the derivation the ErgoTree inspector
+  reports. The address is prefix `0x02`/`0x12` plus the first
+  24 bytes of Blake2b-256 over the script's proposition (the tree
+  without its header byte, and without the VLQ size field when the
+  header carries one) plus the checksum — never over the full tree
+  bytes, the fleet-sdk/fleet#219 bug that made boxes unspendable.
+  Constant-segregated trees are refused plainly, exactly as in the
+  fleet PR #220 fix, because their reference hash needs constants
+  substituted back in; the P2S builder carries those trees instead.
+  The built address is round-tripped through the address decoder
+  before being shown. Verified against the fleet #219 sigmastate
+  reference addresses on both networks, a size-flagged tree and a
+  generic script, cross-checked with an independent Python
+  (hashlib) build. Construction only — it signs and sends nothing.
 
 ## Cross-chain integration
 

@@ -390,6 +390,19 @@
         <button type="submit" class="btn primary">Build the ErgoTree</button>
         <p id="treebuild-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="p2shbuild-calc">
+        <h3>20 · P2SH address builder (ErgoTree → pay-to-script-hash address)</h3>
+        <p>Tool 10 derives a script's P2SH address as one line of its inspection; this is that derivation as a builder in its own right, with the round-trip check up front. A P2SH address carries only the script hash: a prefix byte (02 mainnet / 12 testnet), then the first 24 bytes of Blake2b-256 over the script's <strong>proposition</strong> — the ErgoTree without its header byte, and without the VLQ size field when the header carries one — plus the usual checksum. Hashing the full tree bytes instead was a real funds-at-risk bug (fleet-sdk/fleet#219): a node re-derives the hash from the proposition when it checks a spend, so boxes sent to a full-tree-hash address can never be spent. One honest refusal, the same one my fleet fix makes: a constant-segregated tree gets no P2SH address here, because its reference hash needs the constants substituted back in, which raw tree bytes alone cannot reconstruct — tool 16's P2S builder carries those trees exactly instead. The built address is round-tripped through tool 11's decoder before it is shown: it must decode back to this exact script hash.</p>
+        <label for="p2shbuild-hex">ErgoTree (hex)</label>
+        <textarea id="p2shbuild-hex" rows="3" spellcheck="false" placeholder="e.g. 0008cd…" autocomplete="off"></textarea>
+        <label for="p2shbuild-network">Network</label>
+        <select id="p2shbuild-network">
+          <option selected>Mainnet</option><option>Testnet</option>
+        </select>
+        <button type="submit" class="btn primary">Build the P2SH address</button>
+        <p id="p2shbuild-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -435,6 +448,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=19"></script>
+<script src="app.js?v=20"></script>
 </body>
 </html>

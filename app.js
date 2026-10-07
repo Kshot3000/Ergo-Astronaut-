@@ -683,6 +683,63 @@ function buildP2SAddress(treeHex, networkStr) {
   return out;
 }
 
+/* ---------- P2SH address builder ---------- */
+/* The dedicated encode-side form of tool 10's derivation: a P2SH
+   (pay-to-script-hash) address carries only the script hash — prefix
+   byte 0x02 on mainnet / 0x12 on testnet + the first 24 bytes of
+   Blake2b-256 over the script's PROPOSITION + the usual 4-byte
+   checksum (tool 2), Base58-encoded. The proposition is the ErgoTree
+   without its header byte (and without the VLQ size field when the
+   header's size flag is set) — hashing the full tree bytes instead
+   was fleet-sdk/fleet#219, a funds-at-risk bug: boxes sent to such
+   an address can never be spent, because the node re-derives the
+   hash from the proposition when it checks a spend. That is exactly
+   sigmastate's Pay2SHAddress construction, and the fix in fleet
+   PR #220. Constant-segregated trees are refused, not hashed: the
+   reference hash is taken over the proposition with its constants
+   substituted back in, which cannot be reconstructed from raw tree
+   bytes alone — tool 16's P2S form carries those trees exactly
+   instead. The built address is round-tripped through tool 11's
+   decoder before it is shown: it must decode back to this exact
+   24-byte script hash. Verified in the tests against the fleet #219
+   sigmastate reference addresses on both networks, a size-flagged
+   tree, and a generic script, cross-checked with an independent
+   Python (hashlib) build. Building an address proves nothing about
+   who can spend a box it guards — that depends on the script. */
+function buildP2SHAddress(treeHex, networkStr) {
+  var out = { valid: false, reason: null, address: null, network: null, ergoTree: null, propositionHex: null, scriptHash: null, isP2PK: false, segregated: false };
+  var info = analyzeErgoTree(treeHex, networkStr);
+  if (!info.valid) { out.reason = info.reason; return out; }
+  out.network = info.network;
+  out.isP2PK = info.isP2PK;
+  out.segregated = info.segregated;
+  var bytes = hexToBytes(treeHex);
+  out.ergoTree = bytesToHex(bytes);
+  if (info.segregated) {
+    out.reason = "Constant-segregated tree: the reference P2SH hash is taken over the proposition with its constants substituted back in, which cannot be reconstructed from the raw tree bytes alone — so no P2SH address is built here rather than risk an address whose boxes could never be spent. Tool 16's P2S builder carries this exact tree as its content instead.";
+    return out;
+  }
+  if (!info.p2shAddress) { out.reason = "Tool 10's parser derived no P2SH address for this tree — refusing to invent one."; return out; }
+  var offset = 1;
+  if (info.sizeFlag) {
+    var vlq = readVlqSize(bytes, offset);
+    if (vlq === null) { out.reason = "The header promises a VLQ-encoded proposition size, but the size field is truncated or overlong."; return out; }
+    offset += vlq.length;
+  }
+  var proposition = bytes.subarray(offset);
+  out.propositionHex = bytesToHex(proposition);
+  out.scriptHash = bytesToHex(blake2b256(proposition).subarray(0, P2SH_HASH_BYTES));
+  out.address = info.p2shAddress;
+  var back = decodeErgoAddress(out.address);
+  if (!back.valid || back.typeCode !== 2 || back.scriptHash !== out.scriptHash) {
+    out.address = null;
+    out.reason = "Internal round-trip check failed — refusing to show an address that does not decode back to this exact script hash.";
+    return out;
+  }
+  out.valid = true;
+  return out;
+}
+
 /* ---------- Address network converter ---------- */
 /* The same address on the other network: an Ergo address is
    [prefix byte][content][4-byte checksum] (tool 2), and the prefix
@@ -1352,7 +1409,7 @@ function buildErgoBox(fields) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress };
 }
 
 if (typeof document !== "undefined") {
@@ -1778,6 +1835,23 @@ if (typeof document !== "undefined") {
         return;
       }
       out.textContent = "Fill in one side — a constant's hex to decode it, or a typed value to encode it — and I will do the other.";
+    });
+
+    /* --- P2SH address builder --- */
+    document.getElementById("p2shbuild-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("p2shbuild-result");
+      var res = buildP2SHAddress(document.getElementById("p2shbuild-hex").value, document.getElementById("p2shbuild-network").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Your " + res.network + " P2SH address: " + res.address + " — built locally as prefix byte " + (res.network === "Mainnet" ? "0x02" : "0x12") + " + the script hash " + res.scriptHash + " (the first 24 bytes of Blake2b-256 over the proposition " + res.propositionHex + ") + the Blake2b-256 checksum, and round-tripped through tool 11's decoder, which reads back this exact hash. ";
+      msg += res.isP2PK
+        ? "This script is the standard P2PK proposition — a box meant to be spent by that key alone is normally guarded by its P2PK address (tool 8), not this hash form. "
+        : "The script itself stays hidden behind that hash until a box guarded by this address is spent — the opposite trade from tool 16's P2S form, which reveals the full script in the address. ";
+      msg += "Construction only: it proves the address is well-formed for this script, not who can spend a box it guards — that depends on the script itself. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
     });
 
     document.getElementById("treebuild-calc").addEventListener("submit", function (ev) {

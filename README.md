@@ -204,6 +204,19 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   test vectors — all six parseable vectors reproduce their recorded
   fields and box IDs, including the 24-token box — and cross-checked
   with an independent Python parser.
+- **P2S address builder** — the encode-side inverse of the
+  address-to-ErgoTree decoder: a P2S (pay-to-script) address carries
+  the script itself, its content being the full ErgoTree bytes
+  verbatim under prefix byte 0x03 (mainnet) / 0x13 (testnet) plus the
+  Blake2b-256 checksum, exactly sigmastate's `Pay2SAddress`
+  construction. The opposite trade from P2SH: the address is as long
+  as the script and reveals it, and it carries constant-segregated
+  trees exactly — the case the inspector's P2SH derivation honestly
+  declines. The tree is parsed first and anything unparseable is
+  refused, and the built address is round-tripped through the decoder
+  before it is shown. Verified against the fleet-sdk fee-contract P2S
+  address on both networks and the fleet #219 P2PK tree,
+  cross-checked with an independent Python (hashlib) build.
 
 ## Cross-chain integration
 

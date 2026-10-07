@@ -600,6 +600,48 @@ function decodeErgoAddress(raw) {
   return out;
 }
 
+/* ---------- P2S address builder ---------- */
+/* The encode-side inverse of tool 11: a P2S (pay-to-script) address
+   carries the script itself — its content is the full ErgoTree bytes
+   verbatim, under prefix byte 0x03 on mainnet / 0x13 on testnet, plus
+   the usual 4-byte Blake2b-256 checksum (tool 2), Base58-encoded. That
+   is exactly sigmastate's Pay2SAddress construction and fleet-sdk's
+   ErgoAddress encode for type 3. It is the opposite trade from P2SH
+   (tool 10), whose content is only the proposition's 24-byte hash: a
+   P2S address is exactly as long as the script and reveals it to
+   anyone who sees the address, while a P2SH address stays short and
+   hides the script until a box is spent. P2S also carries trees the
+   P2SH derivation here honestly declines — a constant-segregated
+   tree's bytes are unambiguous as content even though its reference
+   script hash cannot be reconstructed from raw bytes alone. The tree
+   is parsed with tool 10's parser first and anything unparseable is
+   refused, and the built address is round-tripped through tool 11's
+   decoder before it is shown. Verified in the tests against the
+   fleet-sdk fee-contract P2S address on both networks and the
+   fleet #219 P2PK tree, cross-checked with an independent Python
+   (hashlib) build. Building an address proves nothing about who can
+   spend a box it guards — that depends on the script itself. */
+function buildP2SAddress(treeHex, networkStr) {
+  var out = { valid: false, reason: null, address: null, network: null, ergoTree: null, byteLength: null, isP2PK: false, segregated: false };
+  var info = analyzeErgoTree(treeHex, networkStr);
+  if (!info.valid) { out.reason = info.reason; return out; }
+  var bytes = hexToBytes(treeHex);
+  out.network = info.network;
+  out.ergoTree = bytesToHex(bytes);
+  out.byteLength = bytes.length;
+  out.isP2PK = info.isP2PK;
+  out.segregated = info.segregated;
+  out.address = addressFromContent(info.network === "Mainnet" ? 0x03 : 0x13, bytes);
+  var back = decodeErgoAddress(out.address);
+  if (!back.valid || back.ergoTree !== out.ergoTree) {
+    out.address = null;
+    out.reason = "Internal round-trip check failed — refusing to show an address that does not decode back to this exact script.";
+    return out;
+  }
+  out.valid = true;
+  return out;
+}
+
 /* ---------- Address network converter ---------- */
 /* The same address on the other network: an Ergo address is
    [prefix byte][content][4-byte checksum] (tool 2), and the prefix
@@ -995,7 +1037,7 @@ function parseErgoBox(boxHex) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox };
 }
 
 if (typeof document !== "undefined") {
@@ -1332,6 +1374,25 @@ if (typeof document !== "undefined") {
         msg += "Registers: " + res.registers.map(function (rg) { return rg.name + " = " + rg.value + " (" + rg.type + ", raw " + rg.rawHex + ")"; }).join("; ") + ". ";
       }
       msg += "Parsed locally, field by field; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- P2S address builder --- */
+    document.getElementById("p2s-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("p2s-result");
+      var res = buildP2SAddress(document.getElementById("p2s-hex").value, document.getElementById("p2s-network").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Your " + res.network + " P2S address: " + res.address + " — built locally as prefix byte " + (res.network === "Mainnet" ? "0x03" : "0x13") + " + the script's full " + res.byteLength + "-byte ErgoTree + the Blake2b-256 checksum, and round-tripped through tool 11's decoder, which reads back this exact tree. ";
+      msg += res.isP2PK
+        ? "This script is the standard P2PK proposition, so tool 10 also derives its ordinary P2PK address — a box meant to be spent by that key alone is normally guarded by the P2PK address, not this P2S form. "
+        : res.segregated
+          ? "This is a constant-segregated tree — the case tool 10 honestly declines to derive a P2SH address for, because the reference script hash needs the constants substituted back in. As P2S content the bytes are unambiguous, so this address is exact. "
+          : "Compare tool 10's P2SH address for the same script: short and hash-only, but the script stays hidden until a box is spent; this P2S address reveals the script to anyone who sees it. ";
+      msg += "Construction only: it proves the address is well-formed for this script, not who can spend a box it guards — that depends on the script itself. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

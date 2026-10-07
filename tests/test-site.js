@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=14"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=15"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -47,6 +47,7 @@ check("babel fee tool on hub", html.includes('id="babel-calc"') && html.includes
 check("network converter tool on hub", html.includes('id="netconv-calc"') && html.includes("separate worlds") && readme.includes("Address network converter"));
 check("box id tool on hub", html.includes('id="boxid-calc"') && html.includes("Blake2b-256 of the box's serialized bytes") && readme.includes("Box ID calculator"));
 check("box parser tool on hub", html.includes('id="boxparse-calc"') && html.includes("Serialized box parser") && readme.includes("Serialized box parser"));
+check("p2s builder tool on hub", html.includes('id="p2s-calc"') && html.includes("P2S address builder") && readme.includes("P2S address builder"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -301,6 +302,25 @@ const decMalformed = app.decodeErgoAddress(malformedP2pk);
 check("checksum-valid but non-key P2PK content gets no tree", decMalformed.valid === true && decMalformed.typeCode === 1 && decMalformed.ergoTree === null && decMalformed.publicKey === null && /not a standard 33-byte public key/.test(decMalformed.note));
 check("decoder rejects tampered address", app.decodeErgoAddress("9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvz").valid === false && app.decodeErgoAddress("9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvz").ergoTree === null);
 check("decoder rejects junk", app.decodeErgoAddress("").valid === false && app.decodeErgoAddress(null).valid === false && app.decodeErgoAddress("9fc").valid === false && app.decodeErgoAddress("hello world").valid === false);
+
+/* P2S address builder — the encode-side inverse of the decoder above:
+   a P2S address's content is the full ErgoTree bytes verbatim under
+   prefix 0x03 (mainnet) / 0x13 (testnet) plus the Blake2b-256
+   checksum. Vectors: the fleet-sdk fee-contract P2S address on both
+   networks (its testnet form is the converter vector below) and the
+   fleet #219 P2PK tree, both cross-checked with an independent
+   Python (hashlib) build before coding. */
+const p2sFee = app.buildP2SAddress(FEE_CONTRACT_TREE, "mainnet");
+check("p2s builder reproduces fleet fee-contract mainnet address", p2sFee.valid === true && p2sFee.address === FEE_MAINNET_P2S && p2sFee.byteLength === 105 && p2sFee.segregated === true && p2sFee.network === "Mainnet");
+check("p2s builder fee-contract testnet matches python cross-check", app.buildP2SAddress(FEE_CONTRACT_TREE, "testnet").address === "Bf1X9JgQTUtgntaer91B24n6kP8L2kqEiQqNf1z97BKo9UbnW3WRP9VXu8BXd1LsYCiYbHJEdWKxkF5YNx5n7m31wsDjbEuB3B13ZMDVBWkepGmWfGa71otpFViHDCuvbw1uNicAQnfuWfnj8fbCa4");
+check("p2s builder p2pk tree mainnet (python cross-check)", app.buildP2SAddress(P2PK_TREE, "mainnet").address === "fANwcV4PxwkDZcFtU7egw9Jz4Vt78wt3N6GrTPVbkB5pzgCrt1vukv9");
+check("p2s builder p2pk tree testnet (python cross-check)", app.buildP2SAddress(P2PK_TREE, "testnet").address === "5AgXz2NSiMGc7vRex8QwZNpGxdLwMrgkF4EfRABufurSm72Tp7V6412H");
+check("built p2s passes the checker as P2S", (() => { const c = app.checkErgoAddress(p2sFee.address); return c.valid === true && c.typeCode === 3 && c.network === "Mainnet" && c.contentBytes === 105; })());
+check("built p2s round-trips through the decoder", app.decodeErgoAddress(app.buildP2SAddress(P2PK_TREE, "mainnet").address).ergoTree === P2PK_TREE);
+check("p2s builder flags the p2pk proposition", app.buildP2SAddress(P2PK_TREE, "mainnet").isP2PK === true && p2sFee.isP2PK === false);
+check("p2s address differs from the same script's p2sh", app.buildP2SAddress(P2PK_TREE, "mainnet").address !== app.analyzeErgoTree(P2PK_TREE, "mainnet").p2shAddress);
+check("p2s builder tolerates whitespace, 0x and uppercase", app.buildP2SAddress(" 0X" + P2PK_TREE.toUpperCase() + " ", "mainnet").address === "fANwcV4PxwkDZcFtU7egw9Jz4Vt78wt3N6GrTPVbkB5pzgCrt1vukv9");
+check("p2s builder rejects junk and bad networks", app.buildP2SAddress("zz", "mainnet").valid === false && app.buildP2SAddress("", "mainnet").valid === false && app.buildP2SAddress(P2PK_TREE, "mars").valid === false && app.buildP2SAddress(P2PK_TREE, "mars").address === null);
 
 /* Babel fee calculator — a babel box's R5 register states its price in
    nanoERG per raw token unit; covering an ERG amount takes the ceiling

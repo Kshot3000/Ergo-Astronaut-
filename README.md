@@ -85,6 +85,13 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   hashrate and the current block reward; the tool fetches nothing,
   claims no live network data, and labels its output an estimate
   (pool fees, tx fees, difficulty drift and luck all move real results).
+- **Minimum box value checker** — a box's value must be at least its
+  serialized size × the minimum value per byte (360 nanoERG per byte —
+  the rate set at launch, verified against live mainnet epoch params
+  on 2026-10-07; a votable chain parameter). Exact BigInt maths: the
+  checker shows the exact minimum for a box's size, whether a value
+  clears it (and by how much, or the shortfall), and how it compares
+  with the recommended safe user minimum of 0.001 ERG per box.
 
 ## Cross-chain integration
 

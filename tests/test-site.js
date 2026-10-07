@@ -32,10 +32,11 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=2") && html.includes("app.js?v=3"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=2") && html.includes("app.js?v=4"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
+check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -125,6 +126,24 @@ check("mining rejects miner above network", app.estimateMining(10, 5, "1") === n
 check("mining rejects zero/negative hashrate", app.estimateMining(0, 5, "1") === null && app.estimateMining(1, 0, "1") === null && app.estimateMining(null, 5, "1") === null);
 check("mining rejects bad reward", app.estimateMining(1, 5, "0") === null && app.estimateMining(1, 5, "x") === null && app.estimateMining(1, 5, "") === null);
 check("estimate formatting trims zeros", app.fmtEstimate(25) === "25" && app.fmtEstimate(2160) === "2160" && app.fmtEstimate(0.0216) === "0.0216");
+
+/* minimum box value — protocol rule: value >= serialized bytes *
+   minValuePerByte (360 nanoERG/byte, set at launch in sigma-rust
+   BoxValue and still the live mainnet epoch param on 2026-10-07);
+   safe user minimum 1,000,000 nanoERG covers boxes up to 2,777 bytes */
+check("min-per-byte constant is 360", app.MIN_VALUE_PER_BYTE_NANO === 360n);
+check("safe user min constant is 0.001 ERG", app.SAFE_USER_MIN_BOX_NANO === 1000000n);
+check("min value for 100-byte box", app.minBoxValueNano("100") === "36000");
+check("min value for 112-byte box is 0.00004032 ERG", app.minBoxValueNano("112") === "40320");
+check("min value for 2777-byte box fits under safe min", app.minBoxValueNano("2777") === "999720");
+check("min value rejects junk", app.minBoxValueNano("0") === null && app.minBoxValueNano("-3") === null && app.minBoxValueNano("1.5") === null && app.minBoxValueNano("") === null);
+const exactMin = app.analyzeMinBoxValue("112", "0.00004032");
+check("box at exactly its minimum passes", exactMin.meetsMinimum === true && exactMin.differenceNano === "0" && exactMin.minErg === "0.00004032" && exactMin.meetsSafeUserMin === false);
+const belowMin = app.analyzeMinBoxValue("112", "0.00004");
+check("box below minimum fails with shortfall", belowMin.meetsMinimum === false && belowMin.differenceNano === "320" && belowMin.differenceErg === "0.00000032");
+const safeBox = app.analyzeMinBoxValue("112", "0.001");
+check("0.001 ERG box clears both minimums", safeBox.meetsMinimum === true && safeBox.meetsSafeUserMin === true && safeBox.differenceNano === "959680");
+check("min box analysis rejects junk", app.analyzeMinBoxValue("abc", "1") === null && app.analyzeMinBoxValue("112", "x") === null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

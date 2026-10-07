@@ -194,6 +194,41 @@ function analyzeStorageRent(sizeStr, ergStr) {
   };
 }
 
+/* ---------- Minimum box value checker ---------- */
+/* Protocol rule: a box's value must be at least its serialized size in
+   bytes times the chain's minimum value per byte. That rate was set at
+   360 nanoERG per byte at launch (sigma-rust BoxValue) and the live
+   mainnet epoch parameter still reads 360 (api.ergoplatform.com
+   /api/v1/info, checked 2026-10-07); it is votable, so re-check it
+   before citing it again. sigma-rust's recommended safe user minimum
+   is 1,000,000 nanoERG (0.001 ERG), which covers boxes up to 2,777
+   bytes at the current rate. Exact BigInt maths throughout. */
+var MIN_VALUE_PER_BYTE_NANO = 360n;
+var SAFE_USER_MIN_BOX_NANO = 1000000n;
+function minBoxValueNano(sizeStr) {
+  var s = (sizeStr == null ? "" : String(sizeStr)).trim();
+  if (!/^\d+$/.test(s)) return null;
+  var bytes = BigInt(s);
+  if (bytes <= 0n) return null;
+  return (bytes * MIN_VALUE_PER_BYTE_NANO).toString();
+}
+function analyzeMinBoxValue(sizeStr, ergStr) {
+  var minStr = minBoxValueNano(sizeStr);
+  var valueStr = ergToNano(ergStr);
+  if (minStr === null || valueStr === null) return null;
+  var min = BigInt(minStr);
+  var value = BigInt(valueStr);
+  var diff = value >= min ? value - min : min - value;
+  return {
+    minNano: minStr,
+    minErg: nanoToErg(minStr),
+    meetsMinimum: value >= min,
+    differenceNano: diff.toString(),
+    differenceErg: nanoToErg(diff.toString()),
+    meetsSafeUserMin: value >= SAFE_USER_MIN_BOX_NANO
+  };
+}
+
 /* ---------- Autolykos mining-share estimator ---------- */
 /* Ergo targets a 2-minute block interval, so ~720 blocks/day. A miner's
    expected share of those blocks equals their share of total network
@@ -230,7 +265,7 @@ function fmtEstimate(x) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate };
+  module.exports = { blake2b256, base58Decode, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate };
 }
 
 if (typeof document !== "undefined") {
@@ -317,6 +352,27 @@ if (typeof document !== "undefined") {
       } else {
         msg += "Left untouched, it covers " + res.payments + (res.payments === "1" ? " full rent payment" : " full rent payments") + " — roughly " + res.approxYears + " years of inactivity — before a miner could consume what remains, tokens included. Moving the box resets the 4-year clock. Estimate only: the fee factor can change by miner vote.";
       }
+      out.textContent = msg;
+    });
+
+    /* --- minimum box value checker --- */
+    document.getElementById("minbox-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var res = analyzeMinBoxValue(document.getElementById("minbox-bytes").value, document.getElementById("minbox-erg").value);
+      var out = document.getElementById("minbox-result");
+      if (res === null) {
+        out.textContent = "Enter a box size in whole bytes (above zero) and the box's ERG value (up to 9 decimal places).";
+        return;
+      }
+      var msg = "Minimum allowed value for this box: " + res.minErg + " ERG (" + res.minNano + " nanoERG) — its serialized size × 360 nanoERG per byte, the minimum-value-per-byte rate set at launch and still the live mainnet parameter (a votable chain parameter). ";
+      if (res.meetsMinimum) {
+        msg += "✓ This box clears the minimum by " + res.differenceErg + " ERG (" + res.differenceNano + " nanoERG). ";
+      } else {
+        msg += "✗ This box is " + res.differenceErg + " ERG (" + res.differenceNano + " nanoERG) below the minimum — a transaction creating it would be rejected. Add at least that much ERG. ";
+      }
+      msg += res.meetsSafeUserMin
+        ? "It also clears the recommended safe user minimum of 0.001 ERG (1,000,000 nanoERG), which covers boxes up to 2,777 bytes at the current rate."
+        : "Note: wallets usually require the recommended safe user minimum of 0.001 ERG (1,000,000 nanoERG) per box when the exact size is not known — this box is below that, even if it clears its exact size-based minimum.";
       out.textContent = msg;
     });
 

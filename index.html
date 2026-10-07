@@ -207,6 +207,17 @@
         <button type="submit" class="btn primary">Estimate my share</button>
         <p id="mine-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="minbox-calc">
+        <h3>5 · Minimum box value checker</h3>
+        <p>Ergo rejects a box whose value is below its serialized size × the minimum value per byte — 360 nanoERG per byte, the rate set at launch and still the live mainnet parameter (a votable chain parameter I verified against live network params). A simple ERG-only box is roughly 100 bytes serialized; boxes carrying tokens or register data are larger. When the exact size is unknown, wallets use a recommended safe minimum of 0.001 ERG per box.</p>
+        <label for="minbox-bytes">Box size (serialized bytes)</label>
+        <input id="minbox-bytes" inputmode="numeric" placeholder="e.g. 112" autocomplete="off">
+        <label for="minbox-erg">ERG held in the box</label>
+        <input id="minbox-erg" inputmode="decimal" placeholder="e.g. 0.001" autocomplete="off">
+        <button type="submit" class="btn primary">Check the minimum</button>
+        <p id="minbox-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -252,6 +263,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

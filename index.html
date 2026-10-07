@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ergo Astronaut — Building on Ergo, one orbit at a time</title>
+<meta name="description" content="Ergo Astronaut by Kyle Cox (@kshot9000): my builder hub for the Ergo blockchain — new apps, fixes and improvements across Ergo, a live project catalogue, and local tools for ERG, nanoERG and Ergo addresses. Houston, we have a blockchain.">
+<meta property="og:title" content="Ergo Astronaut — Building on Ergo">
+<meta property="og:description" content="Open-source Ergo apps, tools and guides by Kyle Cox (@kshot9000), tagging @ergoplatform. Independent builder hub — not affiliated with the Ergo Foundation.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://kshot3000.github.io/Ergo-Astronaut-/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23050810'/%3E%3Ccircle cx='16' cy='13' r='7' fill='%23fbbf24'/%3E%3Crect x='7' y='19' width='18' height='6' rx='3' fill='%237dd3fc'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+<a class="skip" href="#main">Skip to main content</a>
+<header class="site-head">
+  <a class="brand" href="./" aria-label="Ergo Astronaut home">
+    <span class="brand-mark" aria-hidden="true">🚀</span>
+    <span>Ergo<strong>Astronaut</strong></span>
+  </a>
+  <nav aria-label="Main">
+    <a href="#projects">Projects</a>
+    <a href="#tools">Tools</a>
+    <a href="#crosschain">Cross-chain</a>
+    <a href="#guides">Guides</a>
+    <a href="#support">Support</a>
+    <a href="https://github.com/Kshot3000/Ergo-Astronaut-">GitHub</a>
+  </nav>
+</header>
+
+<main id="main" tabindex="-1">
+  <section class="hero">
+    <p class="eyebrow">Open source · Built in public · By <a href="https://x.com/kshot9000">@kshot9000</a> · For <a href="https://github.com/ergoplatform">@ergoplatform</a></p>
+    <h1>One small step for a builder, one giant leap for Ergo.</h1>
+    <p class="lede">Ergo Astronaut is my mission control for the <strong>Ergo blockchain</strong>:
+    I build new websites and apps for Ergo, fix and improve code across my own Ergo projects
+    and the wider ecosystem, and run honest, local-first tools anyone can use. My flagship is
+    <strong>Airlock</strong>, my Ergo DEX. Everything here is open source, and every tool on
+    this page runs in your browser — nothing you paste leaves this page.</p>
+    <div class="hero-cta">
+      <a class="btn primary" href="#projects">Browse the catalogue</a>
+      <a class="btn" href="#tools">Try the flight tools</a>
+    </div>
+    <dl class="stats">
+      <div><dt>Flagship</dt><dd>Airlock DEX — live</dd></div>
+      <div><dt>Catalogued projects</dt><dd>14 Ergo projects</dd></div>
+      <div><dt>Builder loop</dt><dd>Hourly, tested + verified</dd></div>
+    </dl>
+  </section>
+
+  <section id="concepts" aria-labelledby="concepts-h">
+    <h2 id="concepts-h">Ergo, in 30 seconds</h2>
+    <ul class="concept-list">
+      <li><strong>eUTXO, not accounts.</strong> Ergo extends Bitcoin's UTXO model: funds live in <em>boxes</em> that can carry data and tokens, so contract logic is predictable and fees can be worked out before you ever submit.</li>
+      <li><strong>ErgoScript + Sigma protocols.</strong> Contracts are written in ErgoScript and built on Sigma protocols — composable zero-knowledge proofs (prove this AND that, or any 2 of 3 signers) baked into the language itself.</li>
+      <li><strong>Autolykos proof of work.</strong> Ergo is mined, not staked, using the memory-hard Autolykos algorithm. It launched fairly in 2019 — no ICO and no pre-mine sale.</li>
+      <li><strong>Storage rent.</strong> Boxes untouched for about four years can be charged a small rent by miners. Lost coins slowly return to circulation and long-term state stays paid for.</li>
+      <li><strong>Babel fees.</strong> No ERG for the fee? Babel fees let you pay a transaction fee in a native token instead, swapped through a special babel box — no detour to an exchange.</li>
+      <li><strong>NIPoPoWs.</strong> Non-Interactive Proofs of Proof-of-Work compress the chain into a small, checkable proof, so light clients and other chains can verify Ergo's work without downloading everything.</li>
+    </ul>
+  </section>
+
+  <section id="projects" aria-labelledby="projects-h">
+    <h2 id="projects-h">Project catalogue</h2>
+    <p>My own Ergo work first and labelled as mine — everything after it is the wider Ergo ecosystem, linked for credit, not claimed as my work. Filter by what you need:</p>
+    <div class="filter-row" role="group" aria-label="Filter projects">
+      <label for="q">Search projects</label>
+      <input id="q" type="search" placeholder="e.g. DEX, wallet, bridge, NFT…" autocomplete="off">
+      <div class="chips" role="group" aria-label="Filter by category">
+        <button type="button" class="chip active" data-filter="all">All</button>
+        <button type="button" class="chip" data-filter="mine">My work</button>
+        <button type="button" class="chip" data-filter="defi">DeFi</button>
+        <button type="button" class="chip" data-filter="wallet">Wallets &amp; explorers</button>
+        <button type="button" class="chip" data-filter="dev">Developer</button>
+        <button type="button" class="chip" data-filter="official">Official</button>
+        <button type="button" class="chip" data-filter="nft">NFTs</button>
+      </div>
+    </div>
+    <p id="filter-status" class="sr-status" role="status" aria-live="polite"></p>
+    <ul class="cards" id="cards">
+      <li class="card" data-cat="mine defi" data-name="airlock dex swap spectrum ergo my dex flagship kyle">
+        <h3><a href="https://kshot3000.github.io/MY-ERGO-DEX/">Airlock — my Ergo DEX</a> <span class="badge mine">My project · Live</span></h3>
+        <p>My own decentralised exchange for Ergo, built in the separate MY-ERGO-DEX repo: live market quotes, a token catalogue and Nautilus wallet connect. Quote-and-preview today; on-chain settlement is the honestly-labelled next phase.</p>
+        <p class="card-links"><a href="https://kshot3000.github.io/MY-ERGO-DEX/">Visit site</a> · <a href="https://github.com/Kshot3000/MY-ERGO-DEX">Source</a></p>
+      </li>
+      <li class="card" data-cat="official" data-name="ergo platform official site foundation ergoplatform">
+        <h3><a href="https://ergoplatform.org/">Ergo Platform</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>The official home of Ergo — what the chain is, how mining and storage rent work, and where the community lives. Start here if Ergo is new to you.</p>
+        <p class="card-links"><a href="https://ergoplatform.org/">Visit site</a></p>
+      </li>
+      <li class="card" data-cat="official wallet" data-name="ergo explorer blockchain blocks boxes transactions tokens official">
+        <h3><a href="https://explorer.ergoplatform.com/">Ergo Explorer</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>The official block explorer: blocks, boxes, transactions, tokens and addresses on Ergo mainnet. The ground truth I check my own tools against.</p>
+        <p class="card-links"><a href="https://explorer.ergoplatform.com/">Visit site</a></p>
+      </li>
+      <li class="card" data-cat="official dev" data-name="ergo documentation docs developers ergoscript guides official">
+        <h3><a href="https://docs.ergoplatform.com/">Ergo Documentation</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>The official developer docs — nodes, wallets, ErgoScript, the eUTXO model and protocol references, straight from the source.</p>
+        <p class="card-links"><a href="https://docs.ergoplatform.com/">Visit site</a></p>
+      </li>
+      <li class="card" data-cat="defi" data-name="spectrum dex amm swap liquidity pools ergo cardano">
+        <h3><a href="https://spectrum.fi/">Spectrum DEX</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>A cross-chain AMM DEX running on Ergo (and Cardano) — the liquidity layer my Airlock quotes are modelled against.</p>
+        <p class="card-links"><a href="https://spectrum.fi/">Visit site</a></p>
+      </li>
+      <li class="card" data-cat="defi" data-name="sigmausd sigusd sigrsv stablecoin ageusd reserve">
+        <h3><a href="https://sigmausd.io/">SigmaUSD</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>Ergo's algorithmic stablecoin (SigUSD, backed by the SigRSV reserve token) built on the AgeUSD protocol — one of Ergo's longest-running dApps.</p>
+        <p class="card-links"><a href="https://sigmausd.io/">Visit site</a></p>
+      </li>
+      <li class="card" data-cat="defi dev" data-name="rosen bridge cross chain cardano ergo bridging watchers guards">
+        <h3><a href="https://rosen.tech/">Rosen Bridge</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>The decentralised bridge between Ergo and Cardano (and beyond), run by watchers and guards. This is the real route for Ergo ⇄ Cardano integration — see the cross-chain section below.</p>
+        <p class="card-links"><a href="https://rosen.tech/">Visit site</a> · <a href="https://app.rosen.tech/">Bridge app</a></p>
+      </li>
+      <li class="card" data-cat="defi dev" data-name="paideia dao governance voting treasury ergo">
+        <h3><a href="https://paideia.im/">Paideia</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>DAO tooling on Ergo — proposals, voting and treasury management so projects can govern themselves on-chain.</p>
+        <p class="card-links"><a href="https://paideia.im/">Visit site</a></p>
+      </li>
+      <li class="card" data-cat="defi dev" data-name="ergopad launchpad ido staking token launches github">
+        <h3><a href="https://github.com/ergopad">ErgoPad</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>Ergo's token launchpad — IDOs and staking for new Ergo projects. Linked to its GitHub org, where the contracts and API live in the open.</p>
+        <p class="card-links"><a href="https://github.com/ergopad">Source</a></p>
+      </li>
+      <li class="card" data-cat="wallet" data-name="nautilus wallet browser extension privacy ledger dapp connector">
+        <h3><a href="https://github.com/nautls/nautilus-wallet">Nautilus Wallet</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>The browser wallet most Ergo dApps connect through, with a privacy focus and Ledger support. Open source — linked to its repo, releases included.</p>
+        <p class="card-links"><a href="https://github.com/nautls/nautilus-wallet">Source</a></p>
+      </li>
+      <li class="card" data-cat="defi" data-name="duckpools lending borrowing pools ergo">
+        <h3><a href="https://duckpools.io/">DuckPools</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>Lending and borrowing pools on Ergo — supply assets to a pool, or borrow against collateral, all in eUTXO boxes.</p>
+        <p class="card-links"><a href="https://duckpools.io/">Visit site</a></p>
+      </li>
+      <li class="card" data-cat="nft wallet" data-name="skyharbor nft marketplace buy sell ergo tokens">
+        <h3><a href="https://skyharbor.io/">SkyHarbor</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>Ergo's best-known NFT marketplace — mint, buy and sell Ergo NFTs, with a wallet view for the tokens you already hold.</p>
+        <p class="card-links"><a href="https://skyharbor.io/">Visit site</a></p>
+      </li>
+      <li class="card" data-cat="defi nft" data-name="mew finance dex tools token minting escrow ergo">
+        <h3><a href="https://mewfinance.com/">Mew Finance</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>A toolbox of Ergo dApps in one place — trading, token tools and escrow-style utilities built by the community.</p>
+        <p class="card-links"><a href="https://mewfinance.com/">Visit site</a></p>
+      </li>
+      <li class="card" data-cat="dev" data-name="fleet sdk javascript typescript developers library dapp building">
+        <h3><a href="https://fleet-sdk.github.io/docs/">Fleet SDK</a> <span class="badge eco">Ecosystem</span></h3>
+        <p>The TypeScript SDK I reach for when building Ergo dApps — box selection, transaction building and signing without hand-rolling the plumbing.</p>
+        <p class="card-links"><a href="https://fleet-sdk.github.io/docs/">Read the docs</a></p>
+      </li>
+    </ul>
+    <p id="no-results" hidden>No projects match that filter yet — try “all”.</p>
+  </section>
+
+  <section id="tools" aria-labelledby="tools-h">
+    <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
+    <div class="tool-grid">
+      <form class="tool" id="converter">
+        <h3>1 · ERG ⇄ nanoERG converter</h3>
+        <p>1 ERG is exactly 1,000,000,000 nanoERG. Fill in one side and convert — exact BigInt maths, no floating-point drift, done locally.</p>
+        <label for="erg">ERG</label>
+        <input id="erg" inputmode="decimal" placeholder="e.g. 1.5" autocomplete="off">
+        <label for="nanoerg">nanoERG</label>
+        <input id="nanoerg" inputmode="numeric" placeholder="e.g. 1500000000" autocomplete="off">
+        <button type="submit" class="btn primary">Convert</button>
+        <p id="convert-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="address-checker">
+        <h3>2 · Ergo address checker</h3>
+        <p>Paste any Ergo address. I Base58-decode it locally, verify its real checksum — the first 4 bytes of Blake2b-256 over the address bytes, stored as the last 4 bytes — and read its network and type byte. Try it with the donation address below.</p>
+        <label for="addr-in">Ergo address</label>
+        <input id="addr-in" spellcheck="false" placeholder="e.g. 9f…" autocomplete="off">
+        <button type="submit" class="btn primary">Check this address</button>
+        <p id="addr-result" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+  </section>
+
+  <section id="crosschain" aria-labelledby="crosschain-h">
+    <h2 id="crosschain-h">Cross-chain: Ergo ⇄ Cardano, and the integration lab</h2>
+    <p><strong>What is live today:</strong> Ergo and Cardano already connect in the real world through
+    <a href="https://rosen.tech/">Rosen Bridge</a> — a decentralised bridge where watchers report events on each
+    chain and guards process them, live at <a href="https://app.rosen.tech/">app.rosen.tech</a>. That bridge is an
+    ecosystem project, not mine, and it is the route any serious Ergo ⇄ Cardano work builds on.</p>
+    <p><strong>What is planned lab work — not a live feature:</strong> my integration lab is where I am working on
+    connecting my Ergo tooling with my Cardano and Midnight projects — for example, showing Rosen-bridged assets
+    alongside the Cardano data on <a href="https://nightdream.xyz/">NightDream</a>, cross-linking this hub with
+    <a href="https://kshot3000.github.io/Cardano4all/">Cardano4All</a>, and exploring what Midnight's privacy model
+    (see <a href="https://kshot3000.github.io/Privacy4All/">Privacy4All</a> and
+    <a href="https://kshot3000.github.io/Night-Messenger-/">Night Messenger</a>) could mean for Ergo users.
+    I will label each piece here as it actually ships — until then it is a plan, not a product.</p>
+  </section>
+
+  <section id="guides" aria-labelledby="guides-h">
+    <h2 id="guides-h">Flight manual</h2>
+    <ul class="guide-list">
+      <li><a href="guides/getting-started-ergo.md">Getting started with Ergo</a> — the official resources, wallets and docs, in the order I'd learn them.</li>
+      <li><a href="https://github.com/Kshot3000/Ergo-Astronaut-/blob/main/README.md">The mission log (README)</a> — what I'm building here, the full catalogue and how the hourly loop works.</li>
+    </ul>
+  </section>
+
+  <section id="support" aria-labelledby="support-h">
+    <h2 id="support-h">Support this work</h2>
+    <p>Ergo Astronaut is free and open source. If it helped you, tips in ERG keep the mission flying:</p>
+    <p class="donate">
+      <code id="donation-address">9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</code>
+      <button type="button" id="copy-address" class="btn">Copy ERG address</button>
+    </p>
+    <p id="copy-status" role="status" aria-live="polite"></p>
+    <p>Built by Kyle Cox — <a href="https://x.com/kshot9000">@kshot9000 on X</a> · <a href="https://github.com/Kshot3000">github.com/Kshot3000</a></p>
+    <p class="team-tag">For the Ergo team — <a href="https://github.com/ergoplatform">@ergoplatform</a> on GitHub and
+    <a href="https://x.com/ergo_platform">@ergo_platform</a> on X: this is an independent community builder hub for the
+    Ergo ecosystem. Feedback and corrections are welcome in the <a href="https://github.com/Kshot3000/Ergo-Astronaut-/issues">issues</a>.</p>
+  </section>
+</main>
+
+<footer>
+  <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
+  <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
+</footer>
+<script src="app.js?v=1"></script>
+</body>
+</html>

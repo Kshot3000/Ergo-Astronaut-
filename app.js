@@ -1067,6 +1067,45 @@ function parseErgoBox(boxHex) {
   };
 }
 
+/* ---------- Sigma constant inspector ---------- */
+/* A single Sigma constant, standalone — the exact bytes a box's
+   R4–R9 register holds, which is how explorers and node APIs display
+   a register on its own (for example a babel box's R5 price, tool
+   12). Until now the only way to read one on this hub was to embed
+   it in a whole box for tool 15. This decodes one constant exactly
+   as tool 15's register reader does — same type byte (primitive
+   codes 1-8; collection and tuple types constructor-coded), same
+   data readers, same integer widths (Short/Int through fleet-sdk's
+   32-bit zigzag, Long through its 64-bit one, so the extremes read
+   back correctly). The constant must consume the input exactly:
+   trailing bytes mean the paste is not one constant (it may be two
+   registers, or a whole box — tool 15 takes those), and a type
+   outside the parser's set (an Option, Box or AvlTree constant, or
+   a SigmaProp that is not the ProveDlog form fleet implements)
+   stops the decode plainly rather than guessing a length. The
+   encode direction is tool 17's encodeSigmaConstant, unchanged. */
+function decodeSigmaConstant(constHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, type: null, value: null, byteLength: null, rawHex: null };
+  };
+  var cleaned = constHex == null ? "" : String(constHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  if (!bytes) return fail("Enter one Sigma constant as hex (an even number of 0-9/a-f characters, with or without a 0x prefix) — explorers and node APIs show a box's registers in exactly this form.");
+  var typeParsed = parseSigmaType(bytes, 0);
+  if (!typeParsed) return fail("This constant's type byte (0x" + bytes[0].toString(16).padStart(2, "0") + ") is outside the set this inspector decodes (the primitive, collection and tuple types — for example an Option, Box or AvlTree constant). Because a constant's length comes from its type, it is not decoded rather than guessed at.");
+  var dataParsed = parseSigmaData(typeParsed.node, bytes, typeParsed.length);
+  if (!dataParsed) return fail("This " + sigmaTypeName(typeParsed.node) + " constant is truncated or holds a data form this inspector does not decode (a SigmaProp, for example, is only decoded in its ProveDlog form) — it is not decoded rather than guessed at.");
+  var used = typeParsed.length + dataParsed.length;
+  if (used !== bytes.length) return fail("There are " + (bytes.length - used) + " extra byte(s) after this " + sigmaTypeName(typeParsed.node) + " constant — one constant ends exactly there, so this hex carries more than one constant (it may be several registers pasted together, or a whole box, which tool 15 takes).");
+  return {
+    valid: true, reason: null,
+    type: sigmaTypeName(typeParsed.node),
+    value: dataParsed.value,
+    byteLength: bytes.length,
+    rawHex: bytesToHex(bytes)
+  };
+}
+
 /* ---------- Serialized box builder ---------- */
 /* The encode-side inverse of tool 15, in the exact layout fleet-sdk's
    serializeBox writes: [value: unsigned BigInt VLQ][ErgoTree bytes
@@ -1272,7 +1311,7 @@ function buildErgoBox(fields) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant };
 }
 
 if (typeof document !== "undefined") {
@@ -1665,6 +1704,39 @@ if (typeof document !== "undefined") {
         : "Registers: " + res.registers.map(function (rg) { return rg.name + " = " + rg.value + " (" + rg.type + ", raw " + rg.rawHex + ")"; }).join("; ") + ". ";
       msg += "Construction only: these bytes are a box on paper — a box exists on-chain only once a signed transaction creating it is accepted, and this tool signs and sends nothing.";
       out.textContent = msg;
+    });
+
+    /* --- Sigma constant inspector --- */
+    document.getElementById("sigma-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("sigma-result");
+      var hexVal = document.getElementById("sigma-hex").value;
+      var specVal = document.getElementById("sigma-spec").value;
+      if (hexVal.trim() !== "") {
+        var dec = decodeSigmaConstant(hexVal);
+        if (!dec.valid) {
+          out.textContent = "✗ " + dec.reason;
+          return;
+        }
+        out.textContent = "✓ That is one " + dec.type + " constant, " + dec.byteLength + (dec.byteLength === 1 ? " byte" : " bytes") + " — value: " + dec.value + ". Decoded locally with the same reader tool 15 uses for a box's registers, at the same integer widths, so what an explorer shows for a register (a babel box's R5 price, say) reads back as the value that was written. Decoding only: it shows what the constant holds, not what any script does with it.";
+        return;
+      }
+      if (specVal.trim() !== "") {
+        var enc = encodeSigmaConstant(specVal);
+        if (!enc.valid) {
+          out.textContent = "✗ " + enc.reason;
+          return;
+        }
+        var back = decodeSigmaConstant(enc.rawHex);
+        if (!back.valid || back.type !== enc.typeName || back.value !== enc.value) {
+          out.textContent = "✗ Internal round-trip check failed: the encoded constant does not decode back to exactly this value — refusing to show it rather than risk a mismatched constant.";
+          return;
+        }
+        document.getElementById("sigma-hex").value = enc.rawHex;
+        out.textContent = "✓ Your " + enc.typeName + " constant: " + enc.rawHex + " — encoded locally exactly as tool 17 encodes a register, and round-tripped through the decoder above, which reads it back as " + back.value + ". Paste that hex into a box's registers with tool 17, one register per line in R4, R5, … order. Construction only: a constant on its own is just bytes — it takes effect only inside a box a signed transaction creates, and this tool signs and sends nothing.";
+        return;
+      }
+      out.textContent = "Fill in one side — a constant's hex to decode it, or a typed value to encode it — and I will do the other.";
     });
 
     /* --- copy donation address --- */

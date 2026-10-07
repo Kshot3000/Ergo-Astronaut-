@@ -366,6 +366,17 @@
         <button type="submit" class="btn primary">Build the box</button>
         <p id="boxbuild-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="sigma-calc">
+        <h3>18 · Sigma constant inspector (one register ⇄ its hex)</h3>
+        <p>A box's registers R4–R9 each hold one <strong>Sigma constant</strong> — a type byte plus the value's bytes — and that is exactly how explorers and node APIs show a register on its own (a babel box's R5 price in tool 12, for example). Until now the only way to read one here was to embed it in a whole box for tool 15. Paste one constant's hex and I decode it locally with the same reader tool 15 uses — the same integer widths too, Short and Int through the 32-bit zigzag, Long through the 64-bit one, so even an SInt at a 32-bit extreme reads back as the value that was written. Or go the other way: enter a typed value in tool 17's register form — <code>bool:true</code>, <code>byte:-5</code>, <code>short:17</code>, <code>int:852574</code>, <code>long:430550309</code>, <code>bigint:1039</code>, <code>group:&lt;66 hex chars&gt;</code>, <code>dlog:&lt;66 hex chars&gt;</code>, <code>bytes:&lt;hex&gt;</code>, <code>ints:1,2,3</code> or <code>longs:1,2,3</code> — and I encode it and round-trip the hex through the decoder before showing it. Two honest limits, the same ones tool 15 states: a constant whose type is outside the decoded set (an Option, Box or AvlTree constant), and a SigmaProp that is not the ProveDlog form, stop plainly rather than being guessed at, and trailing bytes after one constant are reported instead of silently ignored.</p>
+        <label for="sigma-hex">Constant hex (from an explorer or node API)</label>
+        <textarea id="sigma-hex" rows="2" spellcheck="false" placeholder="e.g. 05cab4cd9a03" autocomplete="off"></textarea>
+        <label for="sigma-spec">Or a typed value to encode</label>
+        <input id="sigma-spec" spellcheck="false" placeholder="e.g. long:430550309" autocomplete="off">
+        <button type="submit" class="btn primary">Decode or encode the constant</button>
+        <p id="sigma-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -411,6 +422,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=17"></script>
+<script src="app.js?v=18"></script>
 </body>
 </html>

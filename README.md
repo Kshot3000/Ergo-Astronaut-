@@ -240,6 +240,25 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   Sigma constant vectors for every register type, cross-checked with
   an independent Python build. Construction only — it signs and
   sends nothing.
+- **Sigma constant inspector** — one register ⇄ its hex, standalone.
+  A box's R4–R9 registers each hold one Sigma constant (a type byte
+  plus the value's bytes), which is exactly how explorers and node
+  APIs display a register on its own — a babel box's R5 price, say.
+  Paste one constant's hex and it is decoded with the same reader
+  the box parser uses, at the same integer widths (Short/Int
+  through fleet-sdk's 32-bit zigzag, Long through its 64-bit one),
+  so an SInt at a 32-bit extreme reads back as written; enter a
+  typed value in the box builder's register form (`long:430550309`,
+  `int:852574`, `bytes:<hex>`, `bigint:…`, `group:…`, `dlog:…`,
+  `ints:…`, `longs:…`, `bool:…`, `byte:…`, `short:…`) and it is
+  encoded and round-tripped through the decoder before being
+  shown. The constant must consume the input exactly — trailing
+  bytes are reported, not ignored — and the parser's stated limits
+  apply unchanged: an Option, Box or AvlTree constant type, and a
+  SigmaProp that is not the ProveDlog form, stop the decode plainly
+  rather than being guessed past. Verified against fleet-sdk's
+  published Sigma constant vectors in both directions and the
+  register raw hexes the box parser tests already record.
 
 ## Cross-chain integration
 

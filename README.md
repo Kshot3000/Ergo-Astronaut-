@@ -259,6 +259,21 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   rather than being guessed past. Verified against fleet-sdk's
   published Sigma constant vectors in both directions and the
   register raw hexes the box parser tests already record.
+- **P2PK ErgoTree builder** — public key → ErgoTree, the encode
+  direction the other tools were missing (key → address, tree →
+  address, address → tree and tree → P2S were already covered).
+  The standard P2PK tree is header `0x00` plus the ProveDlog
+  proposition (`08 cd`) plus the 33-byte compressed public key —
+  the script Ergo builds for a P2PK box and the one the
+  address-to-tree decoder reverses. The tree carries no network,
+  so it is identical on both; the chosen network only picks the
+  derived addresses shown alongside it (the P2PK address and the
+  P2SH address). The built tree is round-tripped through the
+  ErgoTree inspector and the address through the address decoder
+  before anything is shown. Verified against the documented P2PK
+  vectors and the fleet-sdk/fleet#219 reference P2SH addresses on
+  both networks. Public keys only — construction only, it signs
+  and sends nothing.
 
 ## Cross-chain integration
 

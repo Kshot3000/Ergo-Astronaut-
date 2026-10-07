@@ -176,6 +176,47 @@ function p2pkAddressFromPublicKey(pubkeyHex, networkStr) {
   return base58Encode(Uint8Array.from(body));
 }
 
+/* ---------- P2PK ErgoTree builder (public key -> ErgoTree) ---------- */
+/* The one encode direction the hub was missing: tools 8/10/11/16 go
+   key -> address, tree -> address, address -> tree and tree -> P2S,
+   but nothing turned a public key into the ErgoTree itself — the hex
+   explorers and SDKs show for every P2PK box, and the input tools
+   15/16/17 expect. The standard P2PK tree is header 0x00 (version 0,
+   no size field, no constant segregation) followed by the ProveDlog
+   proposition 0x08 0xcd plus the 33-byte compressed public key —
+   exactly the construction sigmastate builds for a P2PK script and
+   the one tool 11's decoder reverses. The tree carries no network;
+   the network only picks which addresses are derived alongside it.
+   The built tree is round-tripped through tool 10's parser and the
+   P2PK address through tool 11's decoder before anything is shown:
+   both must read back this exact key, tree and address. Verified
+   against the documented P2PK vectors and the fleet-sdk/fleet#219
+   reference P2SH addresses in the tests. Public keys only — never a
+   private key or seed phrase; a tree proves nothing about who can
+   spend a box it guards beyond the script itself. */
+function buildP2PKTree(pubkeyHex, networkStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, treeHex: null, publicKey: null, network: null, address: null, p2shAddress: null };
+  };
+  var net = (networkStr == null ? "" : String(networkStr)).trim().toLowerCase();
+  if (net !== "mainnet" && net !== "testnet") return fail("Unknown network — pick mainnet or testnet. The ErgoTree itself is the same on both; only the addresses derived from it differ.");
+  var s = (pubkeyHex == null ? "" : String(pubkeyHex)).trim().toLowerCase();
+  if (s.indexOf("0x") === 0) s = s.slice(2);
+  if (!/^[0-9a-f]{66}$/.test(s)) return fail("Enter a compressed public key as 66 hex characters (33 bytes) starting 02 or 03 — public keys only: never enter a private key or seed phrase anywhere, including here.");
+  if (s.slice(0, 2) !== "02" && s.slice(0, 2) !== "03") return fail("That is not a compressed public key: a compressed secp256k1 key is 33 bytes and starts 02 or 03 (this starts " + s.slice(0, 2) + "). An uncompressed key (65 bytes, starting 04) is not what Ergo P2PK scripts carry.");
+  var treeHex = "0008cd" + s;
+  var network = net === "mainnet" ? "Mainnet" : "Testnet";
+  var info = analyzeErgoTree(treeHex, net);
+  if (!info.valid || !info.isP2PK || info.publicKey !== s || !info.address || !info.p2shAddress) {
+    return fail("Internal round-trip check failed: tool 10's parser does not read the built tree back as this key's P2PK script — refusing to show it rather than risk a mismatched tree.");
+  }
+  var dec = decodeErgoAddress(info.address);
+  if (!dec.valid || dec.ergoTree !== treeHex || dec.publicKey !== s) {
+    return fail("Internal round-trip check failed: tool 11's decoder does not read the built address back to this tree and key — refusing to show it rather than risk a mismatched tree.");
+  }
+  return { valid: true, reason: null, treeHex: treeHex, publicKey: s, network: network, address: info.address, p2shAddress: info.p2shAddress };
+}
+
 /* ---------- ERG <-> nanoERG converter (exact BigInt) ---------- */
 var NANO_PER_ERG = 1000000000n;
 function ergToNano(ergStr) {
@@ -1311,7 +1352,7 @@ function buildErgoBox(fields) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree };
 }
 
 if (typeof document !== "undefined") {
@@ -1737,6 +1778,18 @@ if (typeof document !== "undefined") {
         return;
       }
       out.textContent = "Fill in one side — a constant's hex to decode it, or a typed value to encode it — and I will do the other.";
+    });
+
+    document.getElementById("treebuild-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("treebuild-result");
+      var netLabel = document.getElementById("treebuild-network").value;
+      var built = buildP2PKTree(document.getElementById("treebuild-pubkey").value, netLabel);
+      if (!built.valid) {
+        out.textContent = "✗ " + built.reason;
+        return;
+      }
+      out.textContent = "✓ Your P2PK ErgoTree: " + built.treeHex + " — header 00 + the ProveDlog proposition (08 cd) + your public key, built locally and round-tripped through tool 10's parser and tool 11's decoder, which both read it back as this exact key. The tree is the same on every network; on " + built.network + " it gives the P2PK address " + built.address + " (tool 8) and the P2SH address " + built.p2shAddress + " (tool 10). Paste the tree hex into tools 15, 16 or 17 wherever an ErgoTree is asked for. Construction only: the tree is just a script — who can spend a box it guards depends on holding the key's private half, which this tool never asks for and you should never type into any website.";
     });
 
     /* --- copy donation address --- */

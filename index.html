@@ -377,6 +377,19 @@
         <button type="submit" class="btn primary">Decode or encode the constant</button>
         <p id="sigma-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="treebuild-calc">
+        <h3>19 · P2PK ErgoTree builder (public key → ErgoTree)</h3>
+        <p>The one encode direction this hub was missing: tools 8, 10, 11 and 16 go key → address, tree → address, address → tree and tree → P2S, but nothing turned a public key into the ErgoTree itself — the hex explorers and SDKs show for every P2PK box, and the input tools 15, 16 and 17 expect. The standard P2PK tree is a header byte 00 (version 0, no size field, no constant segregation) followed by the ProveDlog proposition — 08 cd — plus your 33-byte compressed public key, exactly the script Ergo builds for a P2PK box and the one tool 11's decoder reverses. The tree itself carries no network, so it is the same on both; the network only picks which addresses I derive alongside it — the P2PK address from tool 8 and the P2SH address from tool 10. The built tree is round-tripped through tool 10's parser and the address through tool 11's decoder before either is shown. Public keys only — never type a private key or seed phrase into any website, this one included.</p>
+        <label for="treebuild-pubkey">Compressed public key (hex)</label>
+        <input id="treebuild-pubkey" spellcheck="false" placeholder="e.g. 02…" autocomplete="off">
+        <label for="treebuild-network">Network (for the derived addresses)</label>
+        <select id="treebuild-network">
+          <option selected>Mainnet</option><option>Testnet</option>
+        </select>
+        <button type="submit" class="btn primary">Build the ErgoTree</button>
+        <p id="treebuild-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -422,6 +435,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=18"></script>
+<script src="app.js?v=19"></script>
 </body>
 </html>

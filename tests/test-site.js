@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=18"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=19"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -50,6 +50,7 @@ check("box parser tool on hub", html.includes('id="boxparse-calc"') && html.incl
 check("p2s builder tool on hub", html.includes('id="p2s-calc"') && html.includes("P2S address builder") && readme.includes("P2S address builder"));
 check("box builder tool on hub", html.includes('id="boxbuild-calc"') && html.includes("Serialized box builder") && readme.includes("Serialized box builder"));
 check("sigma constant tool on hub", html.includes('id="sigma-calc"') && html.includes("Sigma constant inspector") && readme.includes("Sigma constant inspector"));
+check("p2pk tree builder tool on hub", html.includes('id="treebuild-calc"') && html.includes("P2PK ErgoTree builder") && readme.includes("P2PK ErgoTree builder"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -486,6 +487,22 @@ check("sigma round-trip: every encodable kind decodes back", ["bool:true", "byte
 check("sigma decoder agrees with the box parser on a register", (() => { const p = app.parseErgoBox(SYNTH_A); const d = app.decodeSigmaConstant(p.registers[0].rawHex); return d.valid && d.type === p.registers[0].type && d.value === p.registers[0].value; })());
 check("sigma decoder rejects trailing bytes and junk", app.decodeSigmaConstant("05cab4cd9a03ff").valid === false && /extra byte/.test(app.decodeSigmaConstant("05cab4cd9a03ff").reason) && app.decodeSigmaConstant("").valid === false && app.decodeSigmaConstant("zz").valid === false && app.decodeSigmaConstant("05cab4").valid === false);
 check("sigma decoder declines an unsupported type plainly", app.decodeSigmaConstant("2400").valid === false && /outside the set/.test(app.decodeSigmaConstant("2400").reason));
+
+/* P2PK ErgoTree builder — the tree is header 0x00 + the ProveDlog
+   proposition (08 cd) + the key, the construction tool 11's decoder
+   reverses and sigmastate builds for P2PK scripts. FLEET_PK is the
+   fleet-sdk/fleet#219 reference key: its P2SH addresses are the
+   independently executed sigmastate vectors, and its P2PK addresses
+   are the Python-cross-checked vectors from the tool 8/13 tests. */
+const FLEET_TREE = "0008cd" + FLEET_PK;
+const builtTreeMain = app.buildP2PKTree(FLEET_PK, "mainnet");
+check("tree builder builds the standard P2PK tree", builtTreeMain.valid === true && builtTreeMain.treeHex === FLEET_TREE && builtTreeMain.publicKey === FLEET_PK && builtTreeMain.network === "Mainnet");
+check("tree builder mainnet addresses match the reference vectors", builtTreeMain.address === "9iJm5XdNBFk14jXE6CWfP3MAWgwA2oNXCPGiVddGzWnxpqZLhLT" && builtTreeMain.p2shAddress === "7HP8obUp83sMkvaem5zXHNBq8rrt6nQRukXFYY9");
+const builtTreeTest = app.buildP2PKTree(FLEET_PK, "testnet");
+check("tree builder testnet: same tree, network addresses", builtTreeTest.valid === true && builtTreeTest.treeHex === FLEET_TREE && builtTreeTest.address === "3WzPufJ2AduwbLwp5JWoQAZ99TuNWj918GMMfmB98eaBU87o7sxR" && builtTreeTest.p2shAddress === "qQqAgn6N6hrNTTu2s19HJg52NK37GENqoeo2W6i");
+check("tree builder agrees with tools 10 and 11 both ways", app.analyzeErgoTree(builtTreeMain.treeHex, "mainnet").publicKey === FLEET_PK && app.decodeErgoAddress(builtTreeMain.address).ergoTree === FLEET_TREE && (() => { const k = app.decodeErgoAddress("9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy"); return k.valid && app.buildP2PKTree(k.publicKey, "mainnet").treeHex === k.ergoTree; })());
+check("tree builder tolerates 0x, uppercase and whitespace", app.buildP2PKTree(" 0x" + FLEET_PK.toUpperCase() + " ", "Mainnet").treeHex === FLEET_TREE);
+check("tree builder rejects bad keys and networks plainly", app.buildP2PKTree("", "mainnet").valid === false && app.buildP2PKTree("02ab", "mainnet").valid === false && app.buildP2PKTree("04" + FLEET_PK.slice(2), "mainnet").valid === false && /uncompressed/.test(app.buildP2PKTree("04" + FLEET_PK.slice(2), "mainnet").reason) && app.buildP2PKTree(FLEET_PK, "devnet").valid === false && app.buildP2PKTree(FLEET_PK.slice(0, 64) + "zz", "mainnet").valid === false);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

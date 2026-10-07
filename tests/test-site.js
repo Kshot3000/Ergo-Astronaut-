@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=9"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=10"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -42,6 +42,7 @@ check("rent countdown tool on hub, no live-data claim", html.includes('id="rent-
 check("p2pk builder tool on hub", html.includes('id="p2pk-calc"') && html.includes("never type a private key") && readme.includes("P2PK address builder"));
 check("payment planner tool on hub", html.includes('id="payplan-calc"') && html.includes("spends boxes whole") && readme.includes("UTXO payment planner"));
 check("ergoTree inspector tool on hub", html.includes('id="tree-calc"') && html.includes("ErgoTree inspector") && readme.includes("ErgoTree inspector"));
+check("address decoder tool on hub", html.includes('id="addrtree-calc"') && html.includes("one-way") && readme.includes("Address-to-ErgoTree decoder"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -258,6 +259,44 @@ check("tree inspector accepts uppercase and 0x prefix", app.analyzeErgoTree("0x"
 check("tree inspector rejects size mismatch", app.analyzeErgoTree("082408cd" + FLEET_PK, "mainnet").valid === false);
 check("tree inspector rejects reserved header bits", app.analyzeErgoTree("e008cd" + FLEET_PK, "mainnet").valid === false);
 check("tree inspector rejects junk", app.analyzeErgoTree("", "mainnet").valid === false && app.analyzeErgoTree("zz", "mainnet").valid === false && app.analyzeErgoTree("00", "mainnet").valid === false && app.analyzeErgoTree(null, "mainnet").valid === false && app.analyzeErgoTree(P2PK_TREE, "devnet").valid === false && app.analyzeErgoTree(P2PK_TREE, null).valid === false);
+
+/* Address -> ErgoTree decoder — content semantics per sigmastate /
+   fleet-sdk ErgoAddress: P2PK content is the 33-byte key (tree =
+   0008cd + key), P2SH content is the 24-byte proposition hash
+   (one-way, no tree derived), P2S content is the full ErgoTree bytes
+   verbatim. Vectors: Kyle's address + its known key, the fleet #219
+   P2SH reference addresses (hash192 of 08cd + FLEET_PK computed
+   independently above: 62d1e484…bf05d199), and fleet-sdk's
+   fee-contract P2S address whose content is the segregated
+   FEE_CONTRACT tree. */
+const decKyle = app.decodeErgoAddress(ERG);
+check("decoder reads Kyle's P2PK address", decKyle.valid === true && decKyle.network === "Mainnet" && decKyle.typeCode === 1 && decKyle.prefix === 1 && decKyle.contentBytes === 33);
+check("decoder recovers Kyle's public key", decKyle.publicKey === KYLE_PK && decKyle.contentHex === KYLE_PK);
+check("decoder rebuilds Kyle's ErgoTree", decKyle.ergoTree === "0008cd" + KYLE_PK);
+check("decoded tree round-trips through the inspector", app.analyzeErgoTree(decKyle.ergoTree, "mainnet").address === ERG && app.analyzeErgoTree(decKyle.ergoTree, "mainnet").publicKey === KYLE_PK);
+const decTestnet = app.decodeErgoAddress("3WvsT2Gm4EpsM9Pg18PdY6XyhNNMqXDsvJTbbf6ihLvAmSb7u5RN");
+check("decoder reads testnet P2PK", decTestnet.valid === true && decTestnet.network === "Testnet" && decTestnet.publicKey === "02229ac0a22560d7bdfa4eb1de64e688390e85339c08aaf018b22d5ce93593192f" && decTestnet.ergoTree === "0008cd02229ac0a22560d7bdfa4eb1de64e688390e85339c08aaf018b22d5ce93593192f");
+check("decoder trims surrounding whitespace", app.decodeErgoAddress("  " + ERG + " ").ergoTree === decKyle.ergoTree);
+const P2SH_HASH192 = "62d1e48400494bfedf9bf70d4af152428fb46f32bf05d199";
+const decP2shMain = app.decodeErgoAddress("7HP8obUp83sMkvaem5zXHNBq8rrt6nQRukXFYY9");
+check("decoder reads mainnet P2SH reference", decP2shMain.valid === true && decP2shMain.typeCode === 2 && decP2shMain.prefix === 2 && decP2shMain.contentBytes === 24 && decP2shMain.scriptHash === P2SH_HASH192);
+check("decoder derives no tree from a script hash", decP2shMain.ergoTree === null && decP2shMain.publicKey === null && /one-way/.test(decP2shMain.note));
+check("decoded P2SH hash re-encodes to the same address", app.addressFromContent(0x02, app.hexToBytes(decP2shMain.scriptHash)) === "7HP8obUp83sMkvaem5zXHNBq8rrt6nQRukXFYY9");
+const decP2shTest = app.decodeErgoAddress("qQqAgn6N6hrNTTu2s19HJg52NK37GENqoeo2W6i");
+check("decoder reads testnet P2SH reference", decP2shTest.valid === true && decP2shTest.network === "Testnet" && decP2shTest.prefix === 0x12 && decP2shTest.scriptHash === P2SH_HASH192 && app.addressFromContent(0x12, app.hexToBytes(decP2shTest.scriptHash)) === "qQqAgn6N6hrNTTu2s19HJg52NK37GENqoeo2W6i");
+check("decoded hash matches inspector's P2SH derivation", app.bytesToHex(app.blake2b256(app.hexToBytes("08cd" + FLEET_PK)).subarray(0, 24)) === decP2shMain.scriptHash);
+const FEE_CONTRACT_TREE = "1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304";
+const FEE_MAINNET_P2S = "2iHkR7CWvD1R4j1yZg5bkeDRQavjAaVPeTDFGGLZduHyfWMuYpmhHocX8GJoaieTx78FntzJbCBVL6rf96ocJoZdmWBL2fci7NqWgAirppPQmZ7fN9V6z13Ay6brPriBKYqLp1bT2Fk4FkFLCfdPpe";
+const decFee = app.decodeErgoAddress(FEE_MAINNET_P2S);
+check("decoder reads fleet fee-contract P2S address", decFee.valid === true && decFee.typeCode === 3 && decFee.network === "Mainnet" && decFee.contentBytes === 105);
+check("P2S content is the ErgoTree verbatim", decFee.ergoTree === FEE_CONTRACT_TREE && decFee.contentHex === FEE_CONTRACT_TREE);
+check("fee tree parses as segregated, no P2SH invented", decFee.treeInfo !== null && decFee.treeInfo.segregated === true && decFee.treeInfo.p2shAddress === null && decFee.note === null);
+check("decoded P2S content re-encodes to the same address", app.addressFromContent(0x03, app.hexToBytes(decFee.contentHex)) === FEE_MAINNET_P2S);
+const malformedP2pk = app.addressFromContent(0x01, Uint8Array.from([1, 2, 3]));
+const decMalformed = app.decodeErgoAddress(malformedP2pk);
+check("checksum-valid but non-key P2PK content gets no tree", decMalformed.valid === true && decMalformed.typeCode === 1 && decMalformed.ergoTree === null && decMalformed.publicKey === null && /not a standard 33-byte public key/.test(decMalformed.note));
+check("decoder rejects tampered address", app.decodeErgoAddress("9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvz").valid === false && app.decodeErgoAddress("9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvz").ergoTree === null);
+check("decoder rejects junk", app.decodeErgoAddress("").valid === false && app.decodeErgoAddress(null).valid === false && app.decodeErgoAddress("9fc").valid === false && app.decodeErgoAddress("hello world").valid === false);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

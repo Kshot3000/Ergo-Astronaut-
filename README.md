@@ -138,6 +138,21 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   honestly with no address derived: their reference hash needs the
   constants substituted back into the proposition, which raw tree
   bytes alone cannot reconstruct.
+- **Address-to-ErgoTree decoder** — the inverse of the inspector and
+  the P2PK builder: paste any Ergo address and it verifies the
+  checksum, reads the network from the address itself, and shows what
+  the address's content actually is, exactly as sigmastate's and
+  fleet-sdk's ErgoAddress encode it. A P2PK address's content is its
+  33-byte public key, so its ErgoTree (00 08 cd + the key) comes
+  straight back — feeding it to the inspector derives the same
+  address again. A P2S address's content is the script's full
+  ErgoTree bytes verbatim (the decoder runs them through the
+  inspector's parser, segregated trees included). A P2SH address's
+  content is only the 24-byte script hash, and a hash is one-way:
+  the decoder shows the hash and says the script cannot be recovered
+  from it, rather than inventing one. Verified against Kyle's P2PK
+  address, the fleet #219 P2SH reference addresses on both networks,
+  and the fleet-sdk fee-contract P2S address.
 
 ## Cross-chain integration
 

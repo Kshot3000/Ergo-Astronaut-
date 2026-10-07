@@ -548,8 +548,60 @@ function analyzeErgoTree(treeHex, networkStr) {
   return base;
 }
 
+/* ---------- Address -> ErgoTree decoder ---------- */
+/* The inverse direction of tools 8 and 10: an address is
+   [prefix byte][content][4-byte checksum] (tool 2 verifies the
+   checksum), and what the content IS depends on the type nibble —
+   this is exactly how sigmastate's ErgoAddress and fleet-sdk's
+   ErgoAddress.unpack/encode treat it:
+   - P2PK (type 1): the content is the 33-byte compressed public key,
+     and the guarding ErgoTree is 00 08 cd + that key (header 0x00, then
+     the ProveDlog proposition) — the same construction tools 8/10 use.
+   - P2SH (type 2): the content is only the 24-byte script hash (the
+     first 24 bytes of Blake2b-256 over the proposition, tool 10). A
+     hash is one-way: the script cannot be recovered from it, so no
+     ErgoTree is derived for P2SH — reported honestly instead.
+   - P2S (type 3): the content is the script's full ErgoTree bytes
+     themselves, so the tree is the content verbatim; it is also run
+     through tool 10's parser (segregated trees get the same honest
+     no-P2SH treatment there).
+   Decoding only: nothing here proves who can spend a box guarded by
+   the decoded script. Verified in the tests against Kyle's P2PK
+   address, the fleet #219 P2SH reference addresses (both networks),
+   and the fleet-sdk fee-contract P2S address whose content is the
+   segregated FEE_CONTRACT tree. */
+function decodeErgoAddress(raw) {
+  var out = { valid: false, reason: null, network: null, type: null, typeCode: null, prefix: null, contentHex: null, contentBytes: null, publicKey: null, scriptHash: null, ergoTree: null, treeInfo: null, note: null };
+  var check = checkErgoAddress(raw);
+  out.network = check.network; out.type = check.type; out.typeCode = check.typeCode; out.prefix = check.prefix;
+  if (!check.valid) { out.reason = check.reason; return out; }
+  var decoded = base58Decode(String(raw).trim());
+  var content = decoded.subarray(1, decoded.length - 4);
+  out.valid = true;
+  out.reason = check.reason;
+  out.contentHex = bytesToHex(content);
+  out.contentBytes = content.length;
+  if (check.typeCode === 1) {
+    if (content.length === 33 && (content[0] === 0x02 || content[0] === 0x03)) {
+      out.publicKey = out.contentHex;
+      out.ergoTree = "0008cd" + out.contentHex;
+    } else {
+      out.note = "This address claims P2PK but its content is " + content.length + " byte(s) not starting with a compressed-key prefix (02/03) — not a standard 33-byte public key, so no ErgoTree is derived rather than guess one.";
+    }
+  } else if (check.typeCode === 2) {
+    out.scriptHash = out.contentHex;
+    out.note = "A P2SH address carries only the script hash — the first 24 bytes of Blake2b-256 over the script's proposition. The script itself cannot be recovered from its hash; that one-way step is the point of pay-to-script-hash.";
+    if (content.length !== P2SH_HASH_BYTES) out.note = "Unusual P2SH content: " + content.length + " bytes instead of the standard 24-byte script hash. " + out.note;
+  } else {
+    out.ergoTree = out.contentHex;
+    out.treeInfo = analyzeErgoTree(out.ergoTree, check.network);
+    if (!out.treeInfo.valid) out.note = "The content is the script's ErgoTree bytes verbatim, but they do not parse as a version-0 tree: " + out.treeInfo.reason;
+  }
+  return out;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES };
 }
 
 if (typeof document !== "undefined") {
@@ -786,6 +838,35 @@ if (typeof document !== "undefined") {
       }
       msg += "The script's " + res.network + " P2SH (pay-to-script-hash) address is " + res.p2shAddress + " — prefix byte + the first 24 bytes of Blake2b-256 over the proposition bytes (not the whole tree: hashing the header in is the fleet-sdk #219 bug that made unspendable addresses). Inspection only, done locally: deriving an address proves nothing about who can spend the box.";
       out.textContent = msg;
+    });
+
+    /* --- address -> ErgoTree decoder --- */
+    document.getElementById("addrtree-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("addrtree-result");
+      var res = decodeErgoAddress(document.getElementById("addrtree-in").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + (res.network ? res.network + ", " + res.type + " — but: " : "") + res.reason;
+        return;
+      }
+      var head = "✓ Valid " + res.network + " " + res.type + " address (prefix byte 0x" + res.prefix.toString(16).padStart(2, "0") + ") — checksum verified, the same check as tool 2. ";
+      if (res.typeCode === 1) {
+        out.textContent = res.ergoTree
+          ? head + "Its content is the public key " + res.publicKey + ", so its ErgoTree is " + res.ergoTree + " (36 bytes: header 00 + the 08cd ProveDlog proposition + the key). Paste that hex into tool 10 and it derives this same address back, plus the script's P2SH form. Decoding only, done locally: it shows what the address carries, not who owns the key."
+          : head + res.note + " Decoding only, done locally.";
+      } else if (res.typeCode === 2) {
+        out.textContent = head + "Its content is the script hash " + res.scriptHash + " (" + res.contentBytes + " bytes). " + (res.note || "") + " Decoding only, done locally.";
+      } else {
+        var msg = head + "A P2S address carries the script itself, so its ErgoTree is its content verbatim: " + res.ergoTree + " (" + res.contentBytes + " bytes). ";
+        if (res.note) {
+          msg += res.note + " ";
+        } else if (res.treeInfo && res.treeInfo.segregated) {
+          msg += "Tool 10's parser reads its header (0x" + res.treeInfo.header.toString(16).padStart(2, "0") + ") as a constant-segregated tree, so — same honesty rule as tool 10 — no P2SH address is derived from it here. ";
+        } else if (res.treeInfo) {
+          msg += "Tool 10's parser reads that tree's proposition as " + res.treeInfo.propositionLength + " bytes and derives the script's " + res.network + " P2SH address: " + res.treeInfo.p2shAddress + ". ";
+        }
+        out.textContent = msg + "Decoding only, done locally: it shows what the address carries, not who can spend a box it guards.";
+      }
     });
 
     /* --- copy donation address --- */

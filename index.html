@@ -281,6 +281,15 @@
         <button type="submit" class="btn primary">Inspect this tree</button>
         <p id="tree-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="addrtree-calc">
+        <h3>11 · Address → ErgoTree decoder (what an address carries)</h3>
+        <p>The reverse of tools 8 and 10: paste any Ergo address and I decode it locally — the network is read from the address itself, the checksum verified exactly as in tool 2 — and show what its content actually is. A P2PK address carries its 33-byte public key, so its ErgoTree (header 00 + the 08cd ProveDlog proposition + the key) comes straight back. A P2S address carries the script itself, so its content <em>is</em> its ErgoTree. A P2SH address carries only the 24-byte script hash, and a hash is one-way — the script cannot be recovered from it, so I show the hash and say so instead of inventing a script.</p>
+        <label for="addrtree-in">Ergo address</label>
+        <input id="addrtree-in" spellcheck="false" placeholder="e.g. 9f…" autocomplete="off">
+        <button type="submit" class="btn primary">Decode this address</button>
+        <p id="addrtree-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -326,6 +335,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=9"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>

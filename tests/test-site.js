@@ -32,9 +32,10 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=1") && html.includes("app.js?v=2"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=2") && html.includes("app.js?v=3"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
+check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -105,6 +106,25 @@ check("0.001 ERG box consumable at first rent", dust.consumableAtFirstRent === t
 const edge = app.analyzeStorageRent("112", "0.28");
 check("exactly 2x rent covers exactly 1 payment", edge.payments === "1" && edge.consumableAtFirstRent === false);
 check("rent analysis rejects junk", app.analyzeStorageRent("abc", "1") === null && app.analyzeStorageRent("112", "x") === null);
+
+/* mining estimator — expectation maths: share of hashrate = share of the
+   ~720 blocks/day at Ergo's 2-minute target; all figures user-supplied */
+check("blocks-per-day constant is 720", app.BLOCKS_PER_DAY === 720);
+check("hashrate unit conversions", app.hashrateToHps("1.5", "MH/s") === 1500000 && app.hashrateToHps("2", "TH/s") === 2e12 && app.hashrateToHps("500", "kH/s") === 500000 && app.hashrateToHps("1", "H/s") === 1);
+check("hashrate rejects junk", app.hashrateToHps("0", "MH/s") === null && app.hashrateToHps("-1", "MH/s") === null && app.hashrateToHps("x", "MH/s") === null && app.hashrateToHps("1", "bogus") === null && app.hashrateToHps("", "MH/s") === null);
+const close = (a, b) => Math.abs(a - b) < 1e-9;
+const quarter = app.estimateMining(1e12, 4e12, "12");
+check("25% share of hashrate", close(quarter.sharePercent, 25));
+check("25% share expects 180 blocks/day", close(quarter.blocksPerDay, 180));
+check("180 blocks at 12 ERG = 2160 ERG/day", close(quarter.ergPerDay, 2160));
+check("days per block at 180/day", close(quarter.daysPerBlock, 1 / 180));
+const solo = app.estimateMining(100e6, 10e12, "3");
+check("tiny miner share", close(solo.sharePercent, 0.001) && close(solo.blocksPerDay, 0.0072) && close(solo.ergPerDay, 0.0216));
+check("whole network is 100%", close(app.estimateMining(5, 5, "1").sharePercent, 100));
+check("mining rejects miner above network", app.estimateMining(10, 5, "1") === null);
+check("mining rejects zero/negative hashrate", app.estimateMining(0, 5, "1") === null && app.estimateMining(1, 0, "1") === null && app.estimateMining(null, 5, "1") === null);
+check("mining rejects bad reward", app.estimateMining(1, 5, "0") === null && app.estimateMining(1, 5, "x") === null && app.estimateMining(1, 5, "") === null);
+check("estimate formatting trims zeros", app.fmtEstimate(25) === "25" && app.fmtEstimate(2160) === "2160" && app.fmtEstimate(0.0216) === "0.0216");
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

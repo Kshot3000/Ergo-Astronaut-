@@ -79,6 +79,12 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   estimator shows the rent per cycle, how many full payments a box's ERG
   covers, and warns when a box — tokens and NFTs included — could be
   consumed whole at its first rent date.
+- **Autolykos mining-share estimator** — your expected share of blocks
+  equals your share of total network hashrate at Ergo's 2-minute block
+  target (~720 blocks/day). You supply your hashrate, the network
+  hashrate and the current block reward; the tool fetches nothing,
+  claims no live network data, and labels its output an estimate
+  (pool fees, tx fees, difficulty drift and luck all move real results).
 
 ## Cross-chain integration
 

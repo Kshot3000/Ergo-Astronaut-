@@ -194,8 +194,43 @@ function analyzeStorageRent(sizeStr, ergStr) {
   };
 }
 
+/* ---------- Autolykos mining-share estimator ---------- */
+/* Ergo targets a 2-minute block interval, so ~720 blocks/day. A miner's
+   expected share of those blocks equals their share of total network
+   hashrate. This is an expectation estimate from user-supplied figures
+   only — it fetches nothing and claims no live network data: real
+   earnings vary with difficulty changes, pool fees, tx fees and luck. */
+var BLOCKS_PER_DAY = 720;
+var HASHRATE_UNITS = { "H/s": 1, "kH/s": 1e3, "MH/s": 1e6, "GH/s": 1e9, "TH/s": 1e12, "PH/s": 1e15 };
+function hashrateToHps(amountStr, unit) {
+  var s = (amountStr == null ? "" : String(amountStr)).trim();
+  if (!/^\d+(\.\d+)?$/.test(s)) return null;
+  if (!Object.prototype.hasOwnProperty.call(HASHRATE_UNITS, unit)) return null;
+  var hps = Number(s) * HASHRATE_UNITS[unit];
+  return isFinite(hps) && hps > 0 ? hps : null;
+}
+function estimateMining(myHps, netHps, rewardErgStr) {
+  if (!isFinite(myHps) || !isFinite(netHps) || myHps <= 0 || netHps <= 0) return null;
+  if (myHps > netHps) return null;
+  var rewardNano = ergToNano(rewardErgStr);
+  if (rewardNano === null || BigInt(rewardNano) <= 0n) return null;
+  var share = myHps / netHps;
+  var blocksPerDay = share * BLOCKS_PER_DAY;
+  return {
+    sharePercent: share * 100,
+    blocksPerDay: blocksPerDay,
+    ergPerDay: blocksPerDay * (Number(rewardNano) / 1e9),
+    daysPerBlock: 1 / blocksPerDay
+  };
+}
+function fmtEstimate(x) {
+  if (x >= 100) return x.toFixed(2).replace(/\.?0+$/, "");
+  if (x >= 1) return x.toFixed(4).replace(/\.?0+$/, "");
+  return x.toPrecision(3);
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS };
+  module.exports = { blake2b256, base58Decode, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate };
 }
 
 if (typeof document !== "undefined") {
@@ -283,6 +318,23 @@ if (typeof document !== "undefined") {
         msg += "Left untouched, it covers " + res.payments + (res.payments === "1" ? " full rent payment" : " full rent payments") + " — roughly " + res.approxYears + " years of inactivity — before a miner could consume what remains, tokens included. Moving the box resets the 4-year clock. Estimate only: the fee factor can change by miner vote.";
       }
       out.textContent = msg;
+    });
+
+    /* --- mining-share estimator --- */
+    document.getElementById("mining-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("mine-result");
+      var myHps = hashrateToHps(document.getElementById("mine-hash").value, document.getElementById("mine-unit").value);
+      var netHps = hashrateToHps(document.getElementById("net-hash").value, document.getElementById("net-unit").value);
+      var res = estimateMining(myHps, netHps, document.getElementById("mine-reward").value);
+      if (res === null) {
+        out.textContent = "Enter your hashrate, the total network hashrate (yours cannot exceed the network's), and the current block reward in ERG — check a block explorer for today's reward, it steps down over time.";
+        return;
+      }
+      out.textContent = "Your share of network hashrate: ~" + fmtEstimate(res.sharePercent) + "%. " +
+        "At Ergo's 2-minute block target (~720 blocks/day) that is an expected ~" + fmtEstimate(res.blocksPerDay) +
+        " blocks/day, or ~" + fmtEstimate(res.ergPerDay) + " ERG/day at the reward you entered — about one block every " +
+        fmtEstimate(res.daysPerBlock) + " days if you solo-mine. Estimate only: it assumes both hashrates and the reward stay constant, and ignores pool fees, transaction fees, difficulty drift and luck.";
     });
 
     /* --- copy donation address --- */

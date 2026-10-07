@@ -10,7 +10,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://kshot3000.github.io/Ergo-Astronaut-/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23050810'/%3E%3Ccircle cx='16' cy='13' r='7' fill='%23fbbf24'/%3E%3Crect x='7' y='19' width='18' height='6' rx='3' fill='%237dd3fc'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=1">
+<link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
 <a class="skip" href="#main">Skip to main content</a>
@@ -186,6 +186,27 @@
         <button type="submit" class="btn primary">Estimate rent</button>
         <p id="rent-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="mining-calc">
+        <h3>4 · Autolykos mining-share estimator</h3>
+        <p>What share of Ergo's blocks should your rig expect? Your expected share of blocks equals your share of the network's Autolykos hashrate, at Ergo's 2-minute block target (~720 blocks/day). You supply every figure — this tool fetches nothing and claims no live network data, and the block reward steps down over time, so read the current one off a block explorer.</p>
+        <label for="mine-hash">Your hashrate</label>
+        <input id="mine-hash" inputmode="decimal" placeholder="e.g. 1.5" autocomplete="off">
+        <label for="mine-unit">Your hashrate unit</label>
+        <select id="mine-unit">
+          <option>H/s</option><option>kH/s</option><option selected>MH/s</option><option>GH/s</option><option>TH/s</option><option>PH/s</option>
+        </select>
+        <label for="net-hash">Network hashrate</label>
+        <input id="net-hash" inputmode="decimal" placeholder="e.g. 12" autocomplete="off">
+        <label for="net-unit">Network hashrate unit</label>
+        <select id="net-unit">
+          <option>H/s</option><option>kH/s</option><option>MH/s</option><option>GH/s</option><option selected>TH/s</option><option>PH/s</option>
+        </select>
+        <label for="mine-reward">Block reward (ERG)</label>
+        <input id="mine-reward" inputmode="decimal" placeholder="e.g. 12" autocomplete="off">
+        <button type="submit" class="btn primary">Estimate my share</button>
+        <p id="mine-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -231,6 +252,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=2"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>

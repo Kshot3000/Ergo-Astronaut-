@@ -3206,6 +3206,93 @@ function auditTxOutputs(txHex) {
   };
 }
 
+/* ---------- Transaction input auditor ---------- */
+/* The input-side counterpart to tool 38's output audit, again from
+   the transaction's bytes alone. What those bytes determine about
+   the spending side, reported exactly: per input, whether a
+   spending proof is present and its length in bytes, and the
+   input's context extension entries decoded (key, type, value —
+   the constants a script may read while it is being spent).
+   Three structural faults are flagged plainly, because each one
+   is visible in the bytes and each one matters before signing:
+   the same box listed as a spent input twice (a box can be spent
+   only once, so such a transaction can never be accepted);
+   a context extension that repeats a key on one input (one key
+   holds one constant — a second entry under the same key makes
+   what the script reads ambiguous, and tool 30's builder refuses
+   to assemble one); and the data-input list — boxes the scripts
+   read but do not spend — repeating a box, or naming a box the
+   transaction also spends (reported as facts: the overlap is
+   visible in the bytes whether or not it was intended).
+   The honesty boundary is stated in the tool's own copy and kept
+   in its fields: a proof being PRESENT is all the bytes show —
+   whether a proof is VALID is a question about the spent box's
+   script and the Sigma protocol, which no byte count answers,
+   and what the inputs are worth is in the input boxes, not the
+   transaction (tool 34 checks fee and balance with them).
+   Verified against an independent Python oracle
+   (oracle-txinput.py): from-scratch input-side parsing of fleet
+   vectors TX_V2 / TX_V4 / TX_SYNTH — its tx IDs reproduced the
+   recorded ones exactly after a real oracle bug (it hashed the
+   bytes after the data inputs instead of after the inputs) was
+   caught by the disagreement — plus two from-scratch synthetic
+   transactions carrying a duplicated spend, overlapping and
+   duplicated data inputs, and a duplicated extension key. */
+function auditTxInputs(txHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, signed: null, byteLength: null, inputCount: null, distinctInputCount: null, signedInputCount: null, unsignedInputCount: null, totalProofBytes: null, extensionEntryCount: null, inputs: null, duplicateInputs: null, dataInputCount: null, dataInputs: null, duplicateDataInputs: null, dataInputsAlsoSpent: null, outputCount: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  var firstSeen = {};
+  var duplicateInputs = [];
+  var dupById = {};
+  var inputs = tx.inputs.map(function (inp, i) {
+    if (Object.prototype.hasOwnProperty.call(firstSeen, inp.boxId)) {
+      if (!dupById[inp.boxId]) { dupById[inp.boxId] = { boxId: inp.boxId, indexes: [firstSeen[inp.boxId]] }; duplicateInputs.push(dupById[inp.boxId]); }
+      dupById[inp.boxId].indexes.push(i);
+    } else firstSeen[inp.boxId] = i;
+    var keyCount = {};
+    inp.extension.forEach(function (e) { keyCount[e.key] = (keyCount[e.key] || 0) + 1; });
+    var dupKeys = Object.keys(keyCount).filter(function (k) { return keyCount[k] > 1; }).map(Number).sort(function (a, b) { return a - b; });
+    return {
+      index: i, boxId: inp.boxId, proofLength: inp.proofLength,
+      proofBytes: inp.proofBytes, hasProof: inp.proofLength > 0,
+      extension: inp.extension, duplicateExtensionKeys: dupKeys
+    };
+  });
+  var diFirst = {};
+  var duplicateDataInputs = [];
+  var diDupById = {};
+  tx.dataInputs.forEach(function (id, i) {
+    if (Object.prototype.hasOwnProperty.call(diFirst, id)) {
+      if (!diDupById[id]) { diDupById[id] = { boxId: id, indexes: [diFirst[id]] }; duplicateDataInputs.push(diDupById[id]); }
+      diDupById[id].indexes.push(i);
+    } else diFirst[id] = i;
+  });
+  var alsoSpent = [];
+  var alsoSeen = {};
+  tx.dataInputs.forEach(function (id) {
+    if (Object.prototype.hasOwnProperty.call(firstSeen, id) && !alsoSeen[id]) { alsoSeen[id] = true; alsoSpent.push(id); }
+  });
+  var signedCount = inputs.filter(function (i) { return i.hasProof; }).length;
+  return {
+    valid: true, reason: null,
+    txId: tx.txId, signed: signedCount > 0, byteLength: tx.byteLength,
+    inputCount: inputs.length,
+    distinctInputCount: Object.keys(firstSeen).length,
+    signedInputCount: signedCount,
+    unsignedInputCount: inputs.length - signedCount,
+    totalProofBytes: inputs.reduce(function (s, i) { return s + i.proofLength; }, 0),
+    extensionEntryCount: inputs.reduce(function (s, i) { return s + i.extension.length; }, 0),
+    inputs: inputs, duplicateInputs: duplicateInputs,
+    dataInputCount: tx.dataInputs.length, dataInputs: tx.dataInputs,
+    duplicateDataInputs: duplicateDataInputs,
+    dataInputsAlsoSpent: alsoSpent,
+    outputCount: tx.outputs.length
+  };
+}
+
 /* ---------- Transaction JSON converter ---------- */
 /* The same unsigned transaction in the two forms Ergo developers
    actually move between: the EIP-12 / fleet-sdk JSON dialect (what
@@ -3436,7 +3523,7 @@ function planTokenMint(firstInputId, nameStr, descStr, decStr, amountStr, typeSt
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs };
 }
 
 if (typeof document !== "undefined") {
@@ -4227,6 +4314,31 @@ if (typeof document !== "undefined") {
       if (res.heightsDiffer) msg += "Its outputs carry differing creation heights — reported as a fact; wallets normally stamp them all with one height. ";
       msg += "Per output: " + res.outputs.map(function (o) { return "#" + o.index + " " + o.valueErg + " ERG, " + o.byteLength + " bytes (minimum " + o.minErg + " ERG)" + (o.isFee ? ", fee contract" : "") + (o.tokenCount ? ", " + o.tokenCount + " token(s)" : "") + (o.registerCount ? ", " + o.registerCount + " register(s)" : ""); }).join(" · ") + ". ";
       msg += "Output side only, from the bytes you pasted: whether the inputs cover these outputs needs the input boxes — that is tool 34. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txinput-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txinput-result");
+      var res = auditTxInputs(document.getElementById("txinput-tx").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Transaction " + res.txId + " (" + res.byteLength + " bytes): " + res.inputCount + " spent input(s) (" + res.distinctInputCount + " distinct box(es)), " + res.dataInputCount + " data input(s), " + res.outputCount + " output(s). ";
+      msg += res.signedInputCount === 0
+        ? "No input carries a spending proof — this transaction is unsigned. "
+        : res.unsignedInputCount === 0
+          ? "Every input carries a spending proof (" + res.totalProofBytes + " proof byte(s) in total). A present proof is not a verified one: validity is a question about each spent box's script, which the bytes alone cannot answer. "
+          : res.signedInputCount + " of " + res.inputCount + " inputs carry a spending proof (" + res.totalProofBytes + " proof byte(s) in total); " + res.unsignedInputCount + " input(s) still have none. A present proof is not a verified one: validity is a question about each spent box's script, which the bytes alone cannot answer. ";
+      if (res.duplicateInputs.length) msg += "⚠ The same box is listed as a spent input more than once: " + res.duplicateInputs.map(function (d) { return d.boxId + " at input indexes " + d.indexes.join(", "); }).join("; ") + " — a box can be spent only once, so this transaction can never be accepted as it stands. ";
+      if (res.duplicateDataInputs.length) msg += "⚠ Data input(s) listed more than once: " + res.duplicateDataInputs.map(function (d) { return d.boxId + " at data-input indexes " + d.indexes.join(", "); }).join("; ") + " — the repeat reads the same box again and adds nothing. ";
+      if (res.dataInputsAlsoSpent.length) msg += "Note: data input(s) " + res.dataInputsAlsoSpent.join(", ") + " also appear as spent inputs — reported as a fact visible in the bytes. ";
+      var dupKeyNotes = [];
+      res.inputs.forEach(function (i) { if (i.duplicateExtensionKeys.length) dupKeyNotes.push("input #" + i.index + " repeats extension key(s) " + i.duplicateExtensionKeys.join(", ")); });
+      if (dupKeyNotes.length) msg += "⚠ " + dupKeyNotes.join("; ") + " — one key holds one constant, so a repeat makes what the script reads ambiguous. ";
+      msg += "Per input: " + res.inputs.map(function (i) { return "#" + i.index + " " + i.boxId.slice(0, 12) + "…, " + (i.hasProof ? "proof " + i.proofLength + " byte(s)" : "no proof") + (i.extension.length ? ", extension " + i.extension.map(function (e) { return "key " + e.key + " = " + e.type + " " + e.value; }).join(", ") : ""); }).join(" · ") + ". ";
+      msg += "Input side only, from the bytes you pasted: what these inputs are worth lives in the input boxes — tool 34 checks fee and balance with them, and tool 38 audits the output side. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

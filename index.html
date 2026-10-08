@@ -687,6 +687,15 @@
         <button type="submit" class="btn primary">Audit the outputs</button>
         <p id="txaudit-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txinput-calc">
+        <h3>39 · Transaction input auditor (transaction bytes → a pre-sign audit of everything it spends)</h3>
+        <p>The input-side counterpart to tool 38's output audit, again from the transaction's bytes alone. For every spent input it reports whether a spending proof is present and how long it is, and decodes the input's context extension — the constants a script may read while its box is being spent — entry by entry (key, type, value). Three structural faults are flagged plainly, because each is visible in the bytes and each matters before signing: the same box listed as a spent input twice (a box can be spent only once, so such a transaction can never be accepted); a context extension repeating a key on one input (one key holds one constant — a second entry under the same key makes what the script reads ambiguous, and tool 30's builder refuses to assemble one); and the data-input list — the boxes the scripts read but do not spend — repeating a box, or naming a box the transaction also spends, both reported as facts. The honesty boundary is stated plainly: a proof being present is all the bytes show — whether a proof is valid is a question about the spent box's script and the Sigma protocol, which no byte count answers, and what the inputs are worth lives in the input boxes, not the transaction (tool 34 checks fee and balance with them). Audit only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txinput-tx">Serialized transaction (hex — the full bytes, as tool 29 takes them)</label>
+        <textarea id="txinput-tx" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (a full serialized transaction — SDKs and node APIs produce the bytes)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Audit the inputs</button>
+        <p id="txinput-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -732,6 +741,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=38"></script>
+<script src="app.js?v=39"></script>
 </body>
 </html>

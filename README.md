@@ -585,6 +585,26 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   independent Python oracle over fleet-sdk's published
   transaction vectors plus a from-scratch synthetic
   mint-and-dust transaction.
+- **Transaction input auditor** — the input-side
+  counterpart: a pre-sign audit of everything a
+  transaction spends, from its bytes alone. Per input it
+  reports whether a spending proof is present and its
+  length, and decodes the input's context extension
+  entry by entry (key, type, value). It flags the same
+  box listed as a spent input twice (a box can be spent
+  only once), a context extension repeating a key on one
+  input, and a data-input list that repeats a box or
+  names a box the transaction also spends. What it
+  cannot see is stated in its own copy: a present proof
+  is not a verified one — validity belongs to the spent
+  box's script and the Sigma protocol — and the inputs'
+  value lives in the input boxes (tool 34). It composes
+  the transaction parser rather than re-deriving its
+  maths. Verified against an independent Python oracle
+  over fleet-sdk's published transaction vectors plus
+  two from-scratch synthetic transactions carrying a
+  duplicated spend, overlapping and duplicated data
+  inputs, and a duplicated extension key.
 
 ## Cross-chain integration
 

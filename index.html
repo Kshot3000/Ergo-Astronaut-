@@ -418,6 +418,19 @@
         <button type="submit" class="btn primary">Hash it</button>
         <p id="hash-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="b58-calc">
+        <h3>22 · Base58 codec (the encoding every address is written in)</h3>
+        <p>Every Ergo address on this page is Base58 text over raw bytes — tools 2, 8, 11, 13, 16 and 20 all encode or decode it behind the scenes. This tool is that codec on its own: turn hex bytes into Base58, or a Base58 string back into the exact bytes it carries, leading zero bytes and all (each one is a leading “1”). The alphabet is the one Ergo uses — it has no 0, O, I or l, so those four characters are rejected on decode. This is plain Base58, not Base58Check: it adds no checksum and verifies none — an address decoded here comes out as prefix + content + its stored checksum bytes verbatim, and tool 2 is the one that verifies that checksum. Empty input converts to the empty result, not an error. Verified against an independent Python build before it shipped here. Encoding is not encryption and proves no ownership — it signs and sends nothing.</p>
+        <label for="b58-input">Input (hex bytes to encode, or a Base58 string to decode)</label>
+        <textarea id="b58-input" rows="3" spellcheck="false" placeholder="e.g. 00eb1523… in encode mode, or any Base58 string in decode mode" autocomplete="off"></textarea>
+        <label for="b58-direction">Direction</label>
+        <select id="b58-direction">
+          <option value="encode" selected>Encode: hex bytes → Base58</option><option value="decode">Decode: Base58 → hex bytes</option>
+        </select>
+        <button type="submit" class="btn primary">Convert it</button>
+        <p id="b58-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -463,6 +476,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=21"></script>
+<script src="app.js?v=22"></script>
 </body>
 </html>

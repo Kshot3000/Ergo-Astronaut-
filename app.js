@@ -900,6 +900,41 @@ function analyzeBlake2b(inputStr, modeStr, expectedStr) {
   };
 }
 
+/* ---------- Base58 codec ---------- */
+/* Every Ergo address on this page is Base58 text over raw bytes
+   (tools 2, 8, 11, 13, 16, 20 all encode or decode it internally).
+   This tool exposes that codec on its own: hex bytes -> Base58, or
+   Base58 -> hex bytes, using the Bitcoin alphabet Ergo uses (no 0,
+   O, I or l — those four are rejected on decode). Each leading zero
+   byte is one leading "1"; empty input in either direction is the
+   empty result, not an error. Base58 here is plain Base58, NOT
+   Base58Check: no checksum is added on encode or verified on decode
+   — an address pasted in decodes to prefix + content + its stored
+   checksum bytes verbatim, and tool 2 is the one that verifies that
+   checksum. Verified against an independent Python build before
+   coding, including the classic 00eb1523…06647 vector and Kyle's
+   own address bytes round-tripping exactly. */
+function analyzeBase58(inputStr, directionStr) {
+  var direction = (directionStr == null ? "" : String(directionStr)).trim().toLowerCase();
+  if (direction !== "encode" && direction !== "decode") return null;
+  var input = inputStr == null ? "" : String(inputStr);
+  if (direction === "encode") {
+    var cleaned = input.replace(/\s+/g, "");
+    if (cleaned === "" || cleaned.toLowerCase() === "0x") {
+      return { direction: direction, byteLength: 0, encoded: "", hex: "" };
+    }
+    var bytes = hexToBytes(cleaned);
+    if (!bytes) return null;
+    return { direction: direction, byteLength: bytes.length, encoded: base58Encode(bytes), hex: bytesToHex(bytes) };
+  }
+  var trimmed = input.trim();
+  if (/\s/.test(trimmed)) return null;
+  if (trimmed === "") return { direction: direction, byteLength: 0, encoded: "", hex: "" };
+  var decoded = base58Decode(trimmed);
+  if (!decoded) return null;
+  return { direction: direction, byteLength: decoded.length, encoded: trimmed, hex: bytesToHex(decoded) };
+}
+
 /* ---------- Serialized box parser ---------- */
 /* The field-by-field inverse of tool 14: a serialized ErgoBox is
    [value: BigInt VLQ][ErgoTree][creation height: VLQ][token count:
@@ -1457,7 +1492,7 @@ function buildErgoBox(fields) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58 };
 }
 
 if (typeof document !== "undefined") {
@@ -1784,6 +1819,21 @@ if (typeof document !== "undefined") {
       else if (res.matches === false) msg += "That does NOT match the expected digest you entered (" + res.expected + ") — a single changed byte changes the whole digest. ";
       msg += "This is the same hash behind box IDs (tool 14) and address checksums. Computed locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
+    });
+
+    document.getElementById("b58-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("b58-result");
+      var res = analyzeBase58(document.getElementById("b58-input").value, document.getElementById("b58-direction").value);
+      if (!res) {
+        out.textContent = "I could not convert that: encode needs even-length hex bytes, and decode needs one unbroken Base58 string — the alphabet has no 0, O, I or l, and no spaces. Nothing was converted.";
+        return;
+      }
+      if (res.direction === "encode") {
+        out.textContent = "✓ Those " + res.byteLength + " byte(s) encode to Base58: " + (res.encoded === "" ? "(empty — zero bytes encode to the empty string)" : res.encoded) + ". Plain Base58, not Base58Check: no checksum was added — an address's checksum (tool 2) is part of the bytes themselves. Computed locally; nothing was fetched, signed or sent.";
+      } else {
+        out.textContent = "✓ That Base58 decodes to " + res.byteLength + " byte(s): " + (res.hex === "" ? "(empty — the empty string decodes to zero bytes)" : res.hex) + ". If those bytes were an address, they are prefix + content + the stored checksum verbatim — decoding does not verify the checksum; paste the address into tool 2 for that. Computed locally; nothing was fetched, signed or sent.";
+      }
     });
 
     /* --- Serialized box parser --- */

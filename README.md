@@ -302,6 +302,17 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   digest starts with the known script hash, and it agrees with
   the box ID calculator on the published box vectors by
   construction. Hashing only — it signs and sends nothing.
+- **Base58 codec** — the encoding every Ergo address is written
+  in, exposed on its own: hex bytes to Base58 or a Base58 string
+  back to the exact bytes it carries, leading zero bytes and all
+  (each one is a leading "1"). Plain Base58, not Base58Check — it
+  adds no checksum and verifies none; an address decodes to prefix
+  + content + its stored checksum bytes verbatim, and the address
+  checker is the tool that verifies that checksum. Empty input
+  converts to the empty result. Verified against an independent
+  Python build, including the classic `00eb1523…06647` vector and
+  my own address's bytes round-tripping exactly. Encoding only —
+  it signs and sends nothing.
 
 ## Cross-chain integration
 

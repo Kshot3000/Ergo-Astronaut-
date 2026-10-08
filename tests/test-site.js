@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network", "p2shbuild-hex", "p2shbuild-network", "hash-input", "hash-mode", "hash-expected"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=21"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network", "p2shbuild-hex", "p2shbuild-network", "hash-input", "hash-mode", "hash-expected", "b58-input", "b58-direction"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=22"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -53,6 +53,7 @@ check("sigma constant tool on hub", html.includes('id="sigma-calc"') && html.inc
 check("p2pk tree builder tool on hub", html.includes('id="treebuild-calc"') && html.includes("P2PK ErgoTree builder") && readme.includes("P2PK ErgoTree builder"));
 check("p2sh builder tool on hub", html.includes('id="p2shbuild-calc"') && html.includes("P2SH address builder") && html.includes("can never be spent") && readme.includes("P2SH address builder"));
 check("blake2b hash tool on hub", html.includes('id="hash-calc"') && html.includes("Blake2b-256 hash calculator") && html.includes("proves no ownership") && readme.includes("Blake2b-256 hash calculator"));
+check("base58 codec tool on hub", html.includes('id="b58-calc"') && html.includes("Base58 codec") && html.includes("not Base58Check") && readme.includes("Base58 codec"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -538,6 +539,25 @@ check("blake2b agrees with the box id tool", app.analyzeBlake2b(BOX1, "hex", "")
 check("blake2b expected match and mismatch reported", app.analyzeBlake2b("616263", "hex", "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319").matches === true && app.analyzeBlake2b("616263", "hex", BOX1_ID).matches === false && app.analyzeBlake2b("616263", "hex", "").matches === null);
 check("blake2b tolerates whitespace, 0x and uppercase in hex mode", app.analyzeBlake2b(" 0x61 6263\n", "HEX", "").digest === "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319");
 check("blake2b rejects junk plainly", app.analyzeBlake2b("abc", "hex", "") === null && app.analyzeBlake2b("zz", "hex", "") === null && app.analyzeBlake2b("616263", "base64", "") === null && app.analyzeBlake2b("616263", "hex", "abcd") === null && app.analyzeBlake2b(null, null, null) === null);
+
+/* Base58 codec — the encoding underneath every address on the hub.
+   Vectors computed with an independent Python build before coding:
+   the classic 00eb1523…06647 vector, "Hello World!" bytes, leading-
+   zero handling, and Kyle's own address bytes (prefix 01 + his key
+   + checksum f74b35da) round-tripping exactly. Plain Base58: decode
+   does NOT verify an address checksum — tool 2 does that. */
+check("base58 classic vector encodes", app.analyzeBase58("00eb15231dfceb60925886b67d065299925915aeb172c06647", "encode").encoded === "1NS17iag9jJgTHD1VXjvLCEnZuQ3rJDE9L");
+check("base58 classic vector decodes", app.analyzeBase58("1NS17iag9jJgTHD1VXjvLCEnZuQ3rJDE9L", "decode").hex === "00eb15231dfceb60925886b67d065299925915aeb172c06647");
+check("base58 hello world vector", app.analyzeBase58("48656c6c6f20576f726c6421", "encode").encoded === "2NEpo7TZRRrLZSi2U" && app.analyzeBase58("2NEpo7TZRRrLZSi2U", "decode").hex === "48656c6c6f20576f726c6421");
+check("base58 abc vector", app.analyzeBase58("616263", "encode").encoded === "ZiCa" && app.analyzeBase58("ZiCa", "decode").hex === "616263");
+check("base58 leading zero bytes are leading ones", app.analyzeBase58("0000", "encode").encoded === "11" && app.analyzeBase58("0001", "encode").encoded === "12" && app.analyzeBase58("111", "decode").hex === "000000" && app.analyzeBase58("ff", "encode").encoded === "5Q");
+check("base58 empty converts to empty both ways", app.analyzeBase58("", "encode").encoded === "" && app.analyzeBase58("", "encode").byteLength === 0 && app.analyzeBase58("", "decode").hex === "" && app.analyzeBase58("0x", "encode").encoded === "");
+check("base58 decodes Kyle's address to prefix + key + checksum", app.analyzeBase58(ERG, "decode").hex === "01" + KYLE_PK + "f74b35da" && app.analyzeBase58(ERG, "decode").byteLength === 38);
+check("base58 encodes Kyle's address bytes back exactly", app.analyzeBase58("01" + KYLE_PK + "f74b35da", "encode").encoded === ERG);
+check("base58 round-trips a box id", app.analyzeBase58(app.analyzeBase58(BOX1_ID, "encode").encoded, "decode").hex === BOX1_ID);
+check("base58 encode tolerates whitespace, 0x and uppercase", app.analyzeBase58(" 0x00 EB15\n", "ENCODE").encoded === app.analyzeBase58("00eb15", "encode").encoded);
+check("base58 rejects the four excluded characters", app.analyzeBase58("0", "decode") === null && app.analyzeBase58("O", "decode") === null && app.analyzeBase58("I", "decode") === null && app.analyzeBase58("l", "decode") === null);
+check("base58 rejects junk plainly", app.analyzeBase58("zz", "encode") === null && app.analyzeBase58("abc", "encode") === null && app.analyzeBase58("9fcM5 RWn", "decode") === null && app.analyzeBase58("616263", "sideways") === null && app.analyzeBase58(null, null) === null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

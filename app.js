@@ -935,6 +935,44 @@ function analyzeBase58(inputStr, directionStr) {
   return { direction: direction, byteLength: decoded.length, encoded: trimmed, hex: bytesToHex(decoded) };
 }
 
+/* ---------- VLQ codec ---------- */
+/* Almost every integer inside a serialized box is a VLQ (variable-
+   length quantity): the box value, creation height, token amounts,
+   counts and output index in tools 15/17, and the proposition size
+   in a size-flagged ErgoTree (tool 10). The encoding is unsigned
+   LEB128 exactly as fleet-sdk's writeBigVLQ/readBigVLQ define it:
+   7 bits per byte, least-significant group first, high bit set on
+   every byte except the last; negatives are not encodable. This
+   tool exposes that codec on its own, in both directions, with
+   exact BigInt maths at any size. Decode is strict in the way a
+   box parser must be: the bytes must be exactly one VLQ (a
+   truncated encoding and trailing bytes are rejected), and the
+   encoding must be canonical — re-encoding the decoded value must
+   reproduce the input byte-for-byte, so an overlong form like
+   8000 (zero written in two bytes) is rejected rather than read
+   as a second spelling of the same number. Verified against
+   fleet-sdk's published vlq.spec vectors and an independent
+   Python build before coding. */
+function analyzeVlq(inputStr, directionStr) {
+  var direction = (directionStr == null ? "" : String(directionStr)).trim().toLowerCase();
+  if (direction !== "encode" && direction !== "decode") return null;
+  var input = inputStr == null ? "" : String(inputStr).trim();
+  if (direction === "encode") {
+    if (!/^[0-9]+$/.test(input)) return null;
+    var value = BigInt(input);
+    var encBytes = writeVlqBig(value);
+    return { direction: direction, value: value.toString(), hex: bytesToHex(Uint8Array.from(encBytes)), byteLength: encBytes.length };
+  }
+  var bytes = hexToBytes(input.replace(/\s+/g, ""));
+  if (!bytes || bytes.length === 0) return null;
+  var read = readVlqBig(bytes, 0);
+  if (!read || read.length !== bytes.length) return null;
+  var reenc = writeVlqBig(read.value);
+  if (reenc.length !== bytes.length) return null;
+  for (var i = 0; i < reenc.length; i++) if (reenc[i] !== bytes[i]) return null;
+  return { direction: direction, value: read.value.toString(), hex: bytesToHex(bytes), byteLength: bytes.length };
+}
+
 /* ---------- Serialized box parser ---------- */
 /* The field-by-field inverse of tool 14: a serialized ErgoBox is
    [value: BigInt VLQ][ErgoTree][creation height: VLQ][token count:
@@ -1492,7 +1530,7 @@ function buildErgoBox(fields) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58 };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq };
 }
 
 if (typeof document !== "undefined") {
@@ -1833,6 +1871,21 @@ if (typeof document !== "undefined") {
         out.textContent = "✓ Those " + res.byteLength + " byte(s) encode to Base58: " + (res.encoded === "" ? "(empty — zero bytes encode to the empty string)" : res.encoded) + ". Plain Base58, not Base58Check: no checksum was added — an address's checksum (tool 2) is part of the bytes themselves. Computed locally; nothing was fetched, signed or sent.";
       } else {
         out.textContent = "✓ That Base58 decodes to " + res.byteLength + " byte(s): " + (res.hex === "" ? "(empty — the empty string decodes to zero bytes)" : res.hex) + ". If those bytes were an address, they are prefix + content + the stored checksum verbatim — decoding does not verify the checksum; paste the address into tool 2 for that. Computed locally; nothing was fetched, signed or sent.";
+      }
+    });
+
+    document.getElementById("vlq-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("vlq-result");
+      var res = analyzeVlq(document.getElementById("vlq-input").value, document.getElementById("vlq-direction").value);
+      if (!res) {
+        out.textContent = "I could not convert that: encode needs a whole non-negative number in plain decimal (VLQ has no negative or fractional form), and decode needs exactly one canonical VLQ as hex — no truncated encoding, no trailing bytes, and no overlong spelling like 8000 for zero. Nothing was converted.";
+        return;
+      }
+      if (res.direction === "encode") {
+        out.textContent = "✓ " + res.value + " encodes as VLQ hex " + res.hex + " (" + res.byteLength + (res.byteLength === 1 ? " byte" : " bytes") + ") — 7 bits per byte, least-significant group first, the high bit marking every byte but the last. That is the byte form this integer takes as a box value, height, token amount or count inside a serialized box (tools 15 and 17). Computed locally; nothing was fetched, signed or sent.";
+      } else {
+        out.textContent = "✓ That VLQ hex decodes to " + res.value + " — and it is the canonical spelling: re-encoding the value reproduces those exact bytes, so no shorter or longer form of the same number is hiding in it. Decoded locally; nothing was fetched, signed or sent.";
       }
     });
 

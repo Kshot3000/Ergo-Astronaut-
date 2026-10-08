@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network", "p2shbuild-hex", "p2shbuild-network", "hash-input", "hash-mode", "hash-expected", "b58-input", "b58-direction"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=22"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network", "p2shbuild-hex", "p2shbuild-network", "hash-input", "hash-mode", "hash-expected", "b58-input", "b58-direction", "vlq-input", "vlq-direction"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=23"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -54,6 +54,7 @@ check("p2pk tree builder tool on hub", html.includes('id="treebuild-calc"') && h
 check("p2sh builder tool on hub", html.includes('id="p2shbuild-calc"') && html.includes("P2SH address builder") && html.includes("can never be spent") && readme.includes("P2SH address builder"));
 check("blake2b hash tool on hub", html.includes('id="hash-calc"') && html.includes("Blake2b-256 hash calculator") && html.includes("proves no ownership") && readme.includes("Blake2b-256 hash calculator"));
 check("base58 codec tool on hub", html.includes('id="b58-calc"') && html.includes("Base58 codec") && html.includes("not Base58Check") && readme.includes("Base58 codec"));
+check("vlq codec tool on hub", html.includes('id="vlq-calc"') && html.includes("VLQ codec") && html.includes("canonical") && readme.includes("VLQ codec"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -558,6 +559,23 @@ check("base58 round-trips a box id", app.analyzeBase58(app.analyzeBase58(BOX1_ID
 check("base58 encode tolerates whitespace, 0x and uppercase", app.analyzeBase58(" 0x00 EB15\n", "ENCODE").encoded === app.analyzeBase58("00eb15", "encode").encoded);
 check("base58 rejects the four excluded characters", app.analyzeBase58("0", "decode") === null && app.analyzeBase58("O", "decode") === null && app.analyzeBase58("I", "decode") === null && app.analyzeBase58("l", "decode") === null);
 check("base58 rejects junk plainly", app.analyzeBase58("zz", "encode") === null && app.analyzeBase58("abc", "encode") === null && app.analyzeBase58("9fcM5 RWn", "decode") === null && app.analyzeBase58("616263", "sideways") === null && app.analyzeBase58(null, null) === null);
+
+/* VLQ codec — the integer encoding inside every serialized box.
+   Vectors are fleet-sdk's published vlq.spec set plus values
+   computed with an independent Python LEB128 build before coding:
+   the storage-rent period 1,051,200 -> c09440, 10^9 -> 8094ebdc03,
+   and 2^64-1 -> ffffffffffffffffff01 (ten bytes). Decode is strict:
+   truncated, trailing-byte and non-canonical (overlong) spellings
+   are all rejected. */
+check("vlq fleet vectors encode", [["0","00"],["126","7e"],["127","7f"],["128","8001"],["129","8101"],["16383","ff7f"],["16384","808001"],["2097151","ffff7f"],["2097152","80808001"],["268435455","ffffff7f"],["268435456","8080808001"]].every(([n,h]) => app.analyzeVlq(n, "encode").hex === h));
+check("vlq fleet vectors decode", [["00","0"],["7f","127"],["8001","128"],["ff7f","16383"],["8080808001","268435456"]].every(([h,n]) => app.analyzeVlq(h, "decode").value === n));
+check("vlq rent period vector", app.analyzeVlq("1051200", "encode").hex === "c09440" && app.analyzeVlq("c09440", "decode").value === "1051200" && app.analyzeVlq("1051200", "encode").byteLength === 3);
+check("vlq large values exact", app.analyzeVlq("1000000000", "encode").hex === "8094ebdc03" && app.analyzeVlq("18446744073709551615", "encode").hex === "ffffffffffffffffff01" && app.analyzeVlq("ffffffffffffffffff01", "decode").value === "18446744073709551615");
+check("vlq round-trips box value scale", app.analyzeVlq(app.analyzeVlq("123456789123456789", "encode").hex, "decode").value === "123456789123456789");
+check("vlq decode tolerates whitespace, 0x and uppercase", app.analyzeVlq(" 0xC0 9440\n", "DECODE").value === "1051200");
+check("vlq rejects non-canonical overlong spellings", app.analyzeVlq("8000", "decode") === null && app.analyzeVlq("8100", "decode") === null && app.analyzeVlq("808000", "decode") === null);
+check("vlq rejects truncated and trailing bytes", app.analyzeVlq("80", "decode") === null && app.analyzeVlq("800100", "decode") === null && app.analyzeVlq("", "decode") === null);
+check("vlq rejects junk plainly", app.analyzeVlq("-1", "encode") === null && app.analyzeVlq("1.5", "encode") === null && app.analyzeVlq("", "encode") === null && app.analyzeVlq("zz", "decode") === null && app.analyzeVlq("123", "sideways") === null && app.analyzeVlq(null, null) === null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

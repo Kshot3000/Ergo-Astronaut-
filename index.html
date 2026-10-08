@@ -431,6 +431,19 @@
         <button type="submit" class="btn primary">Convert it</button>
         <p id="b58-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="vlq-calc">
+        <h3>23 · VLQ codec (how integers are written inside a box)</h3>
+        <p>Almost every integer inside a serialized box is written as a <strong>VLQ</strong> — a variable-length quantity: the box's value, its creation height, each token amount, the counts and the output index in tools 15 and 17, and the proposition size in a size-flagged ErgoTree (tool 10). The encoding is unsigned LEB128, exactly as fleet-sdk writes it: 7 bits per byte, least-significant group first, the high bit set on every byte except the last — so 0 is <code>00</code>, 128 is <code>8001</code>, and the storage-rent period of 1,051,200 blocks is <code>c09440</code>. There is no negative or fractional VLQ. Decode here is strict, the way a box parser must be: the bytes must be exactly one VLQ — a truncated encoding and trailing bytes are refused — and the spelling must be canonical, so an overlong form like <code>8000</code> for zero is rejected instead of read as a second spelling of the same number. Exact BigInt maths at any size, verified against fleet-sdk's published VLQ vectors and an independent Python build before it shipped here. Encoding only — it signs and sends nothing.</p>
+        <label for="vlq-input">Input (a whole non-negative number to encode, or VLQ hex to decode)</label>
+        <textarea id="vlq-input" rows="3" spellcheck="false" placeholder="e.g. 1051200 in encode mode, or c09440 in decode mode" autocomplete="off"></textarea>
+        <label for="vlq-direction">Direction</label>
+        <select id="vlq-direction">
+          <option value="encode" selected>Encode: number → VLQ hex</option><option value="decode">Decode: VLQ hex → number</option>
+        </select>
+        <button type="submit" class="btn primary">Convert it</button>
+        <p id="vlq-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -476,6 +489,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=22"></script>
+<script src="app.js?v=23"></script>
 </body>
 </html>

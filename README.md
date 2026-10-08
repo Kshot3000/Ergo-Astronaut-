@@ -313,6 +313,19 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   Python build, including the classic `00eb1523…06647` vector and
   my own address's bytes round-tripping exactly. Encoding only —
   it signs and sends nothing.
+- **VLQ codec** — the variable-length encoding almost every
+  integer inside a serialized box is written in (box value,
+  creation height, token amounts, counts, output index, and a
+  size-flagged tree's proposition size), exposed on its own:
+  a whole non-negative number to its VLQ hex, or VLQ hex back
+  to the number — unsigned LEB128 exactly as fleet-sdk writes
+  it, 7 bits per byte, least-significant group first, exact
+  BigInt at any size. Decode is strict: exactly one VLQ, no
+  truncation, no trailing bytes, and the canonical spelling
+  only — an overlong form like `8000` for zero is rejected.
+  Verified against fleet-sdk's published VLQ vectors and an
+  independent Python build. Encoding only — it signs and
+  sends nothing.
 
 ## Cross-chain integration
 

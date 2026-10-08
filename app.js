@@ -3293,6 +3293,112 @@ function auditTxInputs(txHex) {
   };
 }
 
+/* ---------- Signing round-trip checker ---------- */
+/* Tools 38 and 39 audit one transaction. This compares TWO
+   serializations of what is supposed to be the same transaction:
+   the one a dApp or builder showed you before signing, and the
+   one a wallet hands back after signing. Signing may change
+   exactly one thing — the spending proofs. Everything else is
+   pinned by the transaction ID, which is computed over the
+   unsigned form (proof lengths zeroed, context extensions and
+   every later byte verbatim — tool 29's parser computes it), so
+   equal IDs prove the spent boxes, extensions, data inputs,
+   token list and outputs are byte-identical outside the proofs,
+   and different IDs mean something besides proofs moved. The
+   report still diffs section by section (inputs, data inputs,
+   outputs) and proof by proof (added / removed / changed), so
+   when the IDs differ it says WHERE, and when they match it
+   lists exactly which inputs gained proofs. A proof that was
+   present before and is gone afterwards is flagged even though
+   the ID cannot see it. Outputs are diffed as written, never
+   by box ID — a box ID embeds the transaction ID, so diffing
+   by it would report every output as changed whenever the ID
+   moved for an unrelated reason (caught by the oracle pairs
+   below before this shipped). The honesty boundary: this compares
+   bytes — whether a changed transaction is legitimate, or a
+   present proof valid, is not a question bytes alone answer.
+   Verified against an independent Python oracle
+   (oracle-txsign.py): from-scratch parsing of both sides over
+   fleet vectors TX_V2 / TX_V4 (its tx IDs reproduced the
+   recorded ones exactly) plus from-scratch synthetic pairs —
+   signing-only, proof removed, proof changed, an output value
+   moved by one nanoERG, an extension constant changed, and a
+   data input added. */
+function compareTxSigning(beforeHex, afterHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, txIdBefore: null, txIdAfter: null, sameTxId: null, identicalBytes: null, byteLengthBefore: null, byteLengthAfter: null, signedBefore: null, signedAfter: null, inputCountBefore: null, inputCountAfter: null, inputs: null, inputsSame: null, proofsAdded: null, proofsRemoved: null, proofsChanged: null, totalProofBytesBefore: null, totalProofBytesAfter: null, dataInputsBefore: null, dataInputsAfter: null, dataInputsSame: null, outputsSame: null, outputCountBefore: null, outputCountAfter: null, totalOutputNanoBefore: null, totalOutputNanoAfter: null, changedSections: null };
+  };
+  var before = parseErgoTransaction(beforeHex);
+  if (!before.valid) return fail("The BEFORE transaction does not parse: " + before.reason);
+  var after = parseErgoTransaction(afterHex);
+  if (!after.valid) return fail("The AFTER transaction does not parse: " + after.reason);
+  var bBytes = hexToBytes(beforeHex == null ? "" : String(beforeHex).replace(/\s+/g, ""));
+  var aBytes = hexToBytes(afterHex == null ? "" : String(afterHex).replace(/\s+/g, ""));
+  var identicalBytes = !!(bBytes && aBytes && bBytes.length === aBytes.length && bBytes.every(function (x, i) { return x === aBytes[i]; }));
+  var n = Math.max(before.inputs.length, after.inputs.length);
+  var inputs = [];
+  var proofsAdded = [], proofsRemoved = [], proofsChanged = [];
+  for (var i = 0; i < n; i++) {
+    var ib = before.inputs[i] || null;
+    var ia = after.inputs[i] || null;
+    var pb = ib ? ib.proofBytes : null;
+    var pa = ia ? ia.proofBytes : null;
+    var pc;
+    if (pb === pa) pc = "unchanged";
+    else if (pb === null && pa !== null) pc = "added";
+    else if (pb !== null && pa === null) pc = "removed";
+    else pc = "changed";
+    if (pc === "added") proofsAdded.push(i);
+    if (pc === "removed") proofsRemoved.push(i);
+    if (pc === "changed") proofsChanged.push(i);
+    inputs.push({
+      index: i,
+      boxIdBefore: ib ? ib.boxId : null,
+      boxIdAfter: ia ? ia.boxId : null,
+      sameBox: !!(ib && ia && ib.boxId === ia.boxId),
+      extensionSame: !!(ib && ia && JSON.stringify(ib.extension) === JSON.stringify(ia.extension)),
+      proofLengthBefore: ib ? ib.proofLength : null,
+      proofLengthAfter: ia ? ia.proofLength : null,
+      proofChange: pc
+    });
+  }
+  var inputsSame = before.inputs.length === after.inputs.length && inputs.every(function (x) { return x.sameBox && x.extensionSame; });
+  var dataInputsSame = JSON.stringify(before.dataInputs) === JSON.stringify(after.dataInputs);
+  /* Outputs are compared as WRITTEN (value, tree, height, tokens,
+     registers) plus the token ID list — not by their parsed form,
+     whose boxId field embeds the transaction ID itself, so any
+     ID change would make identical outputs look different. */
+  var writtenOutputs = function (tx) {
+    return [tx.tokenIds, tx.outputs.map(function (o) {
+      return { valueNano: o.valueNano, ergoTree: o.ergoTree, creationHeight: o.creationHeight, tokens: o.tokens, registers: o.registers };
+    })];
+  };
+  var outputsSame = JSON.stringify(writtenOutputs(before)) === JSON.stringify(writtenOutputs(after));
+  var changedSections = [];
+  if (!inputsSame) changedSections.push("inputs");
+  if (!dataInputsSame) changedSections.push("dataInputs");
+  if (!outputsSame) changedSections.push("outputs");
+  var sameTxId = before.txId === after.txId;
+  return {
+    valid: true, reason: null,
+    verdict: identicalBytes ? "identical" : (sameTxId ? "signing-only" : "changed"),
+    txIdBefore: before.txId, txIdAfter: after.txId, sameTxId: sameTxId,
+    identicalBytes: identicalBytes,
+    byteLengthBefore: before.byteLength, byteLengthAfter: after.byteLength,
+    signedBefore: before.signed, signedAfter: after.signed,
+    inputCountBefore: before.inputs.length, inputCountAfter: after.inputs.length,
+    inputs: inputs, inputsSame: inputsSame,
+    proofsAdded: proofsAdded, proofsRemoved: proofsRemoved, proofsChanged: proofsChanged,
+    totalProofBytesBefore: before.inputs.reduce(function (s, x) { return s + x.proofLength; }, 0),
+    totalProofBytesAfter: after.inputs.reduce(function (s, x) { return s + x.proofLength; }, 0),
+    dataInputsBefore: before.dataInputs, dataInputsAfter: after.dataInputs, dataInputsSame: dataInputsSame,
+    outputsSame: outputsSame,
+    outputCountBefore: before.outputs.length, outputCountAfter: after.outputs.length,
+    totalOutputNanoBefore: before.totalOutputNano, totalOutputNanoAfter: after.totalOutputNano,
+    changedSections: changedSections
+  };
+}
+
 /* ---------- Transaction JSON converter ---------- */
 /* The same unsigned transaction in the two forms Ergo developers
    actually move between: the EIP-12 / fleet-sdk JSON dialect (what
@@ -3523,7 +3629,7 @@ function planTokenMint(firstInputId, nameStr, descStr, decStr, amountStr, typeSt
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning };
 }
 
 if (typeof document !== "undefined") {
@@ -4339,6 +4445,36 @@ if (typeof document !== "undefined") {
       if (dupKeyNotes.length) msg += "⚠ " + dupKeyNotes.join("; ") + " — one key holds one constant, so a repeat makes what the script reads ambiguous. ";
       msg += "Per input: " + res.inputs.map(function (i) { return "#" + i.index + " " + i.boxId.slice(0, 12) + "…, " + (i.hasProof ? "proof " + i.proofLength + " byte(s)" : "no proof") + (i.extension.length ? ", extension " + i.extension.map(function (e) { return "key " + e.key + " = " + e.type + " " + e.value; }).join(", ") : ""); }).join(" · ") + ". ";
       msg += "Input side only, from the bytes you pasted: what these inputs are worth lives in the input boxes — tool 34 checks fee and balance with them, and tool 38 audits the output side. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txsign-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txsign-result");
+      var res = compareTxSigning(document.getElementById("txsign-before").value, document.getElementById("txsign-after").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.verdict === "identical") {
+        msg = "✓ The two serializations are byte-for-byte identical (" + res.byteLengthBefore + " bytes, transaction " + res.txIdBefore + ") — the wallet handed back exactly what it was shown" + (res.signedAfter ? "." : ", and it is still unsigned: no input carries a proof.") + " ";
+      } else if (res.verdict === "signing-only") {
+        msg = "✓ Signing only: both serializations carry transaction ID " + res.txIdBefore + ", so the spent inputs, context extensions, data inputs, token list and outputs are byte-identical — the only differences are spending proofs (" + res.totalProofBytesBefore + " proof byte(s) before, " + res.totalProofBytesAfter + " after). ";
+        if (res.proofsAdded.length) msg += "Proofs added on input(s) " + res.proofsAdded.map(function (i) { return "#" + i; }).join(", ") + ". ";
+        if (res.proofsChanged.length) msg += "Proofs replaced on input(s) " + res.proofsChanged.map(function (i) { return "#" + i; }).join(", ") + ". ";
+        if (res.proofsRemoved.length) msg += "⚠ Proofs REMOVED on input(s) " + res.proofsRemoved.map(function (i) { return "#" + i; }).join(", ") + " — a proof that was there before signing is gone afterwards; the transaction ID cannot see proofs, so only this comparison catches it. ";
+      } else {
+        msg = "⚠ CHANGED beyond signing: the transaction IDs differ (before " + res.txIdBefore + ", after " + res.txIdAfter + "), so this is not the transaction that was shown before signing. Differing section(s): " + res.changedSections.join(", ") + ". ";
+        res.inputs.forEach(function (inp) {
+          if (!inp.sameBox) msg += "Input #" + inp.index + " spends a different box (before " + (inp.boxIdBefore ? inp.boxIdBefore.slice(0, 12) + "…" : "none") + ", after " + (inp.boxIdAfter ? inp.boxIdAfter.slice(0, 12) + "…" : "none") + "). ";
+          else if (!inp.extensionSame) msg += "Input #" + inp.index + " keeps its box but its context extension changed. ";
+        });
+        if (!res.dataInputsSame) msg += "Data inputs differ (before " + res.dataInputsBefore.length + ", after " + res.dataInputsAfter.length + "). ";
+        if (!res.outputsSame) msg += "Outputs differ (before " + res.outputCountBefore + " output(s) holding " + res.totalOutputNanoBefore + " nanoERG, after " + res.outputCountAfter + " output(s) holding " + res.totalOutputNanoAfter + " nanoERG). ";
+        msg += "Do not treat the after version as the transaction you approved — compare it with tools 38 and 39 before signing anything. ";
+      }
+      msg += "Comparison only, over the bytes you pasted: whether a change is legitimate, or a proof valid, is not something bytes alone can answer. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

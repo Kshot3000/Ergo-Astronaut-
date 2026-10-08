@@ -605,6 +605,26 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   two from-scratch synthetic transactions carrying a
   duplicated spend, overlapping and duplicated data
   inputs, and a duplicated extension key.
+- **Signing round-trip checker** — compares two
+  serializations of what should be the same transaction:
+  the one shown before signing and the one a wallet
+  returns after. Signing may change only the spending
+  proofs; everything else is pinned by the transaction
+  ID (computed over the unsigned form), so equal IDs
+  prove the inputs, extensions, data inputs, token list
+  and outputs are byte-identical outside the proofs,
+  and the report lists which inputs gained, replaced or
+  lost a proof — a removed proof being the case the ID
+  itself cannot see. Different IDs are diffed section
+  by section (inputs, data inputs, outputs) so the
+  report says where the transaction moved. It composes
+  the transaction parser rather than re-deriving its
+  maths. Verified against an independent Python oracle
+  over fleet-sdk's published transaction vectors plus
+  from-scratch synthetic pairs: signing-only, proof
+  removed, proof changed, an output value moved by one
+  nanoERG, an extension constant changed, and a data
+  input added.
 
 ## Cross-chain integration
 

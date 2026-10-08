@@ -696,6 +696,17 @@
         <button type="submit" class="btn primary">Audit the inputs</button>
         <p id="txinput-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txsign-calc">
+        <h3>40 · Signing round-trip checker (transaction bytes before signing ⇄ after signing → did anything but the proofs change?)</h3>
+        <p>Tools 38 and 39 audit one transaction; this one compares two. Paste the serialized transaction a dApp or builder showed you <em>before</em> signing, and the serialization the wallet hands back <em>after</em> — signing may legitimately change exactly one thing, the spending proofs, and everything else is pinned by the transaction ID, which is computed over the unsigned form (proofs zeroed, context extensions and every later byte verbatim). So equal IDs prove the spent boxes, extensions, data inputs, token list and outputs are byte-identical outside the proofs, and the report lists exactly which inputs gained, replaced or — the case the ID itself cannot see — <strong>lost</strong> a proof. Different IDs mean something besides proofs moved, and the report says where: a spent box swapped, an extension constant changed, data inputs added or dropped, or outputs differing, with the before/after output counts and totals. This is the check to run when a wallet returns a transaction you did not build: if the after version is not the transaction you approved, do not let it be treated as one. The honesty boundary is stated plainly: the comparison is over bytes — whether a change is legitimate, or a present proof is valid, is not a question bytes alone answer (tool 39 makes the same point about proofs). Comparison only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txsign-before">Before signing — serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txsign-before" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the transaction as shown before signing)" autocomplete="off"></textarea>
+        <label for="txsign-after">After signing — serialized transaction (hex, the wallet's returned bytes)</label>
+        <textarea id="txsign-after" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the transaction as returned after signing)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Compare before ⇄ after</button>
+        <p id="txsign-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -741,6 +752,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=39"></script>
+<script src="app.js?v=40"></script>
 </body>
 </html>

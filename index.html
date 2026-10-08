@@ -597,6 +597,17 @@
         <button type="submit" class="btn primary">Inspect the public key</button>
         <p id="pubkey-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="boxset-calc">
+        <h3>33 · Box set summarizer (many boxes → totals for the whole set)</h3>
+        <p>Tool 15 reads one box, but a wallet holds many — so paste a whole set, one full serialized box per line, and this tool answers for the set: the exact total ERG (BigInt sums, never rounded), each token's total raw amount aggregated across every box that carries it, and whether every box meets its size-based protocol minimum under tool 5's rule (serialized bytes × 360 nanoERG). Give a current chain height and it also applies tool 7's storage-rent rule per box — creation height + 1,051,200 blocks — and totals the ERG sitting in boxes old enough for rent. The set is strict, on purpose: a line that does not parse stops the whole summary with that line named, because a silently skipped box would understate every total with no sign it had happened, and the same box listed twice is refused, because its box ID would double-count one on-chain box. The summary is a statement about the bytes you pasted, not a live wallet balance — a pasted box may since have been spent, and only the chain can tell you that; this tool fetches nothing, signs nothing and sends nothing.</p>
+        <label for="boxset-boxes">Serialized boxes (hex — one full box per line, up to 100)</label>
+        <textarea id="boxset-boxes" rows="5" spellcheck="false" placeholder="e.g. c0843d0008cd… (one box's full serialized bytes per line — explorers link them from a box's page)" autocomplete="off"></textarea>
+        <label for="boxset-height">Current chain height (optional — for the storage-rent eligibility figures)</label>
+        <input id="boxset-height" type="text" inputmode="numeric" placeholder="e.g. 1900000" autocomplete="off">
+        <button type="submit" class="btn primary">Summarize the set</button>
+        <p id="boxset-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -642,6 +653,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=32"></script>
+<script src="app.js?v=33"></script>
 </body>
 </html>

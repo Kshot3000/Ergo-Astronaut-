@@ -478,6 +478,21 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   of private keys 2 and 3, and my own address's key, which
   re-encodes to that exact address. Inspecting a public key
   proves no ownership of it.
+- **Box set summarizer** — a whole set of boxes at once, one
+  full serialized box per line: exact BigInt totals for ERG
+  and for each token (aggregated by token ID across every box
+  carrying it), a per-box check against the size-based
+  protocol minimum, and — given a current height — per-box
+  storage-rent eligibility with the eligible ERG totalled. It
+  composes the single-box tools (the box parser, the minimum
+  checker, the rent countdown) rather than re-deriving their
+  maths, so its figures cannot disagree with theirs. The set
+  is strict: an unparseable line stops the summary with the
+  line named, and a duplicated box is refused rather than
+  double-counted. It fetches nothing and is labelled as a
+  statement about the pasted bytes, not a live balance.
+  Verified against an independent Python oracle over
+  fleet-sdk's published box vectors.
 
 ## Cross-chain integration
 

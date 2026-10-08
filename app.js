@@ -2782,8 +2782,106 @@ function inspectPublicKey(pubkeyHex) {
   };
 }
 
+/* ---------- Box set summarizer (many boxes -> one set of totals) ---------- */
+/* Tool 15 reads one box; a wallet holds many. This reads a whole
+   pasted set — one full serialized box per line — and answers for
+   the set what tool 25 answers for one box, composing the same
+   analysers so the figures can never disagree with the single-box
+   tools: each line is parsed by tool 15 itself, each box's minimum
+   is tool 5's (serialized bytes x 360 nanoERG), and rent
+   eligibility is tool 7's rule (creation height + 1,051,200
+   blocks, STORAGE_PERIOD_BLOCKS) applied per box when the user
+   supplies a current height. Totals are exact BigInt sums; token
+   amounts aggregate by token ID in first-appearance order, raw
+   on-chain integers as everywhere on this hub. The set is strict:
+   a line that does not parse stops the whole summary with that
+   line named (a silently skipped box would understate the totals
+   without any sign), and the same box listed twice is refused —
+   its ID would double-count the same on-chain box. Nothing here
+   fetches anything: the boxes and the height are user-supplied,
+   the summary is a statement about the pasted bytes, not a live
+   wallet balance, and the page says so. Verified against an
+   independent Python oracle (from-scratch VLQ/box reader +
+   hashlib) over fleet-sdk's published box vectors, preserved in
+   the goal's hidden files. */
+function summarizeBoxSet(boxesText, currentHeightStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, boxes: null, boxCount: null, totalNano: null, totalErg: null, totalBytes: null, minTotalNano: null, minTotalErg: null, allMeetMinimum: null, belowMinimum: null, tokenTotals: null, distinctTokens: null, currentHeight: null, eligibleCount: null, eligibleNano: null, eligibleErg: null };
+  };
+  var lines = (boxesText == null ? "" : String(boxesText)).split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  if (lines.length === 0) return fail("Paste at least one full serialized box as hex, one box per line — SDKs and node APIs produce the bytes, and explorers link them from a box's page. This summarizes the boxes you paste; it fetches nothing and is not a live wallet balance.");
+  if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool summarizes at most 100 boxes at a time, so a pasted set stays reviewable line by line.");
+  var current = null;
+  var heightGiven = !(currentHeightStr == null || String(currentHeightStr).trim() === "");
+  if (heightGiven) {
+    var parsedHeight = parseChainHeight(currentHeightStr);
+    if (parsedHeight === null) return fail("The current height must be a whole number of blocks (digits only) — it is the height on the box's explorer page or your node's status. Leave it blank to summarize without the storage-rent eligibility figures.");
+    current = BigInt(parsedHeight);
+  }
+  var boxes = [];
+  var seen = {};
+  var total = 0n;
+  var totalBytes = 0;
+  var minTotal = 0n;
+  var belowMinimum = [];
+  var tokenOrder = [];
+  var tokenMap = {};
+  var eligibleCount = 0;
+  var eligibleTotal = 0n;
+  for (var i = 0; i < lines.length; i++) {
+    var parsed = parseErgoBox(lines[i]);
+    if (!parsed.valid) return fail("Line " + (i + 1) + " does not parse as a serialized box: " + parsed.reason + " The whole set is refused rather than summarized without it — a skipped box would understate every total with no sign it had happened.");
+    if (Object.prototype.hasOwnProperty.call(seen, parsed.boxId)) return fail("Line " + (i + 1) + " is the same box as line " + seen[parsed.boxId] + " (box ID " + parsed.boxId + ") — a box listed twice would double-count the same on-chain box in every total, so the set is refused; remove the duplicate line.");
+    seen[parsed.boxId] = i + 1;
+    var value = BigInt(parsed.valueNano);
+    total += value;
+    totalBytes += parsed.byteLength;
+    var minStr = minBoxValueNano(String(parsed.byteLength));
+    var min = BigInt(minStr);
+    minTotal += min;
+    if (value < min) belowMinimum.push({ boxId: parsed.boxId, minNano: minStr, shortfallNano: (min - value).toString() });
+    var eligibility = null;
+    var eligible = null;
+    if (current !== null) {
+      eligibility = BigInt(parsed.creationHeight) + BigInt(STORAGE_PERIOD_BLOCKS);
+      eligible = current >= eligibility;
+      if (eligible) { eligibleCount++; eligibleTotal += value; }
+    }
+    for (var t = 0; t < parsed.tokens.length; t++) {
+      var tk = parsed.tokens[t];
+      if (!Object.prototype.hasOwnProperty.call(tokenMap, tk.tokenId)) {
+        tokenMap[tk.tokenId] = { tokenId: tk.tokenId, amount: 0n, boxCount: 0 };
+        tokenOrder.push(tk.tokenId);
+      }
+      tokenMap[tk.tokenId].amount += BigInt(tk.amount);
+      tokenMap[tk.tokenId].boxCount++;
+    }
+    boxes.push({
+      line: i + 1, boxId: parsed.boxId, byteLength: parsed.byteLength,
+      valueNano: parsed.valueNano, valueErg: parsed.valueErg,
+      creationHeight: parsed.creationHeight, tokenCount: parsed.tokens.length,
+      eligibilityHeight: eligibility === null ? null : Number(eligibility),
+      eligible: eligible
+    });
+  }
+  return {
+    valid: true, reason: null,
+    boxes: boxes, boxCount: boxes.length,
+    totalNano: total.toString(), totalErg: nanoToErg(total.toString()),
+    totalBytes: totalBytes,
+    minTotalNano: minTotal.toString(), minTotalErg: nanoToErg(minTotal.toString()),
+    allMeetMinimum: belowMinimum.length === 0, belowMinimum: belowMinimum,
+    tokenTotals: tokenOrder.map(function (id) { var e = tokenMap[id]; return { tokenId: e.tokenId, amount: e.amount.toString(), boxCount: e.boxCount }; }),
+    distinctTokens: tokenOrder.length,
+    currentHeight: current === null ? null : Number(current),
+    eligibleCount: current === null ? null : eligibleCount,
+    eligibleNano: current === null ? null : eligibleTotal.toString(),
+    eligibleErg: current === null ? null : nanoToErg(eligibleTotal.toString())
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet };
 }
 
 if (typeof document !== "undefined") {
@@ -3414,6 +3512,32 @@ if (typeof document !== "undefined") {
       var msg = "✓ That is a real point on the curve: x " + res.x + ", y " + res.y + " (" + res.yParity + ", as its " + res.publicKey.slice(0, 2) + " prefix claims) — y² = x³ + 7 (mod p) holds and the point re-compresses to exactly this key. ";
       msg += "Uncompressed form: " + res.uncompressedHex + ". As a Sigma constant it is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses (tools 8 and 19 build the same): mainnet " + res.mainnet + " — testnet " + res.testnet + ", round-tripped through tool 11's decoder before being shown. ";
       msg += "Inspection only: a public key is public — this proves the point is real, and proves no ownership of the key; the private half is never asked for and cannot be found from the point. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Box set summarizer --- */
+    document.getElementById("boxset-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("boxset-result");
+      var res = summarizeBoxSet(document.getElementById("boxset-boxes").value, document.getElementById("boxset-height").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Summarized " + res.boxCount + (res.boxCount === 1 ? " box" : " boxes") + " (" + res.totalBytes + " serialized bytes in total): " + res.totalErg + " ERG (" + res.totalNano + " nanoERG) across the set. " +
+        "Per box: " + res.boxes.map(function (b) { return "line " + b.line + " — " + b.valueErg + " ERG, " + b.byteLength + " bytes, created at height " + b.creationHeight + ", box " + b.boxId; }).join("; ") + ". ";
+      if (res.tokenTotals.length === 0) {
+        msg += "Tokens: none in any box. ";
+      } else {
+        msg += "Token totals (" + res.distinctTokens + " distinct): " + res.tokenTotals.map(function (tt) { return tt.amount + " raw of " + tt.tokenId + " (in " + tt.boxCount + (tt.boxCount === 1 ? " box" : " boxes") + ")"; }).join("; ") + " — raw on-chain integers; tool 6 converts them to display form once you know each token's decimals. ";
+      }
+      msg += res.allMeetMinimum
+        ? "Every box meets its size-based protocol minimum (tool 5's rule; the set's minimums total " + res.minTotalErg + " ERG). "
+        : "Below the size-based protocol minimum (tool 5): " + res.belowMinimum.map(function (b) { return "box " + b.boxId + " is " + b.shortfallNano + " nanoERG under its " + b.minNano + " nanoERG minimum"; }).join("; ") + ". ";
+      if (res.currentHeight !== null) {
+        msg += "At height " + res.currentHeight + ", " + res.eligibleCount + " of " + res.boxCount + (res.boxCount === 1 ? " box is" : " boxes are") + " old enough for storage rent (created + 1,051,200 blocks, tool 7's rule), holding " + res.eligibleErg + " ERG between them. ";
+      }
+      msg += "Summarized locally from the bytes you pasted — nothing was fetched, signed or sent, and this is a statement about those bytes, not a live wallet balance: a box may since have been spent, which only the chain can tell you.";
       out.textContent = msg;
     });
 

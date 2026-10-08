@@ -343,6 +343,23 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   Verified against fleet-sdk's published ZigZag spec
   vectors and an independent Python build. Encoding only —
   it signs and sends nothing.
+- **Box health checker** — the storage rent estimator, the
+  minimum box value checker and the storage rent countdown
+  answered together for one box: given its serialized size,
+  the ERG it holds and its creation and current heights, it
+  reports one plain verdict — below the protocol minimum for
+  its size (bytes × 360 nanoERG), consumable by a miner now
+  (rent-eligible and holding at most one rent payment of
+  bytes × 1,250,000 nanoERG), consumable when eligibility
+  arrives at creation + 1,051,200 blocks, or funded for a
+  stated number of full rent payments, with what one rent
+  deduction would leave if it is already eligible. Both
+  per-byte rates are votable chain parameters, re-verified
+  against live mainnet network params on 2026-10-07. It
+  composes the three tools' own analysers, so its figures
+  can never disagree with theirs; all inputs are
+  user-supplied and it claims no live chain data. Analysis
+  only — it signs and sends nothing.
 
 ## Cross-chain integration
 

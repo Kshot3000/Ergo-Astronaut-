@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network", "p2shbuild-hex", "p2shbuild-network", "hash-input", "hash-mode", "hash-expected", "b58-input", "b58-direction", "vlq-input", "vlq-direction", "zigzag-input", "zigzag-direction", "zigzag-width"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=24"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network", "p2shbuild-hex", "p2shbuild-network", "hash-input", "hash-mode", "hash-expected", "b58-input", "b58-direction", "vlq-input", "vlq-direction", "zigzag-input", "zigzag-direction", "zigzag-width", "health-bytes", "health-erg", "health-created", "health-current"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=25"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -56,6 +56,7 @@ check("blake2b hash tool on hub", html.includes('id="hash-calc"') && html.includ
 check("base58 codec tool on hub", html.includes('id="b58-calc"') && html.includes("Base58 codec") && html.includes("not Base58Check") && readme.includes("Base58 codec"));
 check("vlq codec tool on hub", html.includes('id="vlq-calc"') && html.includes("VLQ codec") && html.includes("canonical") && readme.includes("VLQ codec"));
 check("zigzag codec tool on hub", html.includes('id="zigzag-calc"') && html.includes("ZigZag codec") && html.includes("zig-zagged") && html.includes("feffffffffffffffff01") && readme.includes("ZigZag codec"));
+check("box health tool on hub", html.includes('id="health-calc"') && html.includes("Box health checker") && html.includes("claims no live chain data") && html.includes("360 nanoERG per byte") && html.includes("1,250,000 nanoERG per byte") && readme.includes("Box health checker"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -596,6 +597,26 @@ check("zigzag rejects out-of-range encodes", app.analyzeZigZag("9223372036854775
 check("zigzag rejects non-canonical and truncated decodes", app.analyzeZigZag("8000", "decode", "64") === null && app.analyzeZigZag("8000", "decode", "32") === null && app.analyzeZigZag("80", "decode", "64") === null && app.analyzeZigZag("0200", "decode", "64") === null && app.analyzeZigZag("", "decode", "64") === null);
 check("zigzag rejects over-wide decodes for the width", app.analyzeZigZag("ffffffffffffffffff7f", "decode", "64") === null && app.analyzeZigZag("8080808010", "decode", "32") === null);
 check("zigzag rejects junk plainly", app.analyzeZigZag("1.5", "encode", "64") === null && app.analyzeZigZag("--1", "encode", "64") === null && app.analyzeZigZag("", "encode", "64") === null && app.analyzeZigZag("zz", "decode", "64") === null && app.analyzeZigZag("123", "sideways", "64") === null && app.analyzeZigZag("123", "encode", "16") === null && app.analyzeZigZag(null, null, null) === null);
+
+/* Box health checker — tools 3, 5 and 7 composed for one box: minimum
+   = bytes * 360 nanoERG, one rent payment = bytes * 1,250,000 nanoERG,
+   eligibility = creation + 1,051,200 blocks. Expected figures computed
+   with an independent Python build before coding, and the checker must
+   agree field-for-field with the three analysers it composes. */
+const healthA = app.analyzeBoxHealth("112", "10", "1000000", "1000000");
+check("health funded fresh box verdict", healthA.verdict === "funded" && healthA.meetsMinimum === true && healthA.meetsSafeUserMin === true && healthA.payments === "71" && healthA.approxYears === "284" && healthA.eligible === false && healthA.blocksRemaining === "1051200" && healthA.eligibilityHeight === "2051200" && healthA.valueAfterRentNano === null);
+check("health full period is ~1460 days", close(healthA.approxDaysRemaining, 1460));
+check("health agrees with tools 3, 5 and 7", healthA.rentNano === app.analyzeStorageRent("112", "10").rentNano && healthA.minNano === app.analyzeMinBoxValue("112", "10").minNano && healthA.differenceNano === app.analyzeMinBoxValue("112", "10").differenceNano && healthA.eligibilityHeight === app.analyzeRentCountdown("1000000", "1000000").eligibilityHeight && healthA.ageBlocks === app.analyzeRentCountdown("1000000", "1000000").ageBlocks);
+const healthB = app.analyzeBoxHealth("112", "0.001", "0", "1051200");
+check("health consumable-now verdict", healthB.verdict === "consumable-now" && healthB.consumableAtFirstRent === true && healthB.eligible === true && healthB.payments === "0" && healthB.blocksRemaining === "0" && healthB.valueAfterRentNano === null);
+const healthC = app.analyzeBoxHealth("112", "0.001", "1000000", "1000000");
+check("health consumable-at-eligibility verdict", healthC.verdict === "consumable-at-eligibility" && healthC.consumableAtFirstRent === true && healthC.eligible === false && healthC.eligibilityHeight === "2051200");
+const healthD = app.analyzeBoxHealth("112", "0.00004", "1000000", "1000000");
+check("health below-minimum verdict takes precedence", healthD.verdict === "below-minimum" && healthD.meetsMinimum === false && healthD.differenceNano === "320" && healthD.differenceErg === "0.00000032");
+const healthE = app.analyzeBoxHealth("112", "1", "0", "2000000");
+check("health eligible funded box rent remainder", healthE.verdict === "funded" && healthE.eligible === true && healthE.payments === "7" && healthE.valueAfterRentNano === "860000000" && healthE.valueAfterRentErg === "0.86" && healthE.ageBlocks === "2000000");
+check("health exactly-one-rent box is consumable, not funded", (() => { const r = app.analyzeBoxHealth("112", "0.14", "1000000", "1000000"); return r.consumableAtFirstRent === true && r.verdict === "consumable-at-eligibility" && r.payments === "0"; })());
+check("health rejects junk", app.analyzeBoxHealth("x", "1", "0", "0") === null && app.analyzeBoxHealth("112", "x", "0", "0") === null && app.analyzeBoxHealth("112", "1", "x", "0") === null && app.analyzeBoxHealth("112", "1", "0", "x") === null && app.analyzeBoxHealth("112", "1", "100", "99") === null && app.analyzeBoxHealth("0", "1", "0", "0") === null && app.analyzeBoxHealth(null, null, null, null) === null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

@@ -461,6 +461,21 @@
         <button type="submit" class="btn primary">Convert it</button>
         <p id="zigzag-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="health-calc">
+        <h3>25 · Box health checker (minimum, rent and age in one verdict)</h3>
+        <p>Tools 3, 5 and 7 each answer one question about a box — here they are answered together. Give me a box's serialized size, the ERG it holds, and its creation and current block heights (all on the box's explorer page), and I check it against the two size-based protocol rules and the rent clock at once: the protocol minimum for its size (serialized bytes × 360 nanoERG per byte, tool 5), one storage-rent payment for its size (bytes × 1,250,000 nanoERG per byte, tool 3), and whether it has reached rent eligibility at creation height + 1,051,200 blocks (tool 7). Both per-byte rates are votable chain parameters, verified against live mainnet network params before this shipped. The verdict is plain about the worst case: a box below its minimum could never have been created at that size; an eligible box holding at most one rent payment can be spent whole by a miner, ERG and tokens alike; an underfunded box gets its eligibility date so you can top it up or move it in time; a funded box is told how many full rent payments it covers. You supply every figure — this tool fetches nothing and claims no live chain data, and the days figure is approximate at the 2-minute block target because real block intervals vary. Exact BigInt maths, computed by composing tools 3, 5 and 7 themselves, so the verdict can never disagree with them. Analysis only — it signs and sends nothing.</p>
+        <label for="health-bytes">Box size (serialized bytes)</label>
+        <input id="health-bytes" inputmode="numeric" placeholder="e.g. 112" autocomplete="off">
+        <label for="health-erg">ERG held in the box</label>
+        <input id="health-erg" inputmode="decimal" placeholder="e.g. 1" autocomplete="off">
+        <label for="health-created">Box creation height</label>
+        <input id="health-created" inputmode="numeric" placeholder="e.g. 1000000" autocomplete="off">
+        <label for="health-current">Current chain height</label>
+        <input id="health-current" inputmode="numeric" placeholder="e.g. 1500000" autocomplete="off">
+        <button type="submit" class="btn primary">Check this box</button>
+        <p id="health-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -506,6 +521,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=24"></script>
+<script src="app.js?v=25"></script>
 </body>
 </html>

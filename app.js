@@ -413,6 +413,65 @@ function analyzeRentCountdown(creationStr, currentStr) {
   };
 }
 
+/* ---------- Box health checker ---------- */
+/* Tools 3, 5 and 7 answered together for one box: does it meet the
+   protocol minimum for its size (360 nanoERG per byte, tool 5), how
+   much storage rent would it owe per cycle (serialized bytes x
+   1,250,000 nanoERG, tool 3), and is it old enough for that rent to
+   be charged (creation height + 1,051,200 blocks, tool 7)? Both
+   rates are votable chain parameters — still the live mainnet epoch
+   params at api.ergoplatform.com/api/v1/info on 2026-10-07 (chain
+   height 1,889,822) — so re-check them before citing them again.
+   This composes those three analysers rather than re-deriving their
+   maths, so the combined verdict can never disagree with them.
+   Verdict precedence: a box below its protocol minimum is reported
+   first (a transaction creating it at that size would be rejected);
+   then a rent-eligible box holding at most one rent payment, which
+   a miner may spend whole right now; then the same underfunding
+   before eligibility; otherwise the box is funded, and the number
+   of full rent payments it covers is tool 3's figure. All figures
+   user-supplied — the size and both heights come off the box's
+   explorer page; this tool fetches nothing and claims no live
+   chain data. Exact BigInt maths throughout. */
+function analyzeBoxHealth(sizeStr, ergStr, creationStr, currentStr) {
+  var minRes = analyzeMinBoxValue(sizeStr, ergStr);
+  var rentRes = analyzeStorageRent(sizeStr, ergStr);
+  var clockRes = analyzeRentCountdown(creationStr, currentStr);
+  if (minRes === null || rentRes === null || clockRes === null) return null;
+  var valueNano = ergToNano(ergStr); /* non-null: the analysers validated it */
+  var value = BigInt(valueNano);
+  var rent = BigInt(rentRes.rentNano);
+  var verdict;
+  if (!minRes.meetsMinimum) verdict = "below-minimum";
+  else if (clockRes.eligible && rentRes.consumableAtFirstRent) verdict = "consumable-now";
+  else if (rentRes.consumableAtFirstRent) verdict = "consumable-at-eligibility";
+  else verdict = "funded";
+  var afterRent = clockRes.eligible && value > rent ? value - rent : null;
+  return {
+    valueNano: valueNano,
+    valueErg: nanoToErg(valueNano),
+    minNano: minRes.minNano,
+    minErg: minRes.minErg,
+    meetsMinimum: minRes.meetsMinimum,
+    differenceNano: minRes.differenceNano,
+    differenceErg: minRes.differenceErg,
+    meetsSafeUserMin: minRes.meetsSafeUserMin,
+    rentNano: rentRes.rentNano,
+    rentErg: rentRes.rentErg,
+    payments: rentRes.payments,
+    approxYears: rentRes.approxYears,
+    consumableAtFirstRent: rentRes.consumableAtFirstRent,
+    ageBlocks: clockRes.ageBlocks,
+    eligibilityHeight: clockRes.eligibilityHeight,
+    eligible: clockRes.eligible,
+    blocksRemaining: clockRes.blocksRemaining,
+    approxDaysRemaining: clockRes.approxDaysRemaining,
+    valueAfterRentNano: afterRent === null ? null : afterRent.toString(),
+    valueAfterRentErg: afterRent === null ? null : nanoToErg(afterRent.toString()),
+    verdict: verdict
+  };
+}
+
 /* ---------- UTXO payment planner ---------- */
 /* Ergo's eUTXO model spends boxes whole: to pay an amount plus the
    transaction fee, a wallet selects input boxes (in some order) until
@@ -1581,7 +1640,7 @@ function buildErgoBox(fields) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth };
 }
 
 if (typeof document !== "undefined") {
@@ -1751,6 +1810,33 @@ if (typeof document !== "undefined") {
         msg += "⚠ It is already past that height: a miner may now deduct storage rent from it (tool 3 estimates the fee), or spend it whole if its ERG does not cover the rent. Move it to a fresh box to reset the clock.";
       } else {
         msg += "That is " + res.blocksRemaining + " blocks away — roughly " + fmtEstimate(res.approxDaysRemaining) + " days at the 2-minute block target (an approximation: real block intervals vary). Spending the box before then resets the clock, because the replacement box gets a new creation height.";
+      }
+      out.textContent = msg;
+    });
+
+    /* --- box health checker --- */
+    document.getElementById("health-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("health-result");
+      var res = analyzeBoxHealth(document.getElementById("health-bytes").value, document.getElementById("health-erg").value, document.getElementById("health-created").value, document.getElementById("health-current").value);
+      if (res === null) {
+        out.textContent = "Enter the box's serialized size in bytes, the ERG it holds, and its creation and current heights as whole numbers, with the current height at or above the creation height — the size and heights are on the box's explorer page.";
+        return;
+      }
+      var msg;
+      if (res.verdict === "below-minimum") {
+        msg = "⛔ Below the protocol minimum. A box of this size must hold at least " + res.minErg + " ERG (" + res.minNano + " nanoERG); this one is short by " + res.differenceErg + " ERG (" + res.differenceNano + " nanoERG). A transaction creating a box like this would be rejected — if you read these figures off an explorer, re-check the serialized size.";
+      } else if (res.verdict === "consumable-now") {
+        msg = "⚠ At risk now. This box is " + res.ageBlocks + " blocks old — past its storage-rent eligibility height " + res.eligibilityHeight + " — and holds " + res.valueErg + " ERG, at or below one rent payment of " + res.rentErg + " ERG for its size, so a miner may spend the whole box, ERG and any tokens in it. Spend it into a fresh box to protect it. (It does meet its size minimum of " + res.minErg + " ERG — the risk is the rent, not the minimum.)";
+      } else if (res.verdict === "consumable-at-eligibility") {
+        msg = "⚠ Funded for now, consumable later. The box holds " + res.valueErg + " ERG — above its size minimum of " + res.minErg + " ERG, but at or below one storage-rent payment of " + res.rentErg + " ERG. It becomes rent-eligible at height " + res.eligibilityHeight + ", " + res.blocksRemaining + " blocks away (roughly " + fmtEstimate(res.approxDaysRemaining) + " days at the 2-minute block target), and from then a miner may spend it whole. Top it up above one rent payment, or plan to move it before then.";
+      } else {
+        msg = "✅ Funded. The box covers " + res.payments + " full storage-rent payments of " + res.rentErg + " ERG each (roughly " + res.approxYears + " years of rent cycles) before its value would fall to one payment or below, and it clears its size minimum of " + res.minErg + " ERG" + (res.meetsSafeUserMin ? ", plus the 0.001 ERG safe user minimum." : " — though it sits under the 0.001 ERG safe user minimum wallets aim for.");
+        if (res.eligible) {
+          msg += " It is already past its eligibility height " + res.eligibilityHeight + ", so a miner may deduct one rent payment now, which would leave " + res.valueAfterRentErg + " ERG in the recreated box.";
+        } else {
+          msg += " It becomes rent-eligible at height " + res.eligibilityHeight + ", " + res.blocksRemaining + " blocks away (roughly " + fmtEstimate(res.approxDaysRemaining) + " days at the 2-minute block target).";
+        }
       }
       out.textContent = msg;
     });

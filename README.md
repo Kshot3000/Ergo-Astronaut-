@@ -445,6 +445,23 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   transaction, and an independent Python build. A proof field
   is pasted data, never a signature this tool makes; it signs,
   broadcasts and sends nothing.
+- **HD address derivation** — where wallet addresses come
+  from: BIP32 child-key derivation (HMAC-SHA512 master and
+  steps, hardened and normal branches, ergo-wallet's
+  retry-with-next-index rule included) down EIP-3's path
+  m/44'/429'/account'/change/index, with a pure-JS SHA-512,
+  HMAC-SHA512 and secp256k1 implementation built for this
+  tool. The seed is pasted as hex (never a mnemonic — words
+  to seed is a wallet's job), only public keys and addresses
+  are displayed, no private key is ever shown, and every
+  derived address is round-tripped through the address
+  decoder before it appears. Verified against FIPS SHA-512
+  and RFC 4231 HMAC known answers, the well-known secp256k1
+  private-key 1/2 public keys, and an independent Python
+  oracle fed with the published BIP39 test seed and two
+  further seeds across accounts, branches and both networks.
+  The page warns in plain words never to type a real seed
+  into any website, this one included.
 
 ## Cross-chain integration
 

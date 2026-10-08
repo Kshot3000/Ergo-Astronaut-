@@ -570,6 +570,24 @@
         <button type="submit" class="btn primary">Build the transaction</button>
         <p id="txbuild-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="hd-calc">
+        <h3>31 · HD address derivation (seed → your wallet's addresses, EIP-3)</h3>
+        <p>Every Ergo wallet address comes from one seed by a fixed recipe, and until now this hub could check addresses but not show where they come from. The recipe is BIP32 with Ergo's EIP-3 path: the master key is HMAC-SHA512 (keyed with the words "Bitcoin seed") over the seed, split into a key and a chain code; each step down the path <code>m/44'/429'/account'/change/index</code> — 429 is Ergo's registered coin type — is another HMAC-SHA512 whose left half is added to the parent key modulo the secp256k1 group order, hardened steps (the ones with a ′) hashing the private key and normal steps hashing the public key, exactly as ergo-wallet's ExtendedSecretKey does it, including its retry-with-the-next-index rule for the astronomically rare invalid child. The last key's public key becomes a P2PK address through tool 8's construction, and every address shown is round-tripped through tool 11's decoder first. Paste a seed as hex — a BIP39 seed is 64 bytes, 128 hex characters; this tool takes no mnemonic words, because turning words into a seed is a wallet's job on a device you trust. Only public keys and addresses are ever displayed — no private key is shown — and the seed is not stored, logged or sent anywhere. Honest warning, in plain words: <strong>a seed is the master secret of a whole wallet. Never type a real one into any website, this one included</strong> — use a throwaway test seed here, and do real derivation inside your wallet.</p>
+        <label for="hd-seed">Seed (hex — 16 to 64 bytes; a BIP39 seed is 64 bytes / 128 hex characters)</label>
+        <textarea id="hd-seed" rows="2" spellcheck="false" placeholder="e.g. 5eb00bbddcf06908… (the published BIP39 test seed for the “abandon” test mnemonic — a test seed, safe to try)" autocomplete="off"></textarea>
+        <label for="hd-account">Account index</label>
+        <input id="hd-account" type="number" min="0" max="2147483647" step="1" value="0" autocomplete="off">
+        <label for="hd-change">Branch</label>
+        <select id="hd-change">
+          <option value="0">0 — receiving</option>
+          <option value="1">1 — change (internal)</option>
+        </select>
+        <label for="hd-count">How many addresses (1–20)</label>
+        <input id="hd-count" type="number" min="1" max="20" step="1" value="5" autocomplete="off">
+        <button type="submit" class="btn primary">Derive the addresses</button>
+        <p id="hd-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -615,6 +633,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=30"></script>
+<script src="app.js?v=31"></script>
 </body>
 </html>

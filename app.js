@@ -2450,8 +2450,270 @@ function buildErgoTransaction(fields) {
   };
 }
 
+/* ---------- SHA-512 + HMAC-SHA512 (FIPS 180-4 / RFC 2104) ---------- */
+/* Ergo's HD wallet math runs on HMAC-SHA512 (BIP32), which no other
+   tool here needed — Blake2b covers Ergo's hashes, SHA-256 covers
+   nothing in this hub. Pure-JS BigInt SHA-512, so it runs identically
+   in the browser and in Node for the tests. The round constants are
+   the standard fractional parts of the square/cube roots of the
+   first primes; they were regenerated from first principles in the
+   Python oracle and the whole implementation was verified against
+   hashlib (empty, short and multi-block inputs) and RFC 4231
+   HMAC test case 1 BEFORE any of it shipped here. */
+var S512_H = [
+  0x6a09e667f3bcc908n, 0xbb67ae8584caa73bn, 0x3c6ef372fe94f82bn, 0xa54ff53a5f1d36f1n,
+  0x510e527fade682d1n, 0x9b05688c2b3e6c1fn, 0x1f83d9abfb41bd6bn, 0x5be0cd19137e2179n
+];
+var S512_K = [
+  0x428a2f98d728ae22n, 0x7137449123ef65cdn, 0xb5c0fbcfec4d3b2fn, 0xe9b5dba58189dbbcn,
+  0x3956c25bf348b538n, 0x59f111f1b605d019n, 0x923f82a4af194f9bn, 0xab1c5ed5da6d8118n,
+  0xd807aa98a3030242n, 0x12835b0145706fben, 0x243185be4ee4b28cn, 0x550c7dc3d5ffb4e2n,
+  0x72be5d74f27b896fn, 0x80deb1fe3b1696b1n, 0x9bdc06a725c71235n, 0xc19bf174cf692694n,
+  0xe49b69c19ef14ad2n, 0xefbe4786384f25e3n, 0x0fc19dc68b8cd5b5n, 0x240ca1cc77ac9c65n,
+  0x2de92c6f592b0275n, 0x4a7484aa6ea6e483n, 0x5cb0a9dcbd41fbd4n, 0x76f988da831153b5n,
+  0x983e5152ee66dfabn, 0xa831c66d2db43210n, 0xb00327c898fb213fn, 0xbf597fc7beef0ee4n,
+  0xc6e00bf33da88fc2n, 0xd5a79147930aa725n, 0x06ca6351e003826fn, 0x142929670a0e6e70n,
+  0x27b70a8546d22ffcn, 0x2e1b21385c26c926n, 0x4d2c6dfc5ac42aedn, 0x53380d139d95b3dfn,
+  0x650a73548baf63den, 0x766a0abb3c77b2a8n, 0x81c2c92e47edaee6n, 0x92722c851482353bn,
+  0xa2bfe8a14cf10364n, 0xa81a664bbc423001n, 0xc24b8b70d0f89791n, 0xc76c51a30654be30n,
+  0xd192e819d6ef5218n, 0xd69906245565a910n, 0xf40e35855771202an, 0x106aa07032bbd1b8n,
+  0x19a4c116b8d2d0c8n, 0x1e376c085141ab53n, 0x2748774cdf8eeb99n, 0x34b0bcb5e19b48a8n,
+  0x391c0cb3c5c95a63n, 0x4ed8aa4ae3418acbn, 0x5b9cca4f7763e373n, 0x682e6ff3d6b2b8a3n,
+  0x748f82ee5defb2fcn, 0x78a5636f43172f60n, 0x84c87814a1f0ab72n, 0x8cc702081a6439ecn,
+  0x90befffa23631e28n, 0xa4506cebde82bde9n, 0xbef9a3f7b2c67915n, 0xc67178f2e372532bn,
+  0xca273eceea26619cn, 0xd186b8c721c0c207n, 0xeada7dd6cde0eb1en, 0xf57d4f7fee6ed178n,
+  0x06f067aa72176fban, 0x0a637dc5a2c898a6n, 0x113f9804bef90daen, 0x1b710b35131c471bn,
+  0x28db77f523047d84n, 0x32caab7b40c72493n, 0x3c9ebe0a15c9bebcn, 0x431d67c49c100d4cn,
+  0x4cc5d4becb3e42b6n, 0x597f299cfc657e2an, 0x5fcb6fab3ad6faecn, 0x6c44198c4a475817n
+];
+function sha512(bytes) {
+  var bitLen = BigInt(bytes.length) * 8n;
+  var total = bytes.length + 1;
+  while (total % 128 !== 112) total++;
+  total += 16;
+  var msg = new Uint8Array(total);
+  msg.set(bytes);
+  msg[bytes.length] = 0x80;
+  for (var i = 0; i < 16; i++) msg[total - 1 - i] = Number((bitLen >> BigInt(8 * i)) & 0xffn);
+  var h = S512_H.slice();
+  var w = new Array(80);
+  var ch, mj, s0, s1, t1, t2;
+  for (var off = 0; off < total; off += 128) {
+    for (var t = 0; t < 16; t++) {
+      var v = 0n;
+      for (var b = 0; b < 8; b++) v = (v << 8n) | BigInt(msg[off + t * 8 + b]);
+      w[t] = v;
+    }
+    for (t = 16; t < 80; t++) {
+      s0 = rotr64(w[t - 15], 1) ^ rotr64(w[t - 15], 8) ^ (w[t - 15] >> 7n);
+      s1 = rotr64(w[t - 2], 19) ^ rotr64(w[t - 2], 61) ^ (w[t - 2] >> 6n);
+      w[t] = (w[t - 16] + s0 + w[t - 7] + s1) & MASK64;
+    }
+    var a = h[0], bb = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
+    for (t = 0; t < 80; t++) {
+      s1 = rotr64(e, 14) ^ rotr64(e, 18) ^ rotr64(e, 41);
+      ch = (e & f) ^ ((e ^ MASK64) & g);
+      t1 = (hh + s1 + ch + S512_K[t] + w[t]) & MASK64;
+      s0 = rotr64(a, 28) ^ rotr64(a, 34) ^ rotr64(a, 39);
+      mj = (a & bb) ^ (a & c) ^ (bb & c);
+      t2 = (s0 + mj) & MASK64;
+      hh = g; g = f; f = e; e = (d + t1) & MASK64; d = c; c = bb; bb = a; a = (t1 + t2) & MASK64;
+    }
+    h[0] = (h[0] + a) & MASK64; h[1] = (h[1] + bb) & MASK64; h[2] = (h[2] + c) & MASK64; h[3] = (h[3] + d) & MASK64;
+    h[4] = (h[4] + e) & MASK64; h[5] = (h[5] + f) & MASK64; h[6] = (h[6] + g) & MASK64; h[7] = (h[7] + hh) & MASK64;
+  }
+  var out = new Uint8Array(64);
+  for (var j = 0; j < 8; j++) for (var k = 0; k < 8; k++) out[j * 8 + k] = Number((h[j] >> BigInt(8 * (7 - k))) & 0xffn);
+  return out;
+}
+function hmacSha512(keyBytes, msgBytes) {
+  var key = keyBytes;
+  if (key.length > 128) key = sha512(key);
+  var padded = new Uint8Array(128);
+  padded.set(key);
+  var inner = new Uint8Array(128 + msgBytes.length);
+  var outer = new Uint8Array(128 + 64);
+  for (var i = 0; i < 128; i++) { inner[i] = padded[i] ^ 0x36; outer[i] = padded[i] ^ 0x5c; }
+  inner.set(msgBytes, 128);
+  outer.set(sha512(inner), 128);
+  return sha512(outer);
+}
+
+/* ---------- secp256k1 public keys (Jacobian point math, BigInt) ---------- */
+/* The curve every Ergo key lives on. Constants are the standard
+   ones; the generator's y-coordinate was re-derived from x by the
+   oracle (a from-memory transcription dropped a digit and failed
+   the curve equation — caught before shipping, which is what the
+   oracle is for). Verified in the tests: private keys 1 and 2 map
+   to their well-known compressed public keys. */
+var SECP_P = BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f");
+var SECP_N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+var SECP_G = [BigInt("0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"),
+              BigInt("0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8"), 1n];
+function secpMod(x) { var r = x % SECP_P; return r >= 0n ? r : r + SECP_P; }
+function secpDouble(pt) {
+  if (pt === null || pt[1] === 0n) return null;
+  var x = pt[0], y = pt[1], z = pt[2];
+  var yy = secpMod(y * y);
+  var s = secpMod(4n * x * yy);
+  var m = secpMod(3n * x * x);
+  var nx = secpMod(m * m - 2n * s);
+  var ny = secpMod(m * (s - nx) - 8n * yy * yy);
+  return [nx, ny, secpMod(2n * y * z)];
+}
+function secpAdd(p1, p2) {
+  if (p1 === null) return p2;
+  if (p2 === null) return p1;
+  var z1z1 = secpMod(p1[2] * p1[2]), z2z2 = secpMod(p2[2] * p2[2]);
+  var u1 = secpMod(p1[0] * z2z2), u2 = secpMod(p2[0] * z1z1);
+  var s1 = secpMod(p1[1] * p2[2] * z2z2), s2 = secpMod(p2[1] * p1[2] * z1z1);
+  if (u1 === u2) {
+    if (s1 !== s2) return null;
+    return secpDouble(p1);
+  }
+  var h = secpMod(u2 - u1), r = secpMod(s2 - s1);
+  var hh = secpMod(h * h), hhh = secpMod(h * hh);
+  var v = secpMod(u1 * hh);
+  var nx = secpMod(r * r - hhh - 2n * v);
+  var ny = secpMod(r * (v - nx) - s1 * hhh);
+  return [nx, ny, secpMod(h * p1[2] * p2[2])];
+}
+function secp256k1PublicKey(privBytes) {
+  if (!privBytes || privBytes.length !== 32) return null;
+  var d = 0n;
+  for (var i = 0; i < 32; i++) d = (d << 8n) | BigInt(privBytes[i]);
+  if (d === 0n || d >= SECP_N) return null;
+  var pt = null;
+  for (var bit = 255; bit >= 0; bit--) {
+    pt = secpDouble(pt) || (bit === 255 ? null : pt);
+    if (pt === null && bit !== 255) pt = null;
+    if (((d >> BigInt(bit)) & 1n) === 1n) pt = secpAdd(pt, SECP_G);
+    if (bit === 255 && ((d >> 255n) & 1n) === 0n) pt = null;
+  }
+  if (pt === null) return null;
+  /* Jacobian -> affine: one inversion via Fermat's little theorem */
+  var zInv = 1n, base = pt[2], exp = SECP_P - 2n;
+  var b = base, e2 = exp;
+  var acc = 1n;
+  while (e2 > 0n) { if ((e2 & 1n) === 1n) acc = secpMod(acc * b); b = secpMod(b * b); e2 >>= 1n; }
+  zInv = acc;
+  var zInv2 = secpMod(zInv * zInv);
+  var ax = secpMod(pt[0] * zInv2);
+  var ay = secpMod(pt[1] * zInv2 * zInv);
+  var out = new Uint8Array(33);
+  out[0] = (ay & 1n) === 1n ? 0x03 : 0x02;
+  for (var k = 0; k < 32; k++) out[1 + k] = Number((ax >> BigInt(8 * (31 - k))) & 0xffn);
+  return out;
+}
+
+/* ---------- HD address derivation (BIP32 + EIP-3, seed -> addresses) ---------- */
+/* How every Ergo wallet turns one seed into addresses: the master
+   key is HMAC-SHA512(key "Bitcoin seed", seed) split in half
+   (key | chain code); each child is HMAC-SHA512(chain code, data)
+   where data is 0x00 + parent key + index for hardened steps and
+   the parent's compressed public key + index for normal steps, and
+   the child key is (left half + parent key) mod the group order —
+   exactly ergo-wallet's ExtendedSecretKey, including its retry with
+   index+1 when a child would be invalid (probability ~2^-127, but
+   the reference does it, so this does too). EIP-3 fixes the path:
+   m/44'/429'/account'/change/index, coin type 429. Only public
+   material ever leaves this function — public keys and addresses,
+   never private keys — and the derived addresses are round-tripped
+   through tool 11's decoder before being shown. The seed itself is
+   the master secret of a wallet: the form says so in plain words,
+   and nothing here is stored or sent anywhere. Verified in the
+   tests against an independent Python implementation (hashlib/hmac
+   + pure-Python curve math) fed with the published BIP39 test seed
+   for "abandon" x11 + "about" and two further seeds, on both
+   networks, hardened and non-hardened branches alike. */
+var HD_HARDENED = 0x80000000;
+var HD_COIN_TYPE = 429;
+function hdMasterKey(seedBytes) {
+  var digest = hmacSha512(utf8Bytes("Bitcoin seed"), seedBytes);
+  return { key: digest.slice(0, 32), chain: digest.slice(32, 64) };
+}
+function hdChildKey(parent, index) {
+  var idx = index;
+  for (;;) {
+    var data;
+    if (idx >= HD_HARDENED) {
+      data = new Uint8Array(37);
+      data[0] = 0;
+      data.set(parent.key, 1);
+    } else {
+      data = new Uint8Array(37);
+      data.set(secp256k1PublicKey(parent.key), 0);
+    }
+    for (var i = 0; i < 4; i++) data[33 + i] = (idx >>> (8 * (3 - i))) & 0xff;
+    var digest = hmacSha512(parent.chain, data);
+    var left = 0n;
+    for (var j = 0; j < 32; j++) left = (left << 8n) | BigInt(digest[j]);
+    var parentInt = 0n;
+    for (var k = 0; k < 32; k++) parentInt = (parentInt << 8n) | BigInt(parent.key[k]);
+    var child = (left + parentInt) % SECP_N;
+    if (left < SECP_N && child !== 0n) {
+      var key = new Uint8Array(32);
+      for (var m = 0; m < 32; m++) key[m] = Number((child >> BigInt(8 * (31 - m))) & 0xffn);
+      return { key: key, chain: digest.slice(32, 64) };
+    }
+    idx += 1;
+    if (idx > 0xffffffff) return null;
+  }
+}
+function parseHdIndex(str, what) {
+  var s = (str == null ? "" : String(str)).trim();
+  if (!/^(0|[1-9][0-9]*)$/.test(s)) return { error: what + " must be a whole number — got \"" + s + "\"." };
+  var v = Number(s);
+  if (!Number.isSafeInteger(v) || v > 2147483647) return { error: what + " must be between 0 and 2147483647 (the BIP32 index space is 31 bits plus the hardened flag)." };
+  return { value: v };
+}
+function deriveHdAddresses(seedHex, accountStr, changeStr, countStr) {
+  var fail = function (reason) { return { valid: false, reason: reason, rows: [] }; };
+  var s = (seedHex == null ? "" : String(seedHex)).trim().toLowerCase().replace(/^0x/, "");
+  if (!/^[0-9a-f]+$/.test(s) || s.length % 2 !== 0) return fail("The seed must be hex — an even number of 0-9/a-f characters. A BIP39 seed is 64 bytes (128 hex characters); the words themselves are not a seed, and this tool deliberately takes no mnemonic: converting words to a seed is a wallet's job, on a device you trust.");
+  var seedBytes = hexToBytes(s);
+  if (seedBytes === null || seedBytes.length < 16 || seedBytes.length > 64) return fail("The seed must be 16 to 64 bytes (32 to 128 hex characters) — the BIP32 seed length range. A standard BIP39 seed is 64 bytes.");
+  var account = parseHdIndex(accountStr === "" || accountStr == null ? "0" : accountStr, "The account index");
+  if (account.error) return fail(account.error);
+  var changeParsed = parseHdIndex(changeStr === "" || changeStr == null ? "0" : changeStr, "The change index");
+  if (changeParsed.error) return fail(changeParsed.error);
+  if (changeParsed.value > 1) return fail("The change index is 0 for receiving addresses or 1 for internal change addresses — EIP-3 wallets use those two branches.");
+  var countParsed = parseHdIndex(countStr === "" || countStr == null ? "5" : countStr, "The address count");
+  if (countParsed.error) return fail(countParsed.error);
+  if (countParsed.value < 1 || countParsed.value > 20) return fail("The address count must be between 1 and 20 — enough to check a wallet's first screen of addresses without turning this page into a key grinder.");
+  var node = hdMasterKey(seedBytes);
+  var pathIdx = [44 + HD_HARDENED, HD_COIN_TYPE + HD_HARDENED, account.value + HD_HARDENED, changeParsed.value];
+  for (var p = 0; p < pathIdx.length; p++) {
+    node = hdChildKey(node, pathIdx[p]);
+    if (node === null) return fail("Derivation hit the index ceiling — no valid child key exists at this path.");
+  }
+  var rows = [];
+  for (var i = 0; i < countParsed.value; i++) {
+    var child = hdChildKey(node, i);
+    if (child === null) return fail("Derivation hit the index ceiling — no valid child key exists at this path.");
+    var pub = secp256k1PublicKey(child.key);
+    if (pub === null) return fail("A derived key fell outside the curve's valid range — refusing to invent an address for it.");
+    var pubHex = bytesToHex(pub);
+    var mainnet = p2pkAddressFromPublicKey(pubHex, "mainnet");
+    var testnet = p2pkAddressFromPublicKey(pubHex, "testnet");
+    var backMain = decodeErgoAddress(mainnet);
+    var backTest = decodeErgoAddress(testnet);
+    if (!backMain.valid || backMain.publicKey !== pubHex || !backTest.valid || backTest.publicKey !== pubHex) {
+      return fail("Internal round-trip check failed: a derived address does not decode back to its own public key — refusing to show it.");
+    }
+    rows.push({
+      index: i,
+      path: "m/44'/429'/" + account.value + "'/" + changeParsed.value + "/" + i,
+      publicKey: pubHex,
+      mainnet: mainnet,
+      testnet: testnet
+    });
+  }
+  return { valid: true, reason: null, account: account.value, change: changeParsed.value, rows: rows };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE };
 }
 
 if (typeof document !== "undefined") {
@@ -3046,6 +3308,27 @@ if (typeof document !== "undefined") {
       if (res.tokenIds.length > 0) msg += "Distinct token IDs, in first-appearance order: " + res.tokenIds.join(", ") + " — the outputs name their tokens by index into this list. ";
       msg += "Serialized bytes: " + res.txHex + " ";
       msg += "The bytes were round-tripped through tool 29's parser field-for-field before being shown. Building is not broadcasting: this transaction exists on no chain until it is signed with real proofs and accepted by a node, and no fee check is possible here — a fee is inputs minus outputs, and the input boxes' values are not part of what you entered, only their IDs. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- HD address derivation (EIP-3) --- */
+    document.getElementById("hd-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("hd-result");
+      var res = deriveHdAddresses(
+        document.getElementById("hd-seed").value,
+        document.getElementById("hd-account").value,
+        document.getElementById("hd-change").value,
+        document.getElementById("hd-count").value
+      );
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Derived " + res.rows.length + " address(es) locally on the EIP-3 path (account " + res.account + ", " + (res.change === 0 ? "receiving" : "change") + " branch). " + res.rows.map(function (r) {
+        return "#" + r.index + " — " + r.path + " — public key " + r.publicKey + " — mainnet " + r.mainnet + " — testnet " + r.testnet;
+      }).join("; ") + ". ";
+      msg += "Only public keys and addresses are shown — no private key ever leaves the derivation, and the seed you typed never left this page: it was not stored, logged or sent anywhere. Prefer a test seed for trying this out; a real seed belongs in a wallet, not a website.";
       out.textContent = msg;
     });
 

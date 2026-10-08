@@ -576,6 +576,163 @@ function analyzeEmission(heightStr) {
   };
 }
 
+/* ---------- EIP-4 token metadata codec ---------- */
+/* EIP-4 (ergoplatform/eips, the asset standard) fixes how a token's
+   issuance box describes the token: R4 holds the name, R5 the
+   description and R6 the number of decimals, each encoded as a
+   Coll[Byte] Sigma constant holding the UTF-8 TEXT of the value —
+   the type byte 0x0e, a VLQ byte-length, then the bytes. Decimals
+   included: the EIP's own worked example (the "USD" token issued in
+   block 98288) encodes 2 decimals as the one-character string "2",
+   hex 0e0132 — not as an Int constant. Some tokens in the wild do
+   carry R6 as an Int constant (type byte 0x04, zigzag VLQ); the
+   decoder accepts that form too and says which form it found. R7
+   optionally carries a 1-2 byte asset type, also as Coll[Byte]:
+   category 0x01 is NFT (subcategories 0x01 picture, 0x02 audio,
+   0x03 video, 0x04 collection, 0x0f file attachments) and 0x02 is
+   membership tokens (0x01 threshold signature). Encodings verified
+   against the EIP's own published examples (R4 0e03555344 for
+   "USD", R5 and R6 likewise, R7 0e020101 / 0e02010f / 0e020201)
+   with an independent Python build before coding. Everything is
+   computed locally from what you type; a token also needs its ID —
+   the box ID of the issuing transaction's first input — which is a
+   chain fact this tool does not invent. Registers only: it builds
+   no transaction, signs nothing and mints nothing. */
+var EIP4_ASSET_TYPES = {
+  picture: { bytes: [1, 1], label: "NFT — picture artwork" },
+  audio: { bytes: [1, 2], label: "NFT — audio artwork" },
+  video: { bytes: [1, 3], label: "NFT — video artwork" },
+  collection: { bytes: [1, 4], label: "NFT — artwork collection" },
+  attachments: { bytes: [1, 15], label: "NFT — file attachments" },
+  membership: { bytes: [2, 1], label: "Membership token — threshold signature" },
+  nft: { bytes: [1], label: "NFT (category only, no subcategory)" }
+};
+var EIP4_ASSET_LABELS = {
+  "1,1": "NFT — picture artwork",
+  "1,2": "NFT — audio artwork",
+  "1,3": "NFT — video artwork",
+  "1,4": "NFT — artwork collection",
+  "1,15": "NFT — file attachments",
+  "2,1": "Membership token — threshold signature",
+  "1": "NFT (category only, no subcategory)"
+};
+function eip4CollHex(payloadBytes) {
+  return bytesToHex([0x0e].concat(writeVlqBig(BigInt(payloadBytes.length)), Array.from(payloadBytes)));
+}
+function eip4CollStringHex(str) {
+  return eip4CollHex(utf8Bytes(str));
+}
+function eip4ParseColl(bytes) {
+  if (!bytes || bytes.length < 2 || bytes[0] !== 0x0e) return null;
+  var len = readVlqBig(bytes, 1);
+  if (!len) return null;
+  var start = 1 + len.length;
+  if (start + Number(len.value) !== bytes.length) return null;
+  return Array.from(bytes.slice(start));
+}
+function utf8Text(bytes) {
+  if (typeof TextDecoder !== "undefined") {
+    try { return new TextDecoder("utf-8").decode(new Uint8Array(bytes)); } catch (e) { /* fall through */ }
+  }
+  var s = "";
+  for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  try { return decodeURIComponent(escape(s)); } catch (e) { return s; }
+}
+function utf8RoundTrips(text, payloadBytes) {
+  var re = Array.from(utf8Bytes(text));
+  if (re.length !== payloadBytes.length) return false;
+  for (var i = 0; i < re.length; i++) if (re[i] !== payloadBytes[i]) return false;
+  return true;
+}
+function buildEip4Registers(nameStr, descStr, decStr, typeStr) {
+  var name = nameStr == null ? "" : String(nameStr);
+  if (name === "") return null;
+  var desc = descStr == null ? "" : String(descStr);
+  var dec = (decStr == null ? "" : String(decStr)).trim();
+  if (!/^\d+$/.test(dec)) return null;
+  if (dec.length > 1 && dec.charAt(0) === "0") return null;
+  if (dec.length > 3) return null;
+  var type = (typeStr == null ? "" : String(typeStr)).trim().toLowerCase();
+  var asset = null;
+  if (type !== "") {
+    asset = EIP4_ASSET_TYPES[type] || null;
+    if (!asset) return null;
+  }
+  return {
+    name: name,
+    description: desc,
+    decimals: dec,
+    r4Hex: eip4CollStringHex(name),
+    r5Hex: desc === "" ? null : eip4CollStringHex(desc),
+    r6Hex: eip4CollStringHex(dec),
+    r7Hex: asset ? eip4CollHex(asset.bytes) : null,
+    assetType: asset ? asset.label : null
+  };
+}
+function decodeEip4Registers(r4Str, r5Str, r6Str, r7Str) {
+  var inputs = [r4Str, r5Str, r6Str, r7Str].map(function (x) {
+    return (x == null ? "" : String(x)).replace(/\s+/g, "");
+  });
+  if (inputs.every(function (x) { return x === ""; })) return null;
+  var out = {
+    name: null, nameValidUtf8: null,
+    description: null, descriptionValidUtf8: null,
+    decimals: null, decimalsForm: null,
+    assetCategory: null, assetSubcategory: null, assetType: null,
+    rawHex: { r4: null, r5: null, r6: null, r7: null }
+  };
+  var textReg = function (idx, isDesc) {
+    var bytes = hexToBytes(inputs[idx]);
+    if (!bytes) return false;
+    var payload = eip4ParseColl(bytes);
+    if (!payload) return false;
+    var text = utf8Text(payload);
+    var ok = utf8RoundTrips(text, payload);
+    if (isDesc) { out.description = text; out.descriptionValidUtf8 = ok; out.rawHex.r5 = bytesToHex(bytes); }
+    else { out.name = text; out.nameValidUtf8 = ok; out.rawHex.r4 = bytesToHex(bytes); }
+    return true;
+  };
+  if (inputs[0] !== "" && !textReg(0, false)) return null;
+  if (inputs[1] !== "" && !textReg(1, true)) return null;
+  if (inputs[2] !== "") {
+    var b6 = hexToBytes(inputs[2]);
+    if (!b6 || b6.length === 0) return null;
+    if (b6[0] === 0x0e) {
+      var p6 = eip4ParseColl(b6);
+      if (!p6) return null;
+      var t6 = utf8Text(p6);
+      if (!/^\d+$/.test(t6) || !utf8RoundTrips(t6, p6)) return null;
+      out.decimals = t6.replace(/^0+(?=\d)/, "");
+      out.decimalsForm = "string";
+    } else if (b6[0] === 0x04) {
+      var v6 = readVlqBig(b6, 1);
+      if (!v6 || 1 + v6.length !== b6.length) return null;
+      var d6 = zigzagDecode32(v6.value);
+      if (d6 < 0n) return null;
+      out.decimals = d6.toString();
+      out.decimalsForm = "int";
+    } else {
+      return null;
+    }
+    out.rawHex.r6 = bytesToHex(b6);
+  }
+  if (inputs[3] !== "") {
+    var b7 = hexToBytes(inputs[3]);
+    if (!b7) return null;
+    var p7 = eip4ParseColl(b7);
+    if (!p7 || p7.length < 1 || p7.length > 2) return null;
+    out.assetCategory = p7[0];
+    out.assetSubcategory = p7.length > 1 ? p7[1] : null;
+    var key = p7.join(",");
+    out.assetType = EIP4_ASSET_LABELS[key] ||
+      (p7[0] === 1 ? "NFT category, unlisted subcategory" :
+       p7[0] === 2 ? "Membership category, unlisted subcategory" :
+       "Unrecognised asset category");
+    out.rawHex.r7 = bytesToHex(b7);
+  }
+  return out;
+}
+
 /* ---------- UTXO payment planner ---------- */
 /* Ergo's eUTXO model spends boxes whole: to pay an amount plus the
    transaction fee, a wallet selects input boxes (in some order) until
@@ -1744,7 +1901,7 @@ function buildErgoBox(fields) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers };
 }
 
 if (typeof document !== "undefined") {
@@ -1967,6 +2124,43 @@ if (typeof document !== "undefined") {
         msg += " By the end of this block, " + res.issuedErg + " ERG of the " + res.totalErg + " ERG maximum has been issued (" + fmtEstimate(res.percentIssued) + "%), with " + res.remainingErg + " ERG left to issue.";
       }
       out.textContent = msg;
+    });
+
+    /* --- EIP-4 token metadata codec --- */
+    document.getElementById("eip4-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("eip4-result");
+      var dir = document.getElementById("eip4-direction").value;
+      if (dir === "encode") {
+        var enc = buildEip4Registers(
+          document.getElementById("eip4-name").value,
+          document.getElementById("eip4-desc").value,
+          document.getElementById("eip4-decimals").value,
+          document.getElementById("eip4-type").value);
+        if (enc === null) {
+          out.textContent = "To encode: give a token name, and decimals as a whole number from 0 to 999 with no leading zeros (EIP-4 writes it as text). The description is optional — leave it empty and R5 is simply omitted.";
+          return;
+        }
+        var emsg = "Your EIP-4 issuance registers — R4 (name): " + enc.r4Hex + " · R5 (description): " + (enc.r5Hex === null ? "omitted (no description given)" : enc.r5Hex) + " · R6 (decimals): " + enc.r6Hex + (enc.r7Hex === null ? " · R7 (asset type): not set" : " · R7 (asset type, " + enc.assetType + "): " + enc.r7Hex) + ".";
+        emsg += " Each one is a Coll[Byte] constant — 0e, a VLQ byte-length, then the UTF-8 bytes — and R6 carries the decimals as text (\"" + enc.decimals + "\"), exactly as EIP-4's own worked example does; it is not an Int constant. These registers describe the token in its issuance box; the token's ID is the box ID of that transaction's first input, a chain fact no register contains. Registers only — this builds no transaction and mints nothing.";
+        out.textContent = emsg;
+        return;
+      }
+      var dec = decodeEip4Registers(
+        document.getElementById("eip4-r4").value,
+        document.getElementById("eip4-r5").value,
+        document.getElementById("eip4-r6").value,
+        document.getElementById("eip4-r7").value);
+      if (dec === null) {
+        out.textContent = "To decode: paste at least one register's hex exactly as an explorer or node API shows it (R4, R5 and R7 are Coll[Byte] constants starting 0e; R6 is either that or an Int constant starting 04). A register that does not parse is refused rather than guessed at — leave the ones you don't have empty.";
+        return;
+      }
+      var parts = [];
+      if (dec.name !== null) parts.push("R4 name: \"" + dec.name + "\"" + (dec.nameValidUtf8 ? "" : " (the bytes are not clean UTF-8, so treat this reading with care)"));
+      if (dec.description !== null) parts.push("R5 description: \"" + dec.description + "\"" + (dec.descriptionValidUtf8 ? "" : " (the bytes are not clean UTF-8, so treat this reading with care)"));
+      if (dec.decimals !== null) parts.push("R6 decimals: " + dec.decimals + (dec.decimalsForm === "int" ? " (carried as an Int constant — a form some tokens use in the wild; EIP-4's own form is the text string)" : " (carried as text, EIP-4's own form)"));
+      if (dec.assetType !== null) parts.push("R7 asset type: " + dec.assetType + " (category " + dec.assetCategory + (dec.assetSubcategory !== null ? ", subcategory " + dec.assetSubcategory : ", no subcategory") + ")");
+      out.textContent = "Decoded — " + parts.join(" · ") + ". Registers read locally; nothing was fetched or verified against the chain, so check the token ID on the explorer for the full picture.";
     });
 
     /* --- P2PK address builder --- */

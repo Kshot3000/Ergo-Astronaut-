@@ -485,6 +485,43 @@
         <button type="submit" class="btn primary">Read the schedule at this height</button>
         <p id="emission-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="eip4-calc">
+        <h3>27 · EIP-4 token metadata codec (token name, description, decimals ⇄ issuance registers)</h3>
+        <p>Every Ergo token describes itself in its issuance box, and EIP-4 — the ecosystem's asset standard — fixes the format: R4 holds the token name, R5 the description and R6 the number of decimals, each as a Coll[Byte] constant carrying the UTF-8 <em>text</em> of the value: the byte <code>0e</code>, a VLQ byte-length, then the bytes. That includes the decimals — EIP-4's own worked example (the "USD" token issued back in block 98,288) encodes 2 decimals as the one-character string "2", hex <code>0e0132</code>, not as a number; some tokens in the wild do use an Int constant for R6 instead, and my decoder accepts that form too and tells you which one it found. R7 can add a 1–2 byte asset type — NFT picture/audio/video/collection/file-attachments, or a membership token — also as Coll[Byte]. Encode your metadata into the exact register hex an issuance box needs, or paste registers from an explorer to read them back. Everything runs locally on what you type; the token's ID is a separate chain fact (the box ID of the issuing transaction's first input) that no register contains. Registers only — this builds no transaction, signs nothing and mints nothing.</p>
+        <label for="eip4-direction">Direction</label>
+        <select id="eip4-direction">
+          <option value="encode">Encode: metadata → registers</option>
+          <option value="decode">Decode: registers → metadata</option>
+        </select>
+        <label for="eip4-name">Token name (encode)</label>
+        <input id="eip4-name" placeholder="e.g. USD" autocomplete="off">
+        <label for="eip4-desc">Token description (encode, optional)</label>
+        <input id="eip4-desc" placeholder="e.g. Nothing backed USD token" autocomplete="off">
+        <label for="eip4-decimals">Decimals (encode)</label>
+        <input id="eip4-decimals" inputmode="numeric" placeholder="e.g. 2" autocomplete="off">
+        <label for="eip4-type">Asset type (encode, optional)</label>
+        <select id="eip4-type">
+          <option value="">None — plain token</option>
+          <option value="picture">NFT — picture artwork</option>
+          <option value="audio">NFT — audio artwork</option>
+          <option value="video">NFT — video artwork</option>
+          <option value="collection">NFT — artwork collection</option>
+          <option value="attachments">NFT — file attachments</option>
+          <option value="membership">Membership token — threshold signature</option>
+          <option value="nft">NFT (category only)</option>
+        </select>
+        <label for="eip4-r4">R4 hex (decode)</label>
+        <input id="eip4-r4" placeholder="e.g. 0e03555344" autocomplete="off">
+        <label for="eip4-r5">R5 hex (decode)</label>
+        <input id="eip4-r5" placeholder="e.g. 0e184e6f7468696e67206261636b65642055534420746f6b656e" autocomplete="off">
+        <label for="eip4-r6">R6 hex (decode)</label>
+        <input id="eip4-r6" placeholder="e.g. 0e0132" autocomplete="off">
+        <label for="eip4-r7">R7 hex (decode)</label>
+        <input id="eip4-r7" placeholder="e.g. 0e020101" autocomplete="off">
+        <button type="submit" class="btn primary">Convert</button>
+        <p id="eip4-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -530,6 +567,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=26"></script>
+<script src="app.js?v=27"></script>
 </body>
 </html>

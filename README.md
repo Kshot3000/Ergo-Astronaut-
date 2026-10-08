@@ -380,6 +380,20 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   the arithmetic is exact BigInt, cross-checked against a
   brute-force sum over every block. Schedule only — it signs
   and sends nothing.
+- **EIP-4 token metadata codec** — encodes a token's name,
+  description and decimals (plus an optional R7 asset type)
+  into the exact issuance-box register hex EIP-4 specifies,
+  and decodes registers pasted from an explorer back into
+  readable metadata. R4, R5 and R6 are Coll[Byte] constants
+  (0x0e + VLQ byte-length + UTF-8 bytes) holding the TEXT of
+  each value — decimals included: EIP-4's own worked example
+  (the "USD" token from block 98,288) encodes 2 decimals as
+  the string "2", hex 0e0132, not as an Int constant. The
+  decoder also accepts the Int-constant R6 form some tokens
+  carry in the wild, and says which form it found. Encodings
+  verified against the EIP's own published examples with an
+  independent Python build. Registers only — it builds no
+  transaction, signs nothing and mints nothing.
 
 ## Cross-chain integration
 

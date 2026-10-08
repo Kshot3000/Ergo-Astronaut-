@@ -510,6 +510,24 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   scratch over fleet-sdk's published box vectors: a balanced
   fee-paying case, a burn-and-mint case, an unbalanced case,
   and a data-input case.
+- **Token-aware payment planner** — your serialized boxes
+  plus a payment that needs ERG and specific raw token
+  amounts: deterministic two-phase selection (boxes carrying
+  still-needed tokens first, in listed order, then the rest
+  in order until payment + fee is covered), exact BigInt
+  throughout. The change accounting is complete: ERG change
+  (with the dust flag), each requested token's leftover,
+  and any unrequested token the selected boxes carry —
+  spent tokens never vanish, they ride into the change
+  box. Leftover tokens with an ERG change of exactly zero
+  are flagged (a change output holding tokens must itself
+  hold ERG), and shortfalls are reported per token and for
+  ERG. It composes the box parser rather than re-deriving
+  box maths. Verified against an independent Python oracle
+  over fleet-sdk's published box vectors: token-phase
+  ordering, a one-box cover, token and ERG shortfalls, an
+  unrequested token riding into change, and the
+  zero-ERG-change trap.
 
 ## Cross-chain integration
 

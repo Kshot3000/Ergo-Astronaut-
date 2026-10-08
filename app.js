@@ -2989,8 +2989,142 @@ function analyzeTxFee(txHex, boxesText) {
   };
 }
 
+/* ---------- Token-aware payment planner ---------- */
+/* Tool 9 plans an ERG-only payment over box VALUES the user types.
+   Real payments often need tokens as well, and tokens live inside
+   specific boxes — a value-only plan cannot know which boxes carry
+   them. This planner takes the boxes themselves (tool 15's bytes,
+   one per line) plus a list of token requirements (token ID + raw
+   amount, one per line) and selects deterministically in two
+   phases, the way the phases are stated on the page:
+     phase 1 (tokens): walk the boxes in listed order, selecting
+       any box that holds a token whose remaining need is open,
+       until every token need is covered or the boxes run out;
+     phase 2 (ERG): walk the still-unselected boxes in listed
+       order, selecting until the selected ERG covers payment+fee.
+   Everything is exact BigInt over the parsed boxes (it composes
+   parseErgoBox rather than re-deriving box maths). The report is
+   complete about change: ERG change, each requested token's
+   leftover, and any token the selected boxes carry that was never
+   requested — unrequested tokens do not vanish when their box is
+   spent, they ride into the change box, and a plan that hid them
+   would lose them on paper. Two traps are flagged plainly: ERG
+   change above zero but below the safe user minimum is dust
+   (tool 9's rule), and leftover tokens with an ERG change of
+   exactly zero have nothing to carry them — a change output
+   holding tokens must itself hold ERG, so that plan needs one
+   more input or a smaller payment. Shortfalls are reported per
+   token and for ERG, never averaged away. Planning only: it
+   fetches nothing, signs nothing and sends nothing. */
+function planTokenPayment(boxesText, paymentStr, feeStr, tokensText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, sufficient: null, selectedBoxIds: null, selectedCount: null, boxCount: null, unselectedCount: null, neededNano: null, neededErg: null, selectedNano: null, selectedErg: null, changeNano: null, changeErg: null, changeIsDust: null, ergShortfallNano: null, ergShortfallErg: null, tokens: null, tokensSufficient: null, changeTokens: null, tokenChangeWithoutErg: null };
+  };
+  var payment = ergToNano(paymentStr);
+  var fee = ergToNano(feeStr);
+  if (payment === null || fee === null) return fail("Enter the payment and fee as ERG amounts (for example 0.1 and 0.001) — the payment must be above zero and the fee zero or above; token amounts are entered separately, in raw units, below.");
+  var payNano = BigInt(payment);
+  var feeNano = BigInt(fee);
+  if (payNano <= 0n || feeNano < 0n) return fail("The payment must be above zero and the fee zero or above — a plan to pay nothing, or to be paid by the fee, is not a payment plan.");
+  var lines = (boxesText == null ? "" : String(boxesText)).split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  if (lines.length === 0) return fail("Paste the boxes the payment may spend, one full serialized box per line (the bytes tool 15 reads — explorers link each box from an address's page). Token needs live inside specific boxes, so a plan over values alone cannot say which boxes carry them.");
+  if (lines.length > 100) return fail("That is " + lines.length + " lines — this planner takes at most 100 boxes at a time, so a pasted set stays reviewable line by line.");
+  var boxes = [];
+  var seen = {};
+  for (var i = 0; i < lines.length; i++) {
+    var parsed = parseErgoBox(lines[i]);
+    if (!parsed.valid) return fail("Line " + (i + 1) + " does not parse as a serialized box: " + parsed.reason + " The whole plan is refused rather than made without it — a skipped box could be the one carrying a needed token.");
+    if (Object.prototype.hasOwnProperty.call(seen, parsed.boxId)) return fail("Line " + (i + 1) + " is the same box as line " + seen[parsed.boxId] + " (box ID " + parsed.boxId + ") — a box listed twice would be counted twice in the plan, and a box can only be spent once; remove the duplicate line.");
+    seen[parsed.boxId] = i + 1;
+    boxes.push(parsed);
+  }
+  var requirements = [];
+  var reqSeen = {};
+  var tokLines = (tokensText == null ? "" : String(tokensText)).split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  if (tokLines.length > 100) return fail("That is " + tokLines.length + " token lines — at most 100 token requirements at a time.");
+  for (var r = 0; r < tokLines.length; r++) {
+    var parts = tokLines[r].split(/\s+/);
+    if (parts.length !== 2 || !/^[0-9a-fA-F]{64}$/.test(parts[0]) || !/^[0-9]+$/.test(parts[1]) || BigInt(parts[1]) <= 0n) return fail("Token line " + (r + 1) + " is not in the form \"<64-hex token ID> <raw amount>\" with a positive whole raw amount — amounts are the raw on-chain integers (tool 6 converts a display amount once you know the token's decimals).");
+    var tid = parts[0].toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(reqSeen, tid)) return fail("Token line " + (r + 1) + " repeats token " + tid + " — state each token's total raw requirement on one line, so the plan's per-token accounting stays unambiguous.");
+    reqSeen[tid] = true;
+    requirements.push({ tokenId: tid, required: BigInt(parts[1]) });
+  }
+  var needed = payNano + feeNano;
+  var remaining = requirements.map(function (q) { return q.required; });
+  var chosen = boxes.map(function () { return false; });
+  var selectedIdx = [];
+  var a, b, t;
+  for (a = 0; a < boxes.length; a++) {
+    var allMet = true;
+    for (var m = 0; m < remaining.length; m++) if (remaining[m] > 0n) { allMet = false; break; }
+    if (allMet) break;
+    var useful = false;
+    for (t = 0; t < boxes[a].tokens.length; t++) {
+      for (var q2 = 0; q2 < requirements.length; q2++) {
+        if (boxes[a].tokens[t].tokenId === requirements[q2].tokenId && remaining[q2] > 0n) useful = true;
+      }
+    }
+    if (useful) {
+      chosen[a] = true; selectedIdx.push(a);
+      for (t = 0; t < boxes[a].tokens.length; t++) {
+        for (var q3 = 0; q3 < requirements.length; q3++) {
+          if (boxes[a].tokens[t].tokenId === requirements[q3].tokenId) remaining[q3] -= BigInt(boxes[a].tokens[t].amount);
+        }
+      }
+    }
+  }
+  var selectedNano = 0n;
+  for (a = 0; a < selectedIdx.length; a++) selectedNano += BigInt(boxes[selectedIdx[a]].valueNano);
+  for (b = 0; b < boxes.length && selectedNano < needed; b++) {
+    if (!chosen[b]) { chosen[b] = true; selectedIdx.push(b); selectedNano += BigInt(boxes[b].valueNano); }
+  }
+  var selTokens = {};
+  var selOrder = [];
+  for (a = 0; a < selectedIdx.length; a++) {
+    var bx = boxes[selectedIdx[a]];
+    for (t = 0; t < bx.tokens.length; t++) {
+      var tk = bx.tokens[t];
+      if (!Object.prototype.hasOwnProperty.call(selTokens, tk.tokenId)) { selTokens[tk.tokenId] = 0n; selOrder.push(tk.tokenId); }
+      selTokens[tk.tokenId] += BigInt(tk.amount);
+    }
+  }
+  var tokenReport = requirements.map(function (q) {
+    var got = Object.prototype.hasOwnProperty.call(selTokens, q.tokenId) ? selTokens[q.tokenId] : 0n;
+    return {
+      tokenId: q.tokenId, required: q.required.toString(), selected: got.toString(),
+      change: (got > q.required ? got - q.required : 0n).toString(),
+      shortfall: (got < q.required ? q.required - got : 0n).toString()
+    };
+  });
+  var tokensSufficient = tokenReport.every(function (tr) { return tr.shortfall === "0"; });
+  var changeTokens = [];
+  for (a = 0; a < selOrder.length; a++) {
+    if (!Object.prototype.hasOwnProperty.call(reqSeen, selOrder[a])) changeTokens.push({ tokenId: selOrder[a], amount: selTokens[selOrder[a]].toString() });
+  }
+  var change = selectedNano - needed;
+  var ergShortfall = change < 0n ? -change : 0n;
+  var changeClamped = change > 0n ? change : 0n;
+  var anyTokenChange = changeTokens.length > 0 || tokenReport.some(function (tr) { return tr.change !== "0"; });
+  return {
+    valid: true, reason: null,
+    sufficient: ergShortfall === 0n && tokensSufficient,
+    selectedBoxIds: selectedIdx.map(function (ix) { return boxes[ix].boxId; }),
+    selectedCount: selectedIdx.length, boxCount: boxes.length,
+    unselectedCount: boxes.length - selectedIdx.length,
+    neededNano: needed.toString(), neededErg: nanoToErg(needed.toString()),
+    selectedNano: selectedNano.toString(), selectedErg: nanoToErg(selectedNano.toString()),
+    changeNano: changeClamped.toString(), changeErg: nanoToErg(changeClamped.toString()),
+    changeIsDust: change > 0n && change < SAFE_USER_MIN_BOX_NANO,
+    ergShortfallNano: ergShortfall.toString(), ergShortfallErg: nanoToErg(ergShortfall.toString()),
+    tokens: tokenReport, tokensSufficient: tokensSufficient,
+    changeTokens: changeTokens,
+    tokenChangeWithoutErg: ergShortfall === 0n && tokensSufficient && change === 0n && anyTokenChange
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment };
 }
 
 if (typeof document !== "undefined") {
@@ -3679,6 +3813,42 @@ if (typeof document !== "undefined") {
         if (!res.tokensConserved) msg += "⚠ At least one token does not conserve, so as pasted this cannot be a valid transaction. ";
       }
       msg += "Checked locally from the bytes you pasted — nothing was fetched, signed or sent, and the pasted input boxes are taken as the transaction's inputs because their box IDs match its input list; only the chain can confirm they are the boxes it really spent.";
+      out.textContent = msg;
+    });
+
+    /* --- Token-aware payment planner --- */
+    document.getElementById("tokenplan-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("tokenplan-result");
+      var res = planTokenPayment(document.getElementById("tokenplan-boxes").value, document.getElementById("tokenplan-payment").value, document.getElementById("tokenplan-fee").value, document.getElementById("tokenplan-tokens").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = res.sufficient
+        ? "✓ Plan: spend " + res.selectedCount + " of your " + res.boxCount + (res.boxCount === 1 ? " box" : " boxes") + " — " + res.selectedBoxIds.join(", ") + " — holding " + res.selectedErg + " ERG (\"" + res.selectedNano + "\" nanoERG) against the " + res.neededErg + " ERG (\"" + res.neededNano + "\" nanoERG) the payment + fee need. "
+        : "✗ These boxes cannot cover that payment as listed. The closest plan spends " + res.selectedCount + " of your " + res.boxCount + (res.boxCount === 1 ? " box" : " boxes") + " holding " + res.selectedErg + " ERG against the " + res.neededErg + " ERG the payment + fee need";
+      if (!res.sufficient && BigInt(res.ergShortfallNano) > 0n) msg += " — ERG shortfall " + res.ergShortfallErg + " ERG (\"" + res.ergShortfallNano + "\" nanoERG)";
+      if (!res.sufficient) msg += ". ";
+      if (res.tokens.length === 0) {
+        msg += "No token requirements were stated. ";
+      } else {
+        msg += "Tokens: " + res.tokens.map(function (tr) {
+          var s = tr.selected + " raw selected of " + tr.tokenId + " against " + tr.required + " required";
+          if (tr.shortfall !== "0") s += " — ⚠ short by " + tr.shortfall + " raw";
+          else if (tr.change !== "0") s += " — " + tr.change + " raw comes back as change";
+          else s += " — exact";
+          return s;
+        }).join("; ") + ". ";
+      }
+      if (res.changeTokens.length > 0) msg += "Also riding into the change box, because the selected boxes carry them and spent tokens never vanish: " + res.changeTokens.map(function (ct) { return ct.amount + " raw of " + ct.tokenId; }).join("; ") + ". ";
+      if (res.sufficient) {
+        msg += "ERG change: " + res.changeErg + " ERG (\"" + res.changeNano + "\" nanoERG)";
+        if (res.changeIsDust) msg += " — ⚠ dust: above zero but below the 0.001 ERG safe user minimum, so a wallet would normally fold it into the fee or select differently";
+        msg += ". ";
+        if (res.tokenChangeWithoutErg) msg += "⚠ But the ERG change is exactly zero while tokens are left over — a change output holding those tokens must itself hold ERG, so a real transaction needs one more input (or a slightly smaller payment) to carry them. ";
+      }
+      msg += "Selected in two phases — boxes carrying still-needed tokens first, in your listed order, then the rest in order until the ERG covered — and planned locally from the bytes you pasted: nothing was fetched, signed or sent, and a pasted box may since have been spent, which only the chain can tell you.";
       out.textContent = msg;
     });
 

@@ -619,6 +619,21 @@
         <button type="submit" class="btn primary">Check the fee &amp; balance</button>
         <p id="txfee-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="tokenplan-calc">
+        <h3>35 · Token-aware payment planner (your boxes + a payment that needs ERG and tokens → which boxes to spend)</h3>
+        <p>Tool 9 plans an ERG-only payment over box values you type — but real payments often need tokens too, and tokens live inside specific boxes, so a value-only plan cannot say which boxes carry them. Paste your boxes (one full serialized box per line, the same bytes tool 15 reads), the ERG payment and fee, and any token requirements (one per line: token ID, then the raw amount — raw on-chain integers; tool 6 converts a display amount once you know the token's decimals). Ergo spends boxes whole, so this planner selects deterministically in two phases: first, walking your boxes in the order listed, it takes any box holding a token whose need is still open, until every token need is covered; then it walks the remaining boxes in order until the selected ERG covers payment + fee. The report accounts for change completely — the ERG change, each requested token's leftover, and any token the selected boxes carry that you never requested: unrequested tokens do not vanish when their box is spent, they ride into the change box, and a plan that hid them would lose them on paper. Two traps are flagged plainly: ERG change above zero but below the recommended safe user minimum is dust, and leftover tokens with an ERG change of exactly zero have nothing to carry them, because a change output holding tokens must itself hold ERG. Shortfalls are reported per token and for ERG, never averaged away. Planning only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing, and a box may since have been spent, which only the chain can tell you.</p>
+        <label for="tokenplan-boxes">Your boxes (hex — one full serialized box per line)</label>
+        <textarea id="tokenplan-boxes" rows="5" spellcheck="false" placeholder="e.g. c0843d0008cd… (one box's full serialized bytes per line)" autocomplete="off"></textarea>
+        <label for="tokenplan-payment">Payment amount (ERG)</label>
+        <input id="tokenplan-payment" inputmode="decimal" placeholder="e.g. 0.1" autocomplete="off">
+        <label for="tokenplan-fee">Transaction fee (ERG)</label>
+        <input id="tokenplan-fee" inputmode="decimal" placeholder="e.g. 0.001" autocomplete="off">
+        <label for="tokenplan-tokens">Token requirements (optional — one per line: token ID, a space, then the raw amount)</label>
+        <textarea id="tokenplan-tokens" rows="3" spellcheck="false" placeholder="e.g. 50fdc80e168c153e472bd7e3dd18a4a0b9e90c550206fdbdb789ee8afdd3b1a9 1000" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Plan the payment</button>
+        <p id="tokenplan-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -664,6 +679,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=34"></script>
+<script src="app.js?v=35"></script>
 </body>
 </html>

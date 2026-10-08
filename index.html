@@ -718,6 +718,15 @@
         <button type="submit" class="btn primary">Diff the boxes</button>
         <p id="boxdiff-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txsize-calc">
+        <h3>42 · Transaction size breakdown (transaction bytes → where does the size go?)</h3>
+        <p>Tool 29 reads a transaction's contents and tool 38 sizes its outputs standing alone, but neither says where the transaction's own bytes go. Paste one serialized transaction and this breaks its size into the four sections the serialization actually carries, each with its share of the total: the inputs (per input: the 32-byte box ID, the proof and the context extension, count bytes included), the data inputs and the distinct token IDs (32 bytes each, plus their counts), and the outputs in their embedded form — which is smaller than tool 38's standalone form by exactly what standing alone adds: the creating transaction ID, the output index, and a full 32-byte ID per token instead of a short index into the transaction's token list. The four sections are checked to sum to the transaction's byte length before anything is shown. Also reported: the total proof bytes and their share, and the unsigned size — the length of the form the transaction ID is computed over, with every proof replaced by a single zero length byte; for an unsigned transaction the two sizes are equal. The honesty boundary is stated plainly: size is a fact about the bytes, not a verdict — this tool states no protocol size limit and no cost figure, because neither is a constant the bytes alone carry. Measurement only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txsize-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txsize-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Break down the size</button>
+        <p id="txsize-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -763,6 +772,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=41"></script>
+<script src="app.js?v=42"></script>
 </body>
 </html>

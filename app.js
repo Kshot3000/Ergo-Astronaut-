@@ -3512,6 +3512,93 @@ function compareErgoBoxes(aHex, bHex) {
   };
 }
 
+/* ---------- Transaction size breakdown ---------- */
+/* Tool 29 parses a transaction and tool 38 sizes its outputs in
+   their standalone form, but nothing on the hub said where the
+   transaction's own bytes go. This breaks one serialized
+   transaction into its four sections, measured on the embedded
+   form the bytes actually carry: the inputs section (its count
+   VLQ plus, per input, the 32-byte box ID, the proof-length VLQ
+   and proof, and the context-extension section — its count VLQ
+   plus each entry's key VLQ and raw constant bytes), the data
+   inputs section (count VLQ + 32 bytes each), the distinct
+   token ID section (count VLQ + 32 bytes each), and the outputs
+   section (count VLQ plus each output's embedded size). An
+   output's embedded size is derived from tool 38's standalone
+   size by removing exactly what the standalone form adds: the
+   32-byte creating transaction ID, the VLQ output index, and,
+   per token, the 32-byte token ID the embedded form replaces
+   with a VLQ index into the transaction's token list. The four
+   sections must sum to the transaction's byte length and the
+   per-output embedded sizes to the outputs section — both are
+   checked before anything is shown, so a derivation slip fails
+   closed instead of printing a breakdown that does not add up.
+   Also reported: the total proof bytes and their share of the
+   transaction, and the unsigned size — the byte length of the
+   form the transaction ID is computed over, where every proof
+   is replaced by a single 0x00 length byte; for an unsigned
+   transaction the two sizes are equal. Size is a fact about the
+   bytes, not a verdict: this tool states no protocol size limit
+   and no cost figure, because neither is a constant it can cite
+   from the bytes alone. Verified against an independent Python
+   oracle (oracle-txsize.py) that measures the sections by raw
+   byte offsets over the fleet vectors and a from-scratch
+   synthetic carrying a proof, extension entries, a data input,
+   a token output and a register. */
+function analyzeTxSize(txHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, signed: null, byteLength: null, inputCount: null, dataInputCount: null, tokenIdCount: null, outputCount: null, inputsBytes: null, dataInputsBytes: null, tokenIdsBytes: null, outputsBytes: null, proofBytes: null, extensionBytes: null, inputs: null, outputs: null, unsignedByteLength: null, proofSharePercent: null, largestSection: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  var vlqLen = function (n) { return writeVlqBig(BigInt(n)).length; };
+  var proofBytes = 0, extensionBytes = 0;
+  var inputs = tx.inputs.map(function (inp, i) {
+    var ext = vlqLen(inp.extension.length);
+    inp.extension.forEach(function (e) { ext += vlqLen(e.key) + e.rawHex.length / 2; });
+    extensionBytes += ext;
+    proofBytes += inp.proofLength;
+    return {
+      index: i, boxId: inp.boxId,
+      byteLength: 32 + vlqLen(inp.proofLength) + inp.proofLength + ext,
+      proofLength: inp.proofLength, extensionBytes: ext
+    };
+  });
+  var inputsBytes = vlqLen(tx.inputs.length) + inputs.reduce(function (s, x) { return s + x.byteLength; }, 0);
+  var dataInputsBytes = vlqLen(tx.dataInputs.length) + 32 * tx.dataInputs.length;
+  var tokenIdsBytes = vlqLen(tx.tokenIds.length) + 32 * tx.tokenIds.length;
+  var outputs = tx.outputs.map(function (o) {
+    var embedded = o.byteLength - 32 - vlqLen(o.index);
+    o.tokens.forEach(function (t) {
+      embedded -= 32 - vlqLen(tx.tokenIds.indexOf(t.tokenId));
+    });
+    return { index: o.index, byteLength: embedded, valueNano: o.valueNano };
+  });
+  var outputsBytes = vlqLen(tx.outputs.length) + outputs.reduce(function (s, x) { return s + x.byteLength; }, 0);
+  if (inputsBytes + dataInputsBytes + tokenIdsBytes + outputsBytes !== tx.byteLength) {
+    return fail("Internal check failed: the four section sizes do not sum to the transaction's byte length — refusing to show a breakdown that does not add up.");
+  }
+  var unsignedByteLength = tx.byteLength - tx.inputs.reduce(function (s, inp) {
+    return s + inp.proofLength + vlqLen(inp.proofLength) - 1;
+  }, 0);
+  var sections = { inputs: inputsBytes, dataInputs: dataInputsBytes, tokenIds: tokenIdsBytes, outputs: outputsBytes };
+  var largestSection = "inputs";
+  Object.keys(sections).forEach(function (k) { if (sections[k] > sections[largestSection]) largestSection = k; });
+  return {
+    valid: true, reason: null,
+    txId: tx.txId, signed: tx.signed, byteLength: tx.byteLength,
+    inputCount: tx.inputs.length, dataInputCount: tx.dataInputs.length,
+    tokenIdCount: tx.tokenIds.length, outputCount: tx.outputs.length,
+    inputsBytes: inputsBytes, dataInputsBytes: dataInputsBytes,
+    tokenIdsBytes: tokenIdsBytes, outputsBytes: outputsBytes,
+    proofBytes: proofBytes, extensionBytes: extensionBytes,
+    inputs: inputs, outputs: outputs,
+    unsignedByteLength: unsignedByteLength,
+    proofSharePercent: (proofBytes * 100 / tx.byteLength).toFixed(2),
+    largestSection: largestSection
+  };
+}
+
 /* ---------- Transaction JSON converter ---------- */
 /* The same unsigned transaction in the two forms Ergo developers
    actually move between: the EIP-12 / fleet-sdk JSON dialect (what
@@ -3742,7 +3829,7 @@ function planTokenMint(firstInputId, nameStr, descStr, decStr, amountStr, typeSt
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize };
 }
 
 if (typeof document !== "undefined") {
@@ -4624,6 +4711,21 @@ if (typeof document !== "undefined") {
           : "The two boxes do not claim the same origin — treat them as different boxes that happen to be compared, not two versions of one box, unless you have another reason to pair them. ";
       }
       msg += "Comparison only, over the bytes you pasted: a box's ID is the hash of its bytes, so any field change makes a different box — this shows which fields moved, and whether the second box is the right version of the first is not a question bytes alone answer. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txsize-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txsize-result");
+      var res = analyzeTxSize(document.getElementById("txsize-bytes").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var share = function (n) { return (n * 100 / res.byteLength).toFixed(2) + "%"; };
+      var msg = "✓ Transaction " + res.txId + " is " + res.byteLength + " bytes (" + (res.signed ? "signed — at least one input carries a proof" : "unsigned — no input carries a proof") + "). Where the bytes go: inputs " + res.inputsBytes + " bytes (" + share(res.inputsBytes) + ", " + res.inputCount + " input(s), of which proofs " + res.proofBytes + " bytes and context extensions " + res.extensionBytes + " bytes including their count bytes); data inputs " + res.dataInputsBytes + " bytes (" + share(res.dataInputsBytes) + ", " + res.dataInputCount + " data input(s) at 32 bytes each plus the count); distinct token IDs " + res.tokenIdsBytes + " bytes (" + share(res.tokenIdsBytes) + ", " + res.tokenIdCount + " ID(s) at 32 bytes each plus the count); outputs " + res.outputsBytes + " bytes (" + share(res.outputsBytes) + ", " + res.outputCount + " output(s) in their embedded form: " + res.outputs.map(function (o) { return "#" + o.index + " " + o.byteLength + " bytes holding " + o.valueNano + " nanoERG"; }).join("; ") + "). ";
+      msg += "The largest section is " + res.largestSection + ". Proofs are " + res.proofSharePercent + "% of the transaction, and stripped of them the unsigned form — the bytes the transaction ID is computed over — is " + res.unsignedByteLength + " bytes" + (res.unsignedByteLength === res.byteLength ? " (the same size: there are no proofs to strip)." : ".") + " ";
+      msg += "Measurement only, over the bytes you pasted: a transaction's size is a fact about its bytes, not a verdict on it — this tool states no protocol size limit and no cost figure. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

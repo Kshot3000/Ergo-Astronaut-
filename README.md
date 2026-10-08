@@ -644,6 +644,27 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   published box vectors plus from-scratch one-field
   variants: value, token amount, height, index, and a
   register added, changed and removed.
+- **Transaction size breakdown** — breaks one serialized
+  transaction's byte length into the four sections the
+  serialization carries, each with its share of the
+  total: inputs (per input the 32-byte box ID, the
+  proof and the context extension, count bytes
+  included), data inputs and distinct token IDs
+  (32 bytes each plus their counts), and outputs in
+  their embedded form — smaller than the standalone
+  form by exactly the creating transaction ID, the
+  output index, and a full token ID per token in place
+  of a short index. The sections are checked to sum to
+  the byte length before anything is shown. It also
+  reports the total proof bytes and their share, and
+  the unsigned size — the length of the form the
+  transaction ID is computed over. Size is stated as a
+  fact about the bytes, never as a protocol limit or a
+  cost figure. Verified against an independent Python
+  oracle measuring the sections by raw byte offsets
+  over fleet-sdk's published transaction vectors plus
+  a from-scratch synthetic carrying a proof, extension
+  entries, a data input, a token output and a register.
 
 ## Cross-chain integration
 

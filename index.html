@@ -557,6 +557,19 @@
         <button type="submit" class="btn primary">Parse the transaction</button>
         <p id="txparse-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txbuild-calc">
+        <h3>30 · Serialized transaction builder (fields → transaction bytes + ID)</h3>
+        <p>The encode-side inverse of tool 29, and the whole-transaction counterpart of tool 17's box builder: give me the fields and I assemble the serialized bytes in the exact layout Ergo writes them — the inputs (each spent box's ID, an optional spending proof pasted as hex, and any context extension constants), the data inputs, the distinct token ID list built from the outputs' tokens in order of first appearance, and the outputs as embedded boxes whose tokens are written as indexes into that list. A register or extension constant is either a typed spec like tool 18's (<code>long:100</code>) or the constant's raw hex exactly as tool 15 shows it — the hex form also carries types the specs cannot express, like tuples, which real transactions use. The transaction ID is computed the way the chain defines it, as the Blake2b-256 of the unsigned serialization (proofs stripped, extensions kept), and every output's box ID comes from its standalone serialization. The assembled bytes are round-tripped through tool 29's parser field-for-field before they are shown, so an output whose script that parser cannot delimit — no size field, and not the standard P2PK tree or the miner fee contract, the same subset fleet-sdk itself round-trips in its deserializable vectors — is refused rather than emitted unverified. Verified against fleet-sdk's published transaction vectors — including its signed raffle transaction — before it shipped here. A proof field here is data you paste, never a signature this tool makes: building is not signing, and nothing is broadcast or spent.</p>
+        <label for="txbuild-inputs">Inputs — one per line: box ID, then optionally a proof hex (or -), then extension entries as key=constant separated by ;</label>
+        <textarea id="txbuild-inputs" rows="3" spellcheck="false" placeholder="e.g. ce2d7c76f8d28aacc7ca0fa4d320725564f8b57c8dc6e3bbde7c7c0c397bde6f" autocomplete="off"></textarea>
+        <label for="txbuild-datainputs">Data inputs — one box ID per line (optional; boxes the scripts read but do not spend)</label>
+        <textarea id="txbuild-datainputs" rows="2" spellcheck="false" placeholder="" autocomplete="off"></textarea>
+        <label for="txbuild-outputs">Outputs — one block per output, blocks separated by a blank line: value: nanoERG, tree: hex, height: n, then any token: &lt;token ID&gt; &lt;raw amount&gt; and register: &lt;spec or constant hex&gt; lines</label>
+        <textarea id="txbuild-outputs" rows="6" spellcheck="false" placeholder="value: 1000000&#10;tree: 0008cd…&#10;height: 942700" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Build the transaction</button>
+        <p id="txbuild-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -602,6 +615,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=29"></script>
+<script src="app.js?v=30"></script>
 </body>
 </html>

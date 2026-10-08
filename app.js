@@ -2226,8 +2226,232 @@ function buildErgoBox(fields) {
   };
 }
 
+/* ---------- Serialized transaction builder ---------- */
+/* The encode-side inverse of tool 29, in the exact layout
+   fleet-sdk's serializeTransaction writes: [input count VLQ, then
+   per input a 32-byte box ID + a VLQ-length-prefixed spending
+   proof (a single 00 byte when there is none) + a context
+   extension (count VLQ, then per entry a key VLQ + a Sigma
+   constant)][data input count VLQ + that many 32-byte box IDs]
+   [distinct token ID count VLQ + the IDs][output count VLQ, then
+   the outputs as embedded boxes — value VLQ, ErgoTree verbatim,
+   creation height VLQ, token count VLQ with each token named by
+   its VLQ INDEX into the distinct-ID list, register count VLQ +
+   constants]. The distinct-ID list is built the way fleet builds
+   it: every token ID the outputs use, in order of first
+   appearance across the outputs. A register or extension constant
+   is given either as one of tool 17/18's typed specs (long:100)
+   or as the constant's raw hex exactly as tool 15 displays it —
+   the hex form also carries the types specs cannot express, like
+   tuples, which real transactions use (fleet's raffle vector's
+   registers are tuples). Extension entries are written in
+   ascending key order, the order fleet's own writer emits for a
+   key record, and duplicate keys are refused rather than silently
+   merged. The transaction ID is the Blake2b-256 of the unsigned
+   rewrite — proofs stripped, extensions kept — exactly as tool 29
+   recomputes it. The assembled bytes are round-tripped through
+   tool 29's parser before they are shown, and every field
+   (including each output's recomputed box ID) must read back
+   exactly; an output whose tree the parser cannot delimit (its
+   stated limit — no size field, and not the P2PK tree or the
+   miner fee contract) is therefore refused rather than emitted
+   unverified, the same subset fleet-sdk itself round-trips in
+   its deserializableTxVectors. Verified in the tests by
+   rebuilding fleet-sdk's published transaction vectors
+   byte-for-byte from their recorded fields — the unsigned
+   no-token and one-token vectors, fleet's data-inputs variant,
+   its signed raffle transaction, and a signed + extension
+   variant — cross-checked with an independent Python build on
+   2026-10-08. A built transaction is just bytes: nothing here
+   signs (a proof field is data the user pastes, never a signature
+   this tool makes), broadcasts or spends anything. */
+function sigmaConstantBytes(entry) {
+  var fail = function (reason) { return { valid: false, reason: reason }; };
+  var s = entry == null ? "" : String(entry).trim();
+  if (s === "") return fail("an empty entry — give a typed spec like long:100 (tool 18's forms) or one Sigma constant as hex exactly as tool 15 shows it.");
+  var colon = s.indexOf(":");
+  if (colon > 0 && /^[a-zA-Z]+$/.test(s.slice(0, colon))) {
+    var enc = encodeSigmaConstant(s);
+    if (!enc.valid) return fail(enc.reason);
+    return { valid: true, bytes: enc.bytes, rawHex: enc.rawHex, typeName: enc.typeName, value: enc.value };
+  }
+  var bytes = hexToBytes(s.toLowerCase());
+  if (!bytes) return fail("\"" + s + "\" is neither a typed spec (kind:value — tool 18 lists the kinds) nor one Sigma constant in hex.");
+  var dec = decodeSigmaConstant(s);
+  if (!dec.valid) return fail("\"" + s + "\" is not one complete Sigma constant: " + dec.reason);
+  return { valid: true, bytes: Array.from(bytes), rawHex: dec.rawHex, typeName: dec.type, value: dec.value };
+}
+function buildErgoTransaction(fields) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txHex: null, txId: null, byteLength: null, signed: null, tokenIds: null, outputs: null, totalOutputNano: null, totalOutputErg: null };
+  };
+  if (!fields) return fail("No fields supplied.");
+  var digits = function (x) { return typeof x === "string" && /^\d+$/.test(x.trim()); };
+  var hexId = function (x) { var b = hexToBytes(x == null ? "" : String(x).trim().toLowerCase()); return b && b.length === 32 ? b : null; };
+  /* --- inputs --- */
+  var inFields = fields.inputs || [];
+  if (!Array.isArray(inFields) || inFields.length < 1 || inFields.length > 10000) return fail("A transaction spends at least one input box — give between 1 and 10,000 inputs.");
+  var inputs = [];
+  for (var i = 0; i < inFields.length; i++) {
+    var inf = inFields[i] || {};
+    var inId = hexId(inf.boxId);
+    if (!inId) return fail("Input " + (i + 1) + ": a box ID is 32 bytes, 64 hex characters — got \"" + inf.boxId + "\".");
+    var proofBytes = null;
+    if (inf.proofHex != null && String(inf.proofHex).trim() !== "") {
+      proofBytes = hexToBytes(String(inf.proofHex).trim().toLowerCase());
+      if (!proofBytes) return fail("Input " + (i + 1) + ": the spending proof must be hex (an even number of 0-9/a-f characters) — leave it empty for an unsigned input.");
+    }
+    var extFields = inf.extension || [];
+    if (!Array.isArray(extFields) || extFields.length > 10000) return fail("Input " + (i + 1) + ": the context extension is a list of key / constant entries.");
+    var ext = [];
+    var seenKeys = {};
+    for (var e = 0; e < extFields.length; e++) {
+      var ef = extFields[e] || {};
+      if (!digits(ef.key == null ? "" : String(ef.key))) return fail("Input " + (i + 1) + ", extension entry " + (e + 1) + ": the key is a whole number (digits only).");
+      var keyNum = Number(String(ef.key).trim());
+      if (!Number.isSafeInteger(keyNum) || keyNum > 4294967295) return fail("Input " + (i + 1) + ", extension entry " + (e + 1) + ": a context extension key is an unsigned 32-bit number (0 to 4,294,967,295).");
+      if (seenKeys[keyNum]) return fail("Input " + (i + 1) + ": extension key " + keyNum + " is given twice — one key holds one constant, so the duplicate is refused rather than merged.");
+      seenKeys[keyNum] = true;
+      var ec = sigmaConstantBytes(ef.value);
+      if (!ec.valid) return fail("Input " + (i + 1) + ", extension key " + keyNum + ": " + ec.reason);
+      ext.push({ key: keyNum, bytes: ec.bytes, rawHex: ec.rawHex, typeName: ec.typeName, value: ec.value });
+    }
+    ext.sort(function (a, b) { return a.key - b.key; });
+    inputs.push({ boxId: bytesToHex(inId), boxIdBytes: inId, proofBytes: proofBytes, extension: ext });
+  }
+  /* --- data inputs --- */
+  var diFields = fields.dataInputs || [];
+  if (!Array.isArray(diFields) || diFields.length > 10000) return fail("Data inputs are a list of box IDs (boxes the scripts read but do not spend).");
+  var dataInputs = [];
+  for (var d = 0; d < diFields.length; d++) {
+    var diId = hexId(diFields[d]);
+    if (!diId) return fail("Data input " + (d + 1) + ": a box ID is 32 bytes, 64 hex characters — got \"" + diFields[d] + "\".");
+    dataInputs.push(bytesToHex(diId));
+  }
+  /* --- outputs (candidates, validated like tool 17's fields) --- */
+  var outFields = fields.outputs || [];
+  if (!Array.isArray(outFields) || outFields.length < 1 || outFields.length > 10000) return fail("A transaction creates at least one output box — give between 1 and 10,000 outputs.");
+  var tokenIds = [];
+  var tokenIndex = {};
+  var outputs = [];
+  for (var o = 0; o < outFields.length; o++) {
+    var of = outFields[o] || {};
+    var oWhat = "Output " + (o + 1);
+    if (!digits(of.valueNano)) return fail(oWhat + ": enter the value as a whole number of nanoERG (digits only — tool 1 converts ERG to nanoERG).");
+    var oValue = BigInt(String(of.valueNano).trim());
+    if (oValue < 1n || oValue > 9223372036854775807n) return fail(oWhat + ": a box value is a positive signed 64-bit amount of nanoERG (1 to 9,223,372,036,854,775,807) — and a spendable box must also clear the minimum-value rule in tool 5.");
+    var oTree = hexToBytes(of.ergoTree == null ? "" : String(of.ergoTree));
+    if (!oTree) return fail(oWhat + ": enter the guarding script's ErgoTree as hex (an even number of 0-9/a-f characters, with or without a 0x prefix) — tools 19, 16 and 11 produce trees from keys, scripts and addresses.");
+    if (!digits(of.creationHeight)) return fail(oWhat + ": enter the creation height as a whole block number (digits only). It is normally the height of the block the transaction is mined in.");
+    var oHeight = Number(String(of.creationHeight).trim());
+    if (!Number.isSafeInteger(oHeight) || oHeight > 4294967295) return fail(oWhat + ": a creation height is an unsigned 32-bit block number (0 to 4,294,967,295).");
+    var tkFields = of.tokens || [];
+    if (!Array.isArray(tkFields) || tkFields.length > 10000) return fail(oWhat + ": tokens are a list of token ID / amount pairs.");
+    var oTokens = [];
+    for (var t = 0; t < tkFields.length; t++) {
+      var tf = tkFields[t] || {};
+      var tkId = hexId(tf.tokenId);
+      if (!tkId) return fail(oWhat + ", token " + (t + 1) + ": a token ID is 32 bytes, 64 hex characters — got \"" + tf.tokenId + "\".");
+      if (!digits(tf.amount)) return fail(oWhat + ", token " + (t + 1) + ": enter the amount as a whole raw integer (digits only — tool 6 converts display amounts to raw).");
+      var tkAmt = BigInt(String(tf.amount).trim());
+      if (tkAmt < 1n || tkAmt > 9223372036854775807n) return fail(oWhat + ", token " + (t + 1) + ": a token amount is a positive signed 64-bit raw integer.");
+      var tkHex = bytesToHex(tkId);
+      if (!(tkHex in tokenIndex)) { tokenIndex[tkHex] = tokenIds.length; tokenIds.push(tkHex); }
+      oTokens.push({ tokenId: tkHex, amount: tkAmt, index: tokenIndex[tkHex] });
+    }
+    var rgFields = of.registers || [];
+    if (!Array.isArray(rgFields) || rgFields.length > 6) return fail(oWhat + ": a box carries at most the six non-mandatory registers R4–R9.");
+    var oRegs = [];
+    for (var r = 0; r < rgFields.length; r++) {
+      var rc = sigmaConstantBytes(rgFields[r]);
+      if (!rc.valid) return fail(oWhat + ", register R" + (4 + r) + ": " + rc.reason);
+      oRegs.push(rc);
+    }
+    outputs.push({ value: oValue, treeBytes: oTree, treeHex: bytesToHex(oTree), height: oHeight, tokens: oTokens, registers: oRegs });
+  }
+  /* --- serialize --- */
+  var bytes = [];
+  var unsignedHead = [];
+  var push = function (arr, x) { for (var i = 0; i < x.length; i++) arr.push(x[i]); };
+  push(bytes, writeVlqBig(BigInt(inputs.length)));
+  inputs.forEach(function (inp) {
+    var signedPart = [];
+    push(signedPart, Array.from(inp.boxIdBytes));
+    if (inp.proofBytes && inp.proofBytes.length > 0) { push(signedPart, writeVlqBig(BigInt(inp.proofBytes.length))); push(signedPart, Array.from(inp.proofBytes)); }
+    else signedPart.push(0);
+    var unsignedPart = Array.from(inp.boxIdBytes);
+    unsignedPart.push(0);
+    var extBytes = writeVlqBig(BigInt(inp.extension.length));
+    inp.extension.forEach(function (x) { push(extBytes, writeVlqBig(BigInt(x.key))); push(extBytes, x.bytes); });
+    push(signedPart, extBytes);
+    push(unsignedPart, extBytes);
+    push(bytes, signedPart);
+    push(unsignedHead, unsignedPart);
+  });
+  var rest = [];
+  push(rest, writeVlqBig(BigInt(dataInputs.length)));
+  dataInputs.forEach(function (id) { push(rest, Array.from(hexToBytes(id))); });
+  push(rest, writeVlqBig(BigInt(tokenIds.length)));
+  tokenIds.forEach(function (id) { push(rest, Array.from(hexToBytes(id))); });
+  push(rest, writeVlqBig(BigInt(outputs.length)));
+  outputs.forEach(function (op) {
+    push(rest, writeVlqBig(op.value));
+    push(rest, Array.from(op.treeBytes));
+    push(rest, writeVlqBig(BigInt(op.height)));
+    push(rest, writeVlqBig(BigInt(op.tokens.length)));
+    op.tokens.forEach(function (tk) { push(rest, writeVlqBig(BigInt(tk.index))); push(rest, writeVlqBig(tk.amount)); });
+    push(rest, writeVlqBig(BigInt(op.registers.length)));
+    op.registers.forEach(function (rg) { push(rest, rg.bytes); });
+  });
+  push(bytes, rest);
+  var unsignedBytes = writeVlqBig(BigInt(inputs.length)).concat(unsignedHead, rest);
+  var txHex = bytesToHex(Uint8Array.from(bytes));
+  var txId = bytesToHex(blake2b256(Uint8Array.from(unsignedBytes)));
+  /* --- round-trip through tool 29's parser --- */
+  var parsed = parseErgoTransaction(txHex);
+  if (!parsed.valid) return fail("These fields assemble, but the result does not read back through the transaction parser (tool 29): " + parsed.reason + " The bytes are refused rather than shown unverified.");
+  var roundTripped = parsed.txId === txId &&
+    parsed.inputs.length === inputs.length &&
+    parsed.dataInputs.length === dataInputs.length &&
+    parsed.tokenIds.length === tokenIds.length &&
+    parsed.outputs.length === outputs.length &&
+    parsed.inputs.every(function (pi, ii) {
+      var inp = inputs[ii];
+      return pi.boxId === inp.boxId &&
+        pi.proofLength === (inp.proofBytes ? inp.proofBytes.length : 0) &&
+        pi.proofBytes === (inp.proofBytes && inp.proofBytes.length > 0 ? bytesToHex(inp.proofBytes) : null) &&
+        pi.extension.length === inp.extension.length &&
+        pi.extension.every(function (px, ei) { var x = inp.extension[ei]; return px.key === x.key && px.type === x.typeName && px.value === x.value && px.rawHex === x.rawHex; });
+    }) &&
+    parsed.dataInputs.every(function (pd, di) { return pd === dataInputs[di]; }) &&
+    parsed.tokenIds.every(function (pt, ti) { return pt === tokenIds[ti]; }) &&
+    parsed.outputs.every(function (po, oi) {
+      var op = outputs[oi];
+      return po.valueNano === op.value.toString() &&
+        po.ergoTree === op.treeHex &&
+        po.creationHeight === op.height &&
+        po.tokens.length === op.tokens.length &&
+        po.tokens.every(function (pt, ti) { return pt.tokenId === op.tokens[ti].tokenId && pt.amount === op.tokens[ti].amount.toString(); }) &&
+        po.registers.length === op.registers.length &&
+        po.registers.every(function (pr, ri) { return pr.type === op.registers[ri].typeName && pr.value === op.registers[ri].value && pr.rawHex === op.registers[ri].rawHex; });
+    });
+  if (!roundTripped) return fail("Internal round-trip check failed: the assembled bytes do not parse back to exactly these fields — refusing to show them rather than risk a mismatched transaction.");
+  var signed = inputs.some(function (inp) { return inp.proofBytes && inp.proofBytes.length > 0; });
+  return {
+    valid: true, reason: null,
+    txHex: txHex,
+    txId: txId,
+    byteLength: bytes.length,
+    signed: signed,
+    tokenIds: tokenIds,
+    outputs: parsed.outputs.map(function (po) { return { index: po.index, boxId: po.boxId, valueNano: po.valueNano, valueErg: po.valueErg }; }),
+    totalOutputNano: parsed.totalOutputNano,
+    totalOutputErg: parsed.totalOutputErg
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction };
 }
 
 if (typeof document !== "undefined") {
@@ -2771,6 +2995,57 @@ if (typeof document !== "undefined") {
       }).join("; ") + ". ";
       if (res.tokenTotals.length > 0) msg += "Token totals across all outputs: " + res.tokenTotals.map(function (tt) { return tt.amount + " raw of " + tt.tokenId; }).join("; ") + " — raw on-chain integers; tool 6 converts them once you know each token's decimals. ";
       msg += "No fee is shown: a fee is inputs minus outputs, and the input boxes' values are not part of a transaction's bytes — only their IDs are. Each output's box ID is recomputed from its standalone serialization (tool 14's rule), so pasting one into an explorer should find exactly that box. Parsed locally, field by field; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- serialized transaction builder --- */
+    document.getElementById("txbuild-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txbuild-result");
+      var parseInputs = function (text) {
+        return text.split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).map(function (line) {
+          var parts = line.split(/\s+/);
+          var inp = { boxId: parts[0], proofHex: null, extension: [] };
+          if (parts.length > 1 && parts[1] !== "-") inp.proofHex = parts[1];
+          if (parts.length > 2) {
+            inp.extension = parts.slice(2).join(" ").split(";").map(function (e) { return e.trim(); }).filter(function (e) { return e !== ""; }).map(function (e) {
+              var eq = e.indexOf("=");
+              return { key: eq < 0 ? e : e.slice(0, eq).trim(), value: eq < 0 ? "" : e.slice(eq + 1).trim() };
+            });
+          }
+          return inp;
+        });
+      };
+      var parseOutputs = function (text) {
+        return text.split(/\n\s*\n/).map(function (b) { return b.trim(); }).filter(function (b) { return b !== ""; }).map(function (block) {
+          var o = { valueNano: "", ergoTree: "", creationHeight: "", tokens: [], registers: [] };
+          block.split(/\n+/).forEach(function (line) {
+            var m = line.trim().match(/^([a-z]+)\s*:\s*(.*)$/);
+            if (!m) return;
+            var k = m[1].toLowerCase(), v = m[2].trim();
+            if (k === "value") o.valueNano = v;
+            else if (k === "tree") o.ergoTree = v;
+            else if (k === "height") o.creationHeight = v;
+            else if (k === "token") { var tp = v.split(/\s+/); o.tokens.push({ tokenId: tp[0] || "", amount: tp[1] || "" }); }
+            else if (k === "register") o.registers.push(v);
+          });
+          return o;
+        });
+      };
+      var res = buildErgoTransaction({
+        inputs: parseInputs(document.getElementById("txbuild-inputs").value),
+        dataInputs: document.getElementById("txbuild-datainputs").value.split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }),
+        outputs: parseOutputs(document.getElementById("txbuild-outputs").value)
+      });
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Built a " + res.byteLength + "-byte " + (res.signed ? "signed-form" : "unsigned") + " transaction locally — ID " + res.txId + ", the Blake2b-256 of its unsigned serialization (proofs stripped, extensions kept), so it keeps this ID once real proofs replace any placeholders. ";
+      msg += "Outputs (" + res.outputs.length + "), totalling " + res.totalOutputErg + " ERG (" + res.totalOutputNano + " nanoERG): " + res.outputs.map(function (o) { return "#" + (o.index + 1) + " box " + o.boxId + " — " + o.valueErg + " ERG"; }).join("; ") + ". ";
+      if (res.tokenIds.length > 0) msg += "Distinct token IDs, in first-appearance order: " + res.tokenIds.join(", ") + " — the outputs name their tokens by index into this list. ";
+      msg += "Serialized bytes: " + res.txHex + " ";
+      msg += "The bytes were round-tripped through tool 29's parser field-for-field before being shown. Building is not broadcasting: this transaction exists on no chain until it is signed with real proofs and accepted by a node, and no fee check is possible here — a fee is inputs minus outputs, and the input boxes' values are not part of what you entered, only their IDs. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

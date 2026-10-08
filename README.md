@@ -427,6 +427,24 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   extension constant stops the parse plainly. No fee is shown:
   input box values are not in a transaction's bytes, only
   their IDs. It signs and sends nothing.
+- **Serialized transaction builder** — the encode-side
+  inverse of the parser: assembles a transaction's serialized
+  bytes from its fields (input box IDs with optional pasted
+  proofs and context extension constants, data inputs, and
+  output candidates), building the distinct token ID list in
+  first-appearance order and writing each output's tokens as
+  indexes into it, exactly as fleet-sdk's serializer does.
+  Registers and extension constants take a typed spec
+  (long:100) or the constant's raw hex, so tuple constants —
+  which real transactions carry — work too. The assembled
+  bytes are round-tripped through the parser field-for-field
+  before they are shown, so an output whose script the parser
+  cannot delimit is refused, the same subset fleet-sdk itself
+  round-trips. Verified byte-for-byte against fleet-sdk's
+  published transaction vectors, including its signed raffle
+  transaction, and an independent Python build. A proof field
+  is pasted data, never a signature this tool makes; it signs,
+  broadcasts and sends nothing.
 
 ## Cross-chain integration
 

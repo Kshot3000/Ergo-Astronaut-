@@ -727,6 +727,17 @@
         <button type="submit" class="btn primary">Break down the size</button>
         <p id="txsize-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txdiff-calc">
+        <h3>43 · Transaction differ (transaction ⇄ transaction → which fields changed?)</h3>
+        <p>Tool 40 compares a transaction before and after signing and names the sections that moved; tool 41 diffs two boxes field by field. Paste two serialized transactions and this diffs them field by field: inputs and outputs are paired by position — the order the serialization carries them — and one that exists on only one side is reported as added or removed at its position. Per input it reports the spent box, the proof classified exactly as tool 40 classifies it (added, removed, changed, unchanged) and the context extension diffed per key by its raw constant bytes. The data inputs and the distinct token IDs are diffed both as sequences and as sets, so a pure reordering is named as one — it still changes the transaction ID, because both lists sit in the ID's verbatim tail and the token list re-points every output's token indexes. Per output it reports the value with its signed nanoERG delta, the ErgoTree, the creation height with its signed block delta, the tokens per token ID and the registers R4–R9 by their raw constant bytes — compared as written, never by the outputs' box IDs, which embed the transaction ID itself. The verdict follows tool 40: identical bytes, signing-only (same transaction ID, so only the proofs can differ), or changed, with the changed sections named. The honesty boundary is stated plainly: this compares the bytes you pasted — which of the two transactions is the right one is not a question bytes alone answer, and a present proof is not a verified one. Comparison only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txdiff-a">First serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txdiff-a" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <label for="txdiff-b">Second serialized transaction (hex)</label>
+        <textarea id="txdiff-b" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Diff the transactions</button>
+        <p id="txdiff-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -772,6 +783,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=42"></script>
+<script src="app.js?v=43"></script>
 </body>
 </html>

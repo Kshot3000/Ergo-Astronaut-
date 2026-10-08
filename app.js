@@ -3599,6 +3599,234 @@ function analyzeTxSize(txHex) {
   };
 }
 
+/* ---------- Transaction differ ---------- */
+/* Tool 40 compares a transaction before and after signing and
+   names the sections that moved; tool 41 diffs two boxes field by
+   field. This diffs two TRANSACTIONS field by field, for the
+   questions tool 40 leaves open: two versions of a transaction
+   from different builders, a wallet's output against the bytes
+   that were actually signed, a re-issued transaction against its
+   original. Inputs and outputs are paired BY POSITION — the
+   serialization's order is the order both sides are read in, and
+   an input or output that exists on one side only is reported as
+   added or removed at its position. Per input: the spent box,
+   the proof classified exactly as tool 40 classifies it (added /
+   removed / changed / unchanged), and the context extension
+   diffed per key by raw constant bytes (if one side repeats an
+   extension key — the anomaly tool 39 flags — that side's entries
+   are diffed positionally instead, so no entry is hidden by the
+   keying). Data inputs and the distinct token IDs are diffed as
+   sequences AND as sets, so a pure reordering is named as one:
+   it changes the transaction ID (both lists sit in the ID's
+   verbatim tail, and the token list also re-points every output's
+   token indexes) without adding or removing anything. Outputs
+   are compared AS WRITTEN — value (signed nanoERG delta),
+   ErgoTree, creation height (signed block delta), tokens per
+   token ID and registers R4–R9 by raw constant bytes, exactly
+   tool 41's per-field treatment — never by their parsed box IDs,
+   which embed the transaction ID itself (tool 40's lesson). The
+   verdict follows tool 40: identical bytes, signing-only (same
+   transaction ID, so by the ID's construction only the proofs
+   can differ), or changed, with the changed sections named among
+   inputs / dataInputs / tokenIds / outputs — proofs are reported
+   separately and never counted as a section change. The honesty
+   boundary: this compares bytes — which of the two transactions
+   is the right one is not a question bytes alone answer, and a
+   present proof is not a verified one. Verified against an
+   independent Python oracle (oracle-txdiff.py): a from-scratch
+   parser and differ over the fleet vectors plus from-scratch
+   synthetic pairs — signing-only, output value, token amount,
+   register changed, extension changed, data inputs reordered and
+   removed, an input added and an output added. */
+function compareTransactions(aHex, bHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, txIdA: null, txIdB: null, sameTxId: null, identicalBytes: null, byteLengthA: null, byteLengthB: null, byteLengthDelta: null, signedA: null, signedB: null, inputCountA: null, inputCountB: null, inputs: null, inputsSame: null, inputsAdded: null, inputsRemoved: null, proofsAdded: null, proofsRemoved: null, proofsChanged: null, totalProofBytesA: null, totalProofBytesB: null, dataInputsA: null, dataInputsB: null, dataInputsAdded: null, dataInputsRemoved: null, dataInputsSame: null, dataInputsReordered: null, tokenIdsA: null, tokenIdsB: null, tokenIdsAdded: null, tokenIdsRemoved: null, tokenIdsSame: null, tokenIdsReordered: null, outputs: null, outputsSame: null, outputsAdded: null, outputsRemoved: null, outputCountA: null, outputCountB: null, totalOutputNanoA: null, totalOutputNanoB: null, totalOutputDeltaNano: null, changedSections: null };
+  };
+  var a = parseErgoTransaction(aHex);
+  if (!a.valid) return fail("The FIRST transaction does not parse: " + a.reason);
+  var b = parseErgoTransaction(bHex);
+  if (!b.valid) return fail("The SECOND transaction does not parse: " + b.reason);
+  var aBytes = hexToBytes(aHex == null ? "" : String(aHex).replace(/\s+/g, ""));
+  var bBytes = hexToBytes(bHex == null ? "" : String(bHex).replace(/\s+/g, ""));
+  var identicalBytes = !!(aBytes && bBytes && aBytes.length === bBytes.length && aBytes.every(function (x, i) { return x === bBytes[i]; }));
+  var sameTxId = a.txId === b.txId;
+  /* set-style diff for the two bare ID lists */
+  var listDiff = function (la, lb) {
+    var added = lb.filter(function (x) { return la.indexOf(x) === -1; });
+    var removed = la.filter(function (x) { return lb.indexOf(x) === -1; });
+    var seqSame = la.length === lb.length && la.every(function (x, i) { return x === lb[i]; });
+    return { added: added, removed: removed, seqSame: seqSame, reordered: !seqSame && added.length === 0 && removed.length === 0 && la.length === lb.length };
+  };
+  /* --- inputs, paired by position --- */
+  var inputs = [], inputsAdded = [], inputsRemoved = [];
+  var proofsAdded = [], proofsRemoved = [], proofsChanged = [];
+  var nIn = Math.max(a.inputs.length, b.inputs.length);
+  for (var i = 0; i < nIn; i++) {
+    var ia = a.inputs[i] || null;
+    var ib = b.inputs[i] || null;
+    if (!ia) inputsAdded.push(i);
+    if (!ib) inputsRemoved.push(i);
+    var pa = ia ? ia.proofBytes : null;
+    var pb = ib ? ib.proofBytes : null;
+    var pc;
+    if (pa === pb) pc = "unchanged";
+    else if (pa === null) pc = "added";
+    else if (pb === null) pc = "removed";
+    else pc = "changed";
+    if (pc === "added") proofsAdded.push(i);
+    if (pc === "removed") proofsRemoved.push(i);
+    if (pc === "changed") proofsChanged.push(i);
+    var extensionSame = false, extensionDiff = [];
+    if (ia && ib) {
+      extensionSame = JSON.stringify(ia.extension) === JSON.stringify(ib.extension);
+      var keysA = ia.extension.map(function (e) { return e.key; });
+      var keysB = ib.extension.map(function (e) { return e.key; });
+      var dup = keysA.some(function (k, ix) { return keysA.indexOf(k) !== ix; }) || keysB.some(function (k, ix) { return keysB.indexOf(k) !== ix; });
+      if (!dup) {
+        var ea = {}, eb = {};
+        ia.extension.forEach(function (e) { ea[e.key] = e; });
+        ib.extension.forEach(function (e) { eb[e.key] = e; });
+        var order = keysA.slice();
+        keysB.forEach(function (k) { if (!(k in ea)) order.push(k); });
+        order.forEach(function (k) {
+          var xa = k in ea ? ea[k] : null;
+          var xb = k in eb ? eb[k] : null;
+          var ch;
+          if (!xa) ch = "added";
+          else if (!xb) ch = "removed";
+          else if (xa.rawHex !== xb.rawHex) ch = "changed";
+          else ch = "unchanged";
+          extensionDiff.push({ key: k, change: ch, typeA: xa ? xa.type : null, typeB: xb ? xb.type : null, valueA: xa ? xa.value : null, valueB: xb ? xb.value : null, rawHexA: xa ? xa.rawHex : null, rawHexB: xb ? xb.rawHex : null });
+        });
+      } else {
+        var nExt = Math.max(ia.extension.length, ib.extension.length);
+        for (var ei = 0; ei < nExt; ei++) {
+          var xa2 = ia.extension[ei] || null;
+          var xb2 = ib.extension[ei] || null;
+          var ch2;
+          if (!xa2) ch2 = "added";
+          else if (!xb2) ch2 = "removed";
+          else if (xa2.key !== xb2.key || xa2.rawHex !== xb2.rawHex) ch2 = "changed";
+          else ch2 = "unchanged";
+          extensionDiff.push({ key: xb2 ? xb2.key : xa2.key, change: ch2, typeA: xa2 ? xa2.type : null, typeB: xb2 ? xb2.type : null, valueA: xa2 ? xa2.value : null, valueB: xb2 ? xb2.value : null, rawHexA: xa2 ? xa2.rawHex : null, rawHexB: xb2 ? xb2.rawHex : null });
+        }
+      }
+    }
+    inputs.push({
+      index: i,
+      boxIdA: ia ? ia.boxId : null, boxIdB: ib ? ib.boxId : null,
+      sameBox: !!(ia && ib && ia.boxId === ib.boxId),
+      proofChange: pc,
+      proofLengthA: ia ? ia.proofLength : null, proofLengthB: ib ? ib.proofLength : null,
+      extensionSame: extensionSame, extensionDiff: extensionDiff
+    });
+  }
+  var inputsSame = a.inputs.length === b.inputs.length && inputs.every(function (x) { return x.sameBox && x.extensionSame; });
+  var di = listDiff(a.dataInputs, b.dataInputs);
+  var tk = listDiff(a.tokenIds, b.tokenIds);
+  /* --- outputs, paired by position, compared as written --- */
+  var outputs = [], outputsAdded = [], outputsRemoved = [];
+  var nOut = Math.max(a.outputs.length, b.outputs.length);
+  for (var o = 0; o < nOut; o++) {
+    var oa = a.outputs[o] || null;
+    var ob = b.outputs[o] || null;
+    if (!oa) outputsAdded.push(o);
+    if (!ob) outputsRemoved.push(o);
+    if (oa && ob) {
+      var ta = {}, tb = {};
+      oa.tokens.forEach(function (t) { ta[t.tokenId] = t.amount; });
+      ob.tokens.forEach(function (t) { tb[t.tokenId] = t.amount; });
+      var tokOrder = oa.tokens.map(function (t) { return t.tokenId; });
+      ob.tokens.forEach(function (t) { if (!(t.tokenId in ta)) tokOrder.push(t.tokenId); });
+      var toks = [], toksChangedAny = false;
+      tokOrder.forEach(function (tid) {
+        var aa = tid in ta ? ta[tid] : null;
+        var bb = tid in tb ? tb[tid] : null;
+        var tch;
+        if (aa === null) tch = "added";
+        else if (bb === null) tch = "removed";
+        else if (aa !== bb) tch = "changed";
+        else tch = "unchanged";
+        if (tch !== "unchanged") toksChangedAny = true;
+        toks.push({ tokenId: tid, amountA: aa, amountB: bb, change: tch });
+      });
+      var ra = {}, rb = {};
+      oa.registers.forEach(function (r) { ra[r.name] = r; });
+      ob.registers.forEach(function (r) { rb[r.name] = r; });
+      var regNames = ["R4", "R5", "R6", "R7", "R8", "R9"].filter(function (nm) { return nm in ra || nm in rb; });
+      var regs = [], regsChangedAny = false;
+      regNames.forEach(function (nm) {
+        var xa = nm in ra ? ra[nm] : null;
+        var xb = nm in rb ? rb[nm] : null;
+        var rch;
+        if (!xa) rch = "added";
+        else if (!xb) rch = "removed";
+        else if (xa.rawHex !== xb.rawHex) rch = "changed";
+        else rch = "unchanged";
+        if (rch !== "unchanged") regsChangedAny = true;
+        regs.push({ name: nm, change: rch, typeA: xa ? xa.type : null, typeB: xb ? xb.type : null, valueA: xa ? xa.value : null, valueB: xb ? xb.value : null, rawHexA: xa ? xa.rawHex : null, rawHexB: xb ? xb.rawHex : null });
+      });
+      var vSame = oa.valueNano === ob.valueNano;
+      var tSame = oa.ergoTree === ob.ergoTree;
+      var hSame = oa.creationHeight === ob.creationHeight;
+      outputs.push({
+        index: o,
+        valueNanoA: oa.valueNano, valueNanoB: ob.valueNano,
+        valueDeltaNano: (BigInt(ob.valueNano) - BigInt(oa.valueNano)).toString(),
+        valueSame: vSame, ergoTreeSame: tSame,
+        creationHeightA: oa.creationHeight, creationHeightB: ob.creationHeight,
+        heightDelta: ob.creationHeight - oa.creationHeight, heightSame: hSame,
+        tokens: toks, tokensSame: !toksChangedAny,
+        registers: regs, registersSame: !regsChangedAny,
+        changed: !(vSame && tSame && hSame && !toksChangedAny && !regsChangedAny)
+      });
+    } else {
+      outputs.push({
+        index: o,
+        valueNanoA: oa ? oa.valueNano : null, valueNanoB: ob ? ob.valueNano : null,
+        valueDeltaNano: null, valueSame: false, ergoTreeSame: false,
+        creationHeightA: oa ? oa.creationHeight : null, creationHeightB: ob ? ob.creationHeight : null,
+        heightDelta: null, heightSame: false,
+        tokens: [], tokensSame: false, registers: [], registersSame: false,
+        changed: true
+      });
+    }
+  }
+  var outputsSame = a.outputs.length === b.outputs.length && outputs.every(function (x) { return !x.changed; });
+  var changedSections = [];
+  if (!inputsSame) changedSections.push("inputs");
+  if (!di.seqSame) changedSections.push("dataInputs");
+  if (!tk.seqSame) changedSections.push("tokenIds");
+  if (!outputsSame) changedSections.push("outputs");
+  return {
+    valid: true, reason: null,
+    verdict: identicalBytes ? "identical" : (sameTxId ? "signing-only" : "changed"),
+    txIdA: a.txId, txIdB: b.txId, sameTxId: sameTxId,
+    identicalBytes: identicalBytes,
+    byteLengthA: a.byteLength, byteLengthB: b.byteLength,
+    byteLengthDelta: b.byteLength - a.byteLength,
+    signedA: a.signed, signedB: b.signed,
+    inputCountA: a.inputs.length, inputCountB: b.inputs.length,
+    inputs: inputs, inputsSame: inputsSame,
+    inputsAdded: inputsAdded, inputsRemoved: inputsRemoved,
+    proofsAdded: proofsAdded, proofsRemoved: proofsRemoved, proofsChanged: proofsChanged,
+    totalProofBytesA: a.inputs.reduce(function (s, x) { return s + x.proofLength; }, 0),
+    totalProofBytesB: b.inputs.reduce(function (s, x) { return s + x.proofLength; }, 0),
+    dataInputsA: a.dataInputs, dataInputsB: b.dataInputs,
+    dataInputsAdded: di.added, dataInputsRemoved: di.removed,
+    dataInputsSame: di.seqSame, dataInputsReordered: di.reordered,
+    tokenIdsA: a.tokenIds, tokenIdsB: b.tokenIds,
+    tokenIdsAdded: tk.added, tokenIdsRemoved: tk.removed,
+    tokenIdsSame: tk.seqSame, tokenIdsReordered: tk.reordered,
+    outputs: outputs, outputsSame: outputsSame,
+    outputsAdded: outputsAdded, outputsRemoved: outputsRemoved,
+    outputCountA: a.outputs.length, outputCountB: b.outputs.length,
+    totalOutputNanoA: a.totalOutputNano, totalOutputNanoB: b.totalOutputNano,
+    totalOutputDeltaNano: (BigInt(b.totalOutputNano) - BigInt(a.totalOutputNano)).toString(),
+    changedSections: changedSections
+  };
+}
+
 /* ---------- Transaction JSON converter ---------- */
 /* The same unsigned transaction in the two forms Ergo developers
    actually move between: the EIP-12 / fleet-sdk JSON dialect (what
@@ -3829,7 +4057,7 @@ function planTokenMint(firstInputId, nameStr, descStr, decStr, amountStr, typeSt
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions };
 }
 
 if (typeof document !== "undefined") {
@@ -4726,6 +4954,64 @@ if (typeof document !== "undefined") {
       var msg = "✓ Transaction " + res.txId + " is " + res.byteLength + " bytes (" + (res.signed ? "signed — at least one input carries a proof" : "unsigned — no input carries a proof") + "). Where the bytes go: inputs " + res.inputsBytes + " bytes (" + share(res.inputsBytes) + ", " + res.inputCount + " input(s), of which proofs " + res.proofBytes + " bytes and context extensions " + res.extensionBytes + " bytes including their count bytes); data inputs " + res.dataInputsBytes + " bytes (" + share(res.dataInputsBytes) + ", " + res.dataInputCount + " data input(s) at 32 bytes each plus the count); distinct token IDs " + res.tokenIdsBytes + " bytes (" + share(res.tokenIdsBytes) + ", " + res.tokenIdCount + " ID(s) at 32 bytes each plus the count); outputs " + res.outputsBytes + " bytes (" + share(res.outputsBytes) + ", " + res.outputCount + " output(s) in their embedded form: " + res.outputs.map(function (o) { return "#" + o.index + " " + o.byteLength + " bytes holding " + o.valueNano + " nanoERG"; }).join("; ") + "). ";
       msg += "The largest section is " + res.largestSection + ". Proofs are " + res.proofSharePercent + "% of the transaction, and stripped of them the unsigned form — the bytes the transaction ID is computed over — is " + res.unsignedByteLength + " bytes" + (res.unsignedByteLength === res.byteLength ? " (the same size: there are no proofs to strip)." : ".") + " ";
       msg += "Measurement only, over the bytes you pasted: a transaction's size is a fact about its bytes, not a verdict on it — this tool states no protocol size limit and no cost figure. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txdiff-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txdiff-result");
+      var res = compareTransactions(document.getElementById("txdiff-a").value, document.getElementById("txdiff-b").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.verdict === "identical") {
+        msg = "✓ The two transactions are byte-for-byte identical — same transaction ID " + res.txIdA + ", " + res.byteLengthA + " bytes, " + res.inputCountA + " input(s), " + res.outputCountA + " output(s) totalling " + res.totalOutputNanoA + " nanoERG. Nothing moved: no proof, input, data input, token or output difference of any kind. ";
+      } else if (res.verdict === "signing-only") {
+        msg = "✓ The two transactions carry the same transaction ID (" + res.txIdA + "), so by the ID's construction only the spending proofs can differ — and they do: ";
+        msg += "proofs added on input(s) " + (res.proofsAdded.length ? res.proofsAdded.join(", ") : "none") + ", removed on " + (res.proofsRemoved.length ? res.proofsRemoved.join(", ") : "none") + ", changed on " + (res.proofsChanged.length ? res.proofsChanged.join(", ") : "none") + " (proof bytes " + res.totalProofBytesA + " → " + res.totalProofBytesB + ", transaction size " + res.byteLengthA + " → " + res.byteLengthB + " bytes). Every input box, extension, data input, token ID and output is unchanged. Tool 40 gives the same verdict from the signing angle; this tool confirms it field by field. ";
+      } else {
+        msg = "⚠ The transactions differ — first ID " + res.txIdA + ", second ID " + res.txIdB + "; changed section(s): " + res.changedSections.join(", ") + ". Size " + res.byteLengthA + " → " + res.byteLengthB + " bytes (" + (res.byteLengthDelta >= 0 ? "+" : "") + res.byteLengthDelta + "), total output " + res.totalOutputNanoA + " → " + res.totalOutputNanoB + " nanoERG (" + (res.totalOutputDeltaNano.charAt(0) === "-" ? "" : "+") + res.totalOutputDeltaNano + "). ";
+        res.inputs.forEach(function (inp) {
+          if (inp.boxIdA === null) msg += "Input " + inp.index + " added (spends " + inp.boxIdB + "). ";
+          else if (inp.boxIdB === null) msg += "Input " + inp.index + " removed (spent " + inp.boxIdA + "). ";
+          else {
+            if (!inp.sameBox) msg += "Input " + inp.index + " spends a different box (" + inp.boxIdA + " → " + inp.boxIdB + "). ";
+            if (inp.proofChange !== "unchanged") msg += "Input " + inp.index + " proof " + inp.proofChange + " (" + inp.proofLengthA + " → " + inp.proofLengthB + " bytes). ";
+            inp.extensionDiff.forEach(function (e) {
+              if (e.change === "added") msg += "Input " + inp.index + " extension key " + e.key + " added: " + e.valueB + " (" + e.typeB + ", raw " + e.rawHexB + "). ";
+              else if (e.change === "removed") msg += "Input " + inp.index + " extension key " + e.key + " removed (was " + e.valueA + ", " + e.typeA + ", raw " + e.rawHexA + "). ";
+              else if (e.change === "changed") msg += "Input " + inp.index + " extension key " + e.key + " changed: " + e.valueA + " (" + e.typeA + ", raw " + e.rawHexA + ") → " + e.valueB + " (" + e.typeB + ", raw " + e.rawHexB + "). ";
+            });
+          }
+        });
+        if (res.dataInputsReordered) msg += "Data inputs reordered — the same boxes in a different order, which still changes the transaction ID. ";
+        res.dataInputsAdded.forEach(function (d) { msg += "Data input added: " + d + ". "; });
+        res.dataInputsRemoved.forEach(function (d) { msg += "Data input removed: " + d + ". "; });
+        if (res.tokenIdsReordered) msg += "Distinct token IDs reordered — the same IDs in a different order, which re-points every output's token indexes and changes the transaction ID. ";
+        res.tokenIdsAdded.forEach(function (d) { msg += "Token ID added to the transaction's list: " + d + ". "; });
+        res.tokenIdsRemoved.forEach(function (d) { msg += "Token ID removed from the transaction's list: " + d + ". "; });
+        res.outputs.forEach(function (o) {
+          if (o.valueNanoA === null) { msg += "Output " + o.index + " added (" + o.valueNanoB + " nanoERG at creation height " + o.creationHeightB + "). "; return; }
+          if (o.valueNanoB === null) { msg += "Output " + o.index + " removed (was " + o.valueNanoA + " nanoERG). "; return; }
+          if (!o.changed) return;
+          if (!o.valueSame) msg += "Output " + o.index + " value " + o.valueNanoA + " → " + o.valueNanoB + " nanoERG (" + (o.valueDeltaNano.charAt(0) === "-" ? "" : "+") + o.valueDeltaNano + "). ";
+          if (!o.ergoTreeSame) msg += "Output " + o.index + " is guarded by a different ErgoTree. ";
+          if (!o.heightSame) msg += "Output " + o.index + " creation height " + o.creationHeightA + " → " + o.creationHeightB + " (" + (o.heightDelta >= 0 ? "+" : "") + o.heightDelta + " blocks). ";
+          o.tokens.forEach(function (t) {
+            if (t.change === "added") msg += "Output " + o.index + " token added: " + t.tokenId + " × " + t.amountB + ". ";
+            else if (t.change === "removed") msg += "Output " + o.index + " token removed: " + t.tokenId + " (was × " + t.amountA + "). ";
+            else if (t.change === "changed") msg += "Output " + o.index + " token " + t.tokenId + " amount " + t.amountA + " → " + t.amountB + ". ";
+          });
+          o.registers.forEach(function (r) {
+            if (r.change === "added") msg += "Output " + o.index + " register " + r.name + " added: " + r.valueB + " (" + r.typeB + ", raw " + r.rawHexB + "). ";
+            else if (r.change === "removed") msg += "Output " + o.index + " register " + r.name + " removed (was " + r.valueA + ", " + r.typeA + ", raw " + r.rawHexA + "). ";
+            else if (r.change === "changed") msg += "Output " + o.index + " register " + r.name + " changed: " + r.valueA + " (" + r.typeA + ", raw " + r.rawHexA + ") → " + r.valueB + " (" + r.typeB + ", raw " + r.rawHexB + "). ";
+          });
+        });
+      }
+      msg += "Comparison only, over the bytes you pasted: which of the two transactions is the right one is not a question bytes alone answer, and a present proof is not a verified one. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

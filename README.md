@@ -665,6 +665,32 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   over fleet-sdk's published transaction vectors plus
   a from-scratch synthetic carrying a proof, extension
   entries, a data input, a token output and a register.
+- **Transaction differ** — compares two serialized
+  transactions field by field and names exactly what
+  moved: inputs and outputs paired by position (one
+  existing on only one side is added or removed at its
+  position), per input the spent box, the proof
+  classified as in the signing round-trip checker, and
+  the context extension diffed per key by raw constant
+  bytes; the data inputs and distinct token IDs diffed
+  as sequences and as sets, so a pure reordering is
+  named as one even though it still changes the
+  transaction ID; per output the value with its signed
+  nanoERG delta, the ErgoTree, the creation height with
+  its signed block delta, the tokens per token ID and
+  the registers by raw constant bytes — compared as
+  written, never by the outputs' box IDs, which embed
+  the transaction ID itself. The verdict follows the
+  signing checker: identical, signing-only, or changed
+  with the changed sections named. It composes the
+  transaction parser rather than re-deriving its maths.
+  Verified against an independent Python oracle over
+  fleet-sdk's published transaction vectors plus
+  from-scratch synthetic pairs: signing-only, an output
+  value moved, a token amount moved, a register
+  changed, an extension constant changed, data inputs
+  reordered and removed, an input added and an output
+  added.
 
 ## Cross-chain integration
 

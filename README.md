@@ -326,6 +326,23 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   Verified against fleet-sdk's published VLQ vectors and an
   independent Python build. Encoding only — it signs and
   sends nothing.
+- **ZigZag codec** — how signed integers are written inside a
+  box, exposed on its own: a signed number is zig-zagged
+  (0 → 0, −1 → 1, 1 → 2, −2 → 3, negatives folded into the
+  odd numbers) and the result written as a VLQ — the two-step
+  form every signed box/register value takes, an SLong
+  through the 64-bit zig-zag and an SShort/SInt through
+  fleet-sdk's 32-bit one. Both widths, both directions, and
+  they genuinely differ at the extremes: 2147483647 is
+  `feffffff0f` at 64-bit width but `feffffffffffffffff01`
+  at 32-bit width, where fleet writes a negative 32-bit
+  result widened to its unsigned 64-bit form. Decode is
+  strict: exactly one canonical VLQ, and re-encoding the
+  decoded value at the chosen width must reproduce the
+  input byte-for-byte, so over-wide VLQs are refused.
+  Verified against fleet-sdk's published ZigZag spec
+  vectors and an independent Python build. Encoding only —
+  it signs and sends nothing.
 
 ## Cross-chain integration
 

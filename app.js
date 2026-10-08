@@ -973,6 +973,57 @@ function analyzeVlq(inputStr, directionStr) {
   return { direction: direction, value: read.value.toString(), hex: bytesToHex(bytes), byteLength: bytes.length };
 }
 
+/* ---------- ZigZag codec ---------- */
+/* Signed integers cannot go into a VLQ (tool 23) directly, so
+   Ergo zig-zags them first: 0 -> 0, -1 -> 1, 1 -> 2, -2 -> 3 —
+   negatives fold into the odd numbers so small magnitudes of
+   either sign stay small — and the result is written as a VLQ.
+   That two-step form is how every signed value inside a box or
+   register is stored (tools 15, 17 and 18 use it internally):
+   an SLong through the 64-bit zig-zag (fleet-sdk's zigZag64),
+   an SShort/SInt through its 32-bit one (zigZag32), which
+   zig-zags in signed 32-bit space and writes a negative result
+   widened to its unsigned 64-bit form — so 2147483647 is
+   feffffff0f at 64-bit width but feffffffffffffffff01 at 32-bit
+   width, the exact spelling the box parser reads back at the
+   32-bit extremes. This tool exposes the codec on its own, in
+   both directions and both widths, with exact BigInt maths.
+   Decode is strict like tool 23's (exactly one canonical VLQ),
+   plus one more check a box parser needs: re-encoding the
+   decoded value at the chosen width must reproduce the input
+   bytes, so an over-wide VLQ whose bits the width would
+   truncate or wrap is refused instead of read as a different
+   number. Verified against fleet-sdk's published zigZag spec
+   vectors and an independent Python build before coding. */
+function analyzeZigZag(inputStr, directionStr, widthStr) {
+  var direction = (directionStr == null ? "" : String(directionStr)).trim().toLowerCase();
+  if (direction !== "encode" && direction !== "decode") return null;
+  var width = (widthStr == null ? "" : String(widthStr)).trim();
+  if (width !== "64" && width !== "32") return null;
+  var input = inputStr == null ? "" : String(inputStr).trim();
+  var min = width === "64" ? -9223372036854775808n : -2147483648n;
+  var max = width === "64" ? 9223372036854775807n : 2147483647n;
+  if (direction === "encode") {
+    if (!/^-?[0-9]+$/.test(input)) return null;
+    var value = BigInt(input);
+    if (value < min || value > max) return null;
+    var unsigned = width === "64" ? zigzagEncode(value) : sigmaIntZigzag(Number(value));
+    var encBytes = writeVlqBig(unsigned);
+    return { direction: direction, width: width, value: value.toString(), unsigned: unsigned.toString(), hex: bytesToHex(Uint8Array.from(encBytes)), byteLength: encBytes.length };
+  }
+  var bytes = hexToBytes(input.replace(/\s+/g, ""));
+  if (!bytes || bytes.length === 0) return null;
+  var read = readVlqBig(bytes, 0);
+  if (!read || read.length !== bytes.length) return null;
+  var reenc = writeVlqBig(read.value);
+  if (reenc.length !== bytes.length) return null;
+  for (var i = 0; i < reenc.length; i++) if (reenc[i] !== bytes[i]) return null;
+  var signed = width === "64" ? zigzagDecode(read.value) : zigzagDecode32(read.value);
+  var unsigned2 = width === "64" ? zigzagEncode(signed) : sigmaIntZigzag(Number(signed));
+  if (unsigned2 !== read.value) return null;
+  return { direction: direction, width: width, value: signed.toString(), unsigned: read.value.toString(), hex: bytesToHex(bytes), byteLength: bytes.length };
+}
+
 /* ---------- Serialized box parser ---------- */
 /* The field-by-field inverse of tool 14: a serialized ErgoBox is
    [value: BigInt VLQ][ErgoTree][creation height: VLQ][token count:
@@ -1530,7 +1581,7 @@ function buildErgoBox(fields) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag };
 }
 
 if (typeof document !== "undefined") {
@@ -1886,6 +1937,25 @@ if (typeof document !== "undefined") {
         out.textContent = "✓ " + res.value + " encodes as VLQ hex " + res.hex + " (" + res.byteLength + (res.byteLength === 1 ? " byte" : " bytes") + ") — 7 bits per byte, least-significant group first, the high bit marking every byte but the last. That is the byte form this integer takes as a box value, height, token amount or count inside a serialized box (tools 15 and 17). Computed locally; nothing was fetched, signed or sent.";
       } else {
         out.textContent = "✓ That VLQ hex decodes to " + res.value + " — and it is the canonical spelling: re-encoding the value reproduces those exact bytes, so no shorter or longer form of the same number is hiding in it. Decoded locally; nothing was fetched, signed or sent.";
+      }
+    });
+
+    document.getElementById("zigzag-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("zigzag-result");
+      var res = analyzeZigZag(document.getElementById("zigzag-input").value, document.getElementById("zigzag-direction").value, document.getElementById("zigzag-width").value);
+      if (!res) {
+        out.textContent = "I could not convert that: encode needs a whole signed number inside the chosen width's range (64-bit: -9223372036854775808 to 9223372036854775807; 32-bit: -2147483648 to 2147483647), and decode needs exactly one canonical ZigZag VLQ as hex — no truncated encoding, no trailing bytes, no overlong spelling, and no value wider than the chosen width can hold. Nothing was converted.";
+        return;
+      }
+      var kind = res.width === "64" ? "an SLong" : "an SShort or SInt";
+      if (res.direction === "encode") {
+        var msg = "✓ " + res.value + " zig-zags to unsigned " + res.unsigned + " and writes as VLQ hex " + res.hex + " (" + res.byteLength + (res.byteLength === 1 ? " byte" : " bytes") + ") at " + res.width + "-bit width. That is the byte form this value takes as " + kind + " inside a serialized box or register (tools 15, 17 and 18). ";
+        if (res.width === "32" && res.byteLength > 5) msg += "The long form is fleet-sdk's real spelling, not a mistake: a 32-bit zig-zag result that lands negative is written widened to its unsigned 64-bit form. ";
+        msg += "Computed locally; nothing was fetched, signed or sent.";
+        out.textContent = msg;
+      } else {
+        out.textContent = "✓ That VLQ hex is unsigned " + res.unsigned + ", which un-zig-zags to " + res.value + " at " + res.width + "-bit width — and re-encoding that value reproduces those exact bytes, so the spelling is canonical for this width, the way a box parser must read " + kind + ". Decoded locally; nothing was fetched, signed or sent.";
       }
     });
 

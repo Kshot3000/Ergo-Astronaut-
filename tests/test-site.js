@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network", "p2shbuild-hex", "p2shbuild-network", "hash-input", "hash-mode", "hash-expected", "b58-input", "b58-direction", "vlq-input", "vlq-direction"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=23"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network", "p2shbuild-hex", "p2shbuild-network", "hash-input", "hash-mode", "hash-expected", "b58-input", "b58-direction", "vlq-input", "vlq-direction", "zigzag-input", "zigzag-direction", "zigzag-width"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=24"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -55,6 +55,7 @@ check("p2sh builder tool on hub", html.includes('id="p2shbuild-calc"') && html.i
 check("blake2b hash tool on hub", html.includes('id="hash-calc"') && html.includes("Blake2b-256 hash calculator") && html.includes("proves no ownership") && readme.includes("Blake2b-256 hash calculator"));
 check("base58 codec tool on hub", html.includes('id="b58-calc"') && html.includes("Base58 codec") && html.includes("not Base58Check") && readme.includes("Base58 codec"));
 check("vlq codec tool on hub", html.includes('id="vlq-calc"') && html.includes("VLQ codec") && html.includes("canonical") && readme.includes("VLQ codec"));
+check("zigzag codec tool on hub", html.includes('id="zigzag-calc"') && html.includes("ZigZag codec") && html.includes("zig-zagged") && html.includes("feffffffffffffffff01") && readme.includes("ZigZag codec"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -576,6 +577,25 @@ check("vlq decode tolerates whitespace, 0x and uppercase", app.analyzeVlq(" 0xC0
 check("vlq rejects non-canonical overlong spellings", app.analyzeVlq("8000", "decode") === null && app.analyzeVlq("8100", "decode") === null && app.analyzeVlq("808000", "decode") === null);
 check("vlq rejects truncated and trailing bytes", app.analyzeVlq("80", "decode") === null && app.analyzeVlq("800100", "decode") === null && app.analyzeVlq("", "decode") === null);
 check("vlq rejects junk plainly", app.analyzeVlq("-1", "encode") === null && app.analyzeVlq("1.5", "encode") === null && app.analyzeVlq("", "encode") === null && app.analyzeVlq("zz", "decode") === null && app.analyzeVlq("123", "sideways") === null && app.analyzeVlq(null, null) === null);
+
+/* ZigZag codec — the signed layer over VLQ inside every box.
+   Vectors are fleet-sdk's published zigZag.spec set plus an
+   independent Python build computed before coding: the clean
+   64-bit map (SLong) and fleet's 32-bit map (SShort/SInt),
+   whose negative results widen to unsigned 64-bit, so the
+   extremes of the two widths collide byte-for-byte while a
+   mid-range value like 2147483647 differs between them. */
+check("zigzag 64 fleet vectors encode", [["0","00"],["1","02"],["-1","01"],["-2","03"],["852574","bc8968"],["-852574","bb8968"],["1073741823","feffffff07"],["9223372036854775807","feffffffffffffffff01"],["-9223372036854775808","ffffffffffffffffff01"]].every(([n,h]) => app.analyzeZigZag(n, "encode", "64").hex === h));
+check("zigzag 64 fleet vectors decode", [["00","0"],["02","1"],["01","-1"],["bc8968","852574"],["bb8968","-852574"],["feffffffffffffffff01","9223372036854775807"],["ffffffffffffffffff01","-9223372036854775808"]].every(([h,n]) => app.analyzeZigZag(h, "decode", "64").value === n));
+check("zigzag 32 fleet vectors encode", [["0","00"],["1","02"],["-1","01"],["852574","bc8968"],["-852574","bb8968"],["-32768","ffff03"],["32767","feff03"],["2147483647","feffffffffffffffff01"],["-2147483648","ffffffffffffffffff01"]].every(([n,h]) => app.analyzeZigZag(n, "encode", "32").hex === h));
+check("zigzag 32 fleet vectors decode", [["ffff03","-32768"],["feff03","32767"],["feffffffffffffffff01","2147483647"],["ffffffffffffffffff01","-2147483648"]].every(([h,n]) => app.analyzeZigZag(h, "decode", "32").value === n));
+check("zigzag widths genuinely differ mid-range", app.analyzeZigZag("2147483647", "encode", "64").hex === "feffffff0f" && app.analyzeZigZag("2147483647", "encode", "64").unsigned === "4294967294" && app.analyzeZigZag("2147483647", "encode", "32").unsigned === "18446744073709551614");
+check("zigzag round-trips both widths", app.analyzeZigZag(app.analyzeZigZag("-123456789", "encode", "64").hex, "decode", "64").value === "-123456789" && app.analyzeZigZag(app.analyzeZigZag("-123456", "encode", "32").hex, "decode", "32").value === "-123456");
+check("zigzag decode tolerates whitespace, 0x and uppercase", app.analyzeZigZag(" 0xBB 8968\n", "DECODE", "64").value === "-852574");
+check("zigzag rejects out-of-range encodes", app.analyzeZigZag("9223372036854775808", "encode", "64") === null && app.analyzeZigZag("-9223372036854775809", "encode", "64") === null && app.analyzeZigZag("2147483648", "encode", "32") === null && app.analyzeZigZag("-2147483649", "encode", "32") === null);
+check("zigzag rejects non-canonical and truncated decodes", app.analyzeZigZag("8000", "decode", "64") === null && app.analyzeZigZag("8000", "decode", "32") === null && app.analyzeZigZag("80", "decode", "64") === null && app.analyzeZigZag("0200", "decode", "64") === null && app.analyzeZigZag("", "decode", "64") === null);
+check("zigzag rejects over-wide decodes for the width", app.analyzeZigZag("ffffffffffffffffff7f", "decode", "64") === null && app.analyzeZigZag("8080808010", "decode", "32") === null);
+check("zigzag rejects junk plainly", app.analyzeZigZag("1.5", "encode", "64") === null && app.analyzeZigZag("--1", "encode", "64") === null && app.analyzeZigZag("", "encode", "64") === null && app.analyzeZigZag("zz", "decode", "64") === null && app.analyzeZigZag("123", "sideways", "64") === null && app.analyzeZigZag("123", "encode", "16") === null && app.analyzeZigZag(null, null, null) === null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

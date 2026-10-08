@@ -444,6 +444,23 @@
         <button type="submit" class="btn primary">Convert it</button>
         <p id="vlq-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="zigzag-calc">
+        <h3>24 · ZigZag codec (how signed integers are written inside a box)</h3>
+        <p>Tool 23's VLQ has no negatives — so a signed integer is first <strong>zig-zagged</strong>: 0 → 0, −1 → 1, 1 → 2, −2 → 3, folding the negatives into the odd numbers so small magnitudes of either sign stay small, and only then written as a VLQ. That two-step form is how every signed value inside a box or register is stored — an SLong through the 64-bit zig-zag, an SShort or SInt through fleet-sdk's 32-bit one. Pick the width and go either way here: a signed number to its unsigned zig-zag value and exact VLQ hex, or VLQ hex back to the signed number. The widths genuinely differ, and the extremes show why: 2147483647 zig-zags at 64-bit width to 4294967294 (<code>feffffff0f</code>), but at 32-bit width fleet zig-zags in signed 32-bit space and writes a negative result widened to its unsigned 64-bit form, so the same number comes out as 18446744073709551614 (<code>feffffffffffffffff01</code>) — the exact spelling tools 15, 17 and 18 read and write at the 32-bit extremes. Decode is strict, the way a box parser must be: exactly one canonical VLQ, and re-encoding the decoded value at the chosen width must reproduce the input byte-for-byte, so an over-wide VLQ whose bits the width would truncate or wrap is refused instead of read as a different number. Exact BigInt maths, verified against fleet-sdk's published ZigZag vectors and an independent Python build before it shipped here. Encoding only — it signs and sends nothing.</p>
+        <label for="zigzag-input">Input (a signed whole number to encode, or ZigZag VLQ hex to decode)</label>
+        <textarea id="zigzag-input" rows="3" spellcheck="false" placeholder="e.g. -852574 in encode mode, or bb8968 in decode mode" autocomplete="off"></textarea>
+        <label for="zigzag-direction">Direction</label>
+        <select id="zigzag-direction">
+          <option value="encode" selected>Encode: signed number → VLQ hex</option><option value="decode">Decode: VLQ hex → signed number</option>
+        </select>
+        <label for="zigzag-width">Width</label>
+        <select id="zigzag-width">
+          <option value="64" selected>64-bit — SLong</option><option value="32">32-bit — SShort / SInt (fleet-sdk form)</option>
+        </select>
+        <button type="submit" class="btn primary">Convert it</button>
+        <p id="zigzag-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -489,6 +506,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=23"></script>
+<script src="app.js?v=24"></script>
 </body>
 </html>

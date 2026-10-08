@@ -625,6 +625,25 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   removed, proof changed, an output value moved by one
   nanoERG, an extension constant changed, and a data
   input added.
+- **Box differ** — compares two serialized boxes field
+  by field and names exactly what moved: the value
+  (with the signed nanoERG delta), the ErgoTree, the
+  creation height (with the signed block delta), the
+  tokens per token ID (added, removed, or amount
+  changed), the registers R4–R9 (compared by their raw
+  constant bytes, reported with type and decoded
+  value), and the claimed provenance — creating
+  transaction ID and output index. The box ID is
+  reported for both sides but deliberately not diffed
+  as a field: it is the hash of the whole
+  serialization, so any change makes a different ID
+  and diffing by it would report everything changed
+  whenever anything did. It composes the box parser
+  rather than re-deriving its maths. Verified against
+  an independent Python oracle over fleet-sdk's
+  published box vectors plus from-scratch one-field
+  variants: value, token amount, height, index, and a
+  register added, changed and removed.
 
 ## Cross-chain integration
 

@@ -707,6 +707,17 @@
         <button type="submit" class="btn primary">Compare before ⇄ after</button>
         <p id="txsign-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="boxdiff-calc">
+        <h3>41 · Box differ (serialized box ⇄ serialized box → which fields changed?)</h3>
+        <p>Tool 40 compares two serializations of one transaction; this is the same question one level down, for the box itself. Paste two serialized boxes — two versions of what should be the same box, a box before and after a tool rebuilt it, or two boxes an explorer and an SDK disagree about — and the report names exactly which fields moved: the value, with the signed nanoERG delta; the ErgoTree; the creation height, with the signed block delta; the tokens, per token ID (added, removed, or amount changed); the registers R4–R9, compared by their raw constant bytes and reported with type and decoded value (added, removed, or changed); and the claimed provenance — the creating transaction ID and output index — so it also says whether the two boxes claim the same origin at all. The box ID is reported for both but deliberately not diffed as a field: it is the Blake2b-256 of the whole serialization (tool 14), so any field change makes a different ID, and diffing by it would report everything changed whenever anything did. The honesty boundary is stated plainly: the comparison is over bytes — whether the second box is the right version of the first is not a question bytes alone answer. Comparison only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="boxdiff-a">First box — serialized box (hex, as tool 15 takes it)</label>
+        <textarea id="boxdiff-a" rows="3" spellcheck="false" placeholder="e.g. c0843d00… (the first serialized box)" autocomplete="off"></textarea>
+        <label for="boxdiff-b">Second box — serialized box (hex, the version to compare against)</label>
+        <textarea id="boxdiff-b" rows="3" spellcheck="false" placeholder="e.g. c1843d00… (the second serialized box)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Diff the boxes</button>
+        <p id="boxdiff-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -752,6 +763,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=40"></script>
+<script src="app.js?v=41"></script>
 </body>
 </html>

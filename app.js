@@ -3399,6 +3399,119 @@ function compareTxSigning(beforeHex, afterHex) {
   };
 }
 
+/* Tools 15 and 17 read and build ONE box; tool 33 totals a set.
+   This compares TWO serialized boxes field by field and says
+   exactly what moved: value (with the signed nanoERG delta),
+   ErgoTree, creation height (with the signed block delta), tokens
+   (added / removed / amount-changed, per token ID), registers
+   R4–R9 (added / removed / changed, compared by their raw
+   constant bytes and reported with type and decoded value), and
+   provenance — the creating transaction ID and output index,
+   which together say whether the two boxes even claim the same
+   origin. The box ID is deliberately NOT a diffed field: it is
+   the Blake2b-256 of the whole serialization (tool 14), so any
+   field change produces a different ID — diffing by it would
+   report "everything changed" whenever anything did (the same
+   trap tool 40 avoids for transaction outputs). Byte length is
+   reported as a fact, not a field: it follows from the fields.
+   The honesty boundary: this compares bytes — whether the
+   second box is the "right" version of the first is not a
+   question bytes alone answer. Verified against an independent
+   Python oracle (oracle-boxdiff.py): a from-scratch box reader
+   over fleet vectors BOX1 / BOX2 / BOX3 (its box IDs asserted
+   against the recorded ones) plus a from-scratch writer that
+   rebuilds BOX1 and the register-bearing SYNTH_A byte-for-byte
+   and assembles the one-field variants — value, token amount,
+   height, index, register added / changed / removed. */
+function compareErgoBoxes(aHex, bHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, boxIdA: null, boxIdB: null, sameBoxId: null, identicalBytes: null, byteLengthA: null, byteLengthB: null, byteLengthDelta: null, valueNanoA: null, valueNanoB: null, valueDeltaNano: null, valueSame: null, ergoTreeA: null, ergoTreeB: null, ergoTreeSame: null, creationHeightA: null, creationHeightB: null, heightDelta: null, heightSame: null, tokens: null, tokensSame: null, tokensAdded: null, tokensRemoved: null, tokensChanged: null, registers: null, registersSame: null, registersAdded: null, registersRemoved: null, registersChanged: null, transactionIdA: null, transactionIdB: null, transactionIdSame: null, indexA: null, indexB: null, indexSame: null, sameProvenance: null, changedFields: null };
+  };
+  var a = parseErgoBox(aHex);
+  if (!a.valid) return fail("The FIRST box does not parse: " + a.reason);
+  var b = parseErgoBox(bHex);
+  if (!b.valid) return fail("The SECOND box does not parse: " + b.reason);
+  var aBytes = hexToBytes(aHex == null ? "" : String(aHex).replace(/\s+/g, ""));
+  var bBytes = hexToBytes(bHex == null ? "" : String(bHex).replace(/\s+/g, ""));
+  var identicalBytes = !!(aBytes && bBytes && aBytes.length === bBytes.length && aBytes.every(function (x, i) { return x === bBytes[i]; }));
+  var changedFields = [];
+  var valueSame = a.valueNano === b.valueNano;
+  if (!valueSame) changedFields.push("value");
+  var ergoTreeSame = a.ergoTree === b.ergoTree;
+  if (!ergoTreeSame) changedFields.push("ergoTree");
+  var heightSame = a.creationHeight === b.creationHeight;
+  if (!heightSame) changedFields.push("creationHeight");
+  /* tokens, unioned in A's order then B-only tokens in B's order */
+  var aTok = {}, bTok = {};
+  a.tokens.forEach(function (t) { aTok[t.tokenId] = t.amount; });
+  b.tokens.forEach(function (t) { bTok[t.tokenId] = t.amount; });
+  var tokOrder = a.tokens.map(function (t) { return t.tokenId; });
+  b.tokens.forEach(function (t) { if (!(t.tokenId in aTok)) tokOrder.push(t.tokenId); });
+  var tokens = [], tokensAdded = [], tokensRemoved = [], tokensChanged = [];
+  tokOrder.forEach(function (tid) {
+    var aa = tid in aTok ? aTok[tid] : null;
+    var bb = tid in bTok ? bTok[tid] : null;
+    var ch;
+    if (aa === null) { ch = "added"; tokensAdded.push(tid); }
+    else if (bb === null) { ch = "removed"; tokensRemoved.push(tid); }
+    else if (aa !== bb) { ch = "changed"; tokensChanged.push(tid); }
+    else ch = "unchanged";
+    tokens.push({ tokenId: tid, amountA: aa, amountB: bb, change: ch });
+  });
+  var tokensSame = tokensAdded.length === 0 && tokensRemoved.length === 0 && tokensChanged.length === 0;
+  if (!tokensSame) changedFields.push("tokens");
+  /* registers, unioned in R4–R9 order, compared by raw constant */
+  var aReg = {}, bReg = {};
+  a.registers.forEach(function (r) { aReg[r.name] = r; });
+  b.registers.forEach(function (r) { bReg[r.name] = r; });
+  var regNames = ["R4", "R5", "R6", "R7", "R8", "R9"].filter(function (n) { return n in aReg || n in bReg; });
+  var registers = [], registersAdded = [], registersRemoved = [], registersChanged = [];
+  regNames.forEach(function (n) {
+    var ra = n in aReg ? aReg[n] : null;
+    var rb = n in bReg ? bReg[n] : null;
+    var ch;
+    if (ra === null) { ch = "added"; registersAdded.push(n); }
+    else if (rb === null) { ch = "removed"; registersRemoved.push(n); }
+    else if (ra.rawHex !== rb.rawHex) { ch = "changed"; registersChanged.push(n); }
+    else ch = "unchanged";
+    registers.push({
+      name: n,
+      typeA: ra ? ra.type : null, typeB: rb ? rb.type : null,
+      valueA: ra ? ra.value : null, valueB: rb ? rb.value : null,
+      rawHexA: ra ? ra.rawHex : null, rawHexB: rb ? rb.rawHex : null,
+      change: ch
+    });
+  });
+  var registersSame = registersAdded.length === 0 && registersRemoved.length === 0 && registersChanged.length === 0;
+  if (!registersSame) changedFields.push("registers");
+  var transactionIdSame = a.transactionId === b.transactionId;
+  if (!transactionIdSame) changedFields.push("transactionId");
+  var indexSame = a.index === b.index;
+  if (!indexSame) changedFields.push("index");
+  return {
+    valid: true, reason: null,
+    verdict: identicalBytes ? "identical" : "changed",
+    boxIdA: a.boxId, boxIdB: b.boxId, sameBoxId: a.boxId === b.boxId,
+    identicalBytes: identicalBytes,
+    byteLengthA: a.byteLength, byteLengthB: b.byteLength,
+    byteLengthDelta: b.byteLength - a.byteLength,
+    valueNanoA: a.valueNano, valueNanoB: b.valueNano,
+    valueDeltaNano: (BigInt(b.valueNano) - BigInt(a.valueNano)).toString(),
+    valueSame: valueSame,
+    ergoTreeA: a.ergoTree, ergoTreeB: b.ergoTree, ergoTreeSame: ergoTreeSame,
+    creationHeightA: a.creationHeight, creationHeightB: b.creationHeight,
+    heightDelta: b.creationHeight - a.creationHeight, heightSame: heightSame,
+    tokens: tokens, tokensSame: tokensSame,
+    tokensAdded: tokensAdded, tokensRemoved: tokensRemoved, tokensChanged: tokensChanged,
+    registers: registers, registersSame: registersSame,
+    registersAdded: registersAdded, registersRemoved: registersRemoved, registersChanged: registersChanged,
+    transactionIdA: a.transactionId, transactionIdB: b.transactionId, transactionIdSame: transactionIdSame,
+    indexA: a.index, indexB: b.index, indexSame: indexSame,
+    sameProvenance: transactionIdSame && indexSame,
+    changedFields: changedFields
+  };
+}
+
 /* ---------- Transaction JSON converter ---------- */
 /* The same unsigned transaction in the two forms Ergo developers
    actually move between: the EIP-12 / fleet-sdk JSON dialect (what
@@ -3629,7 +3742,7 @@ function planTokenMint(firstInputId, nameStr, descStr, decStr, amountStr, typeSt
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes };
 }
 
 if (typeof document !== "undefined") {
@@ -4475,6 +4588,42 @@ if (typeof document !== "undefined") {
         msg += "Do not treat the after version as the transaction you approved — compare it with tools 38 and 39 before signing anything. ";
       }
       msg += "Comparison only, over the bytes you pasted: whether a change is legitimate, or a proof valid, is not something bytes alone can answer. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("boxdiff-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("boxdiff-result");
+      var res = compareErgoBoxes(document.getElementById("boxdiff-a").value, document.getElementById("boxdiff-b").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.verdict === "identical") {
+        msg = "✓ The two serializations are byte-for-byte identical (" + res.byteLengthA + " bytes) — both are box " + res.boxIdA + ", holding " + res.valueNanoA + " nanoERG, created at height " + res.creationHeightA + " by transaction " + res.transactionIdA + " at index " + res.indexA + ". ";
+      } else {
+        msg = "⚠ The boxes differ — changed field(s): " + res.changedFields.join(", ") + ". First box " + res.boxIdA + " (" + res.byteLengthA + " bytes), second box " + res.boxIdB + " (" + res.byteLengthB + " bytes" + (res.byteLengthDelta !== 0 ? ", " + (res.byteLengthDelta > 0 ? "+" : "") + res.byteLengthDelta : "") + "). ";
+        if (!res.valueSame) msg += "Value: " + res.valueNanoA + " → " + res.valueNanoB + " nanoERG (" + (res.valueDeltaNano.charAt(0) === "-" ? "" : "+") + res.valueDeltaNano + "). ";
+        if (!res.ergoTreeSame) msg += "ErgoTree differs — the two boxes are guarded by different scripts. ";
+        if (!res.heightSame) msg += "Creation height: " + res.creationHeightA + " → " + res.creationHeightB + " (" + (res.heightDelta > 0 ? "+" : "") + res.heightDelta + " blocks). ";
+        res.tokens.forEach(function (t) {
+          if (t.change === "added") msg += "Token " + t.tokenId + " added with amount " + t.amountB + ". ";
+          else if (t.change === "removed") msg += "Token " + t.tokenId + " removed (was " + t.amountA + "). ";
+          else if (t.change === "changed") msg += "Token " + t.tokenId + " amount " + t.amountA + " → " + t.amountB + ". ";
+        });
+        res.registers.forEach(function (r) {
+          if (r.change === "added") msg += "Register " + r.name + " added: " + r.valueB + " (" + r.typeB + ", raw " + r.rawHexB + "). ";
+          else if (r.change === "removed") msg += "Register " + r.name + " removed (was " + r.valueA + ", " + r.typeA + ", raw " + r.rawHexA + "). ";
+          else if (r.change === "changed") msg += "Register " + r.name + " changed: " + r.valueA + " (" + r.typeA + ", raw " + r.rawHexA + ") → " + r.valueB + " (" + r.typeB + ", raw " + r.rawHexB + "). ";
+        });
+        if (!res.transactionIdSame) msg += "Creating transaction differs (" + res.transactionIdA + " → " + res.transactionIdB + "). ";
+        if (!res.indexSame) msg += "Output index differs (" + res.indexA + " → " + res.indexB + "). ";
+        msg += res.sameProvenance
+          ? "Both boxes still claim the same origin (same creating transaction and index) — the content moved, not the claimed provenance. "
+          : "The two boxes do not claim the same origin — treat them as different boxes that happen to be compared, not two versions of one box, unless you have another reason to pair them. ";
+      }
+      msg += "Comparison only, over the bytes you pasted: a box's ID is the hash of its bytes, so any field change makes a different box — this shows which fields moved, and whether the second box is the right version of the first is not a question bytes alone answer. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

@@ -691,6 +691,26 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   changed, an extension constant changed, data inputs
   reordered and removed, an input added and an output
   added.
+- **Box set differ** — compares two sets of serialized
+  boxes (one box per line in each) and names what
+  changed between them: the boxes in both, the boxes
+  that left and the boxes that arrived, and how the
+  sets' ERG and per-token totals moved, with exact
+  signed deltas. A box's identity is its box ID, so a
+  box whose contents changed at all appears as one
+  removed plus one added — the field-by-field story of
+  two single boxes is the box differ's job. Membership
+  ignores the pasted order, but a different order is
+  reported as a fact. Both sides are totalled by the
+  box set summarizer itself, with its strictness
+  carried over: an unparseable line or a duplicated box
+  on either side refuses the whole comparison with the
+  side and line named. It fetches nothing and is not a
+  live wallet balance. Verified against an independent
+  Python oracle over fleet-sdk's published box vectors
+  plus a from-scratch token-amount variant: identical,
+  reordered, one box swapped, a token total changed and
+  a strict subset.
 
 ## Cross-chain integration
 

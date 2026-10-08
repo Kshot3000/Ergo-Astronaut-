@@ -4056,8 +4056,86 @@ function planTokenMint(firstInputId, nameStr, descStr, decStr, amountStr, typeSt
   };
 }
 
+/* ---------- Box set differ (two sets of boxes -> what changed?) ---------- */
+/* Tool 33 totals one set of boxes and tool 41 diffs two single
+   boxes field by field. This diffs two SETS — a wallet's boxes
+   before and after, a snapshot against a later one: which boxes
+   are in both, which left, which arrived, and how the set's ERG
+   and per-token totals moved. Identity is the box ID, the
+   Blake2b-256 hash of the box's full serialization: a box whose
+   contents changed at all is a DIFFERENT box, so it shows here as
+   one removed plus one added, never as an in-place edit — the
+   field-level story of two single boxes is tool 41's job, and
+   this tool says so. Membership ignores the order the lines are
+   pasted in (a set has no order), but the order is still reported
+   (sameOrder) because a re-pasted set in a different order is a
+   fact worth naming, not an error. Both sides are summarized by
+   tool 33 itself, so every total here is tool 33's total for that
+   side — a test asserts the agreement — and tool 33's strictness
+   carries over: an unparseable line or a box listed twice on one
+   side refuses the whole comparison with the side and line named,
+   because a silently skipped or double-counted box would corrupt
+   every delta. Token totals aggregate per ID across each set,
+   first-set order then second-only IDs; a token missing on a side
+   counts as 0 there, and its change is added / removed / changed /
+   unchanged by its two totals, with an exact signed delta. Totals
+   are exact BigInt; the signed ERG delta renders through
+   nanoToErg on the absolute value so a negative delta is exact
+   too. The honesty boundary: this compares the bytes you pasted —
+   it fetches nothing, so it is not a live wallet balance, and
+   which set is the right one is not a question bytes alone
+   answer. Verified against an independent Python oracle
+   (oracle-boxsetdiff.py): a from-scratch box reader/writer over
+   the fleet vectors, box IDs asserted against the recorded ones. */
+function compareBoxSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, boxCountA: null, boxCountB: null, countDelta: null, common: null, added: null, removed: null, sameOrder: null, totalNanoA: null, totalNanoB: null, totalDeltaNano: null, totalErgA: null, totalErgB: null, totalDeltaErg: null, totalBytesA: null, totalBytesB: null, byteDelta: null, tokens: null, tokensSame: null, tokensAdded: null, tokensRemoved: null, tokensChanged: null };
+  };
+  var a = summarizeBoxSet(aText, "");
+  if (!a.valid) return fail("The FIRST set is refused: " + a.reason);
+  var b = summarizeBoxSet(bText, "");
+  if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
+  var idsA = a.boxes.map(function (x) { return x.boxId; });
+  var idsB = b.boxes.map(function (x) { return x.boxId; });
+  var inA = {}, inB = {};
+  idsA.forEach(function (id) { inA[id] = true; });
+  idsB.forEach(function (id) { inB[id] = true; });
+  var common = idsA.filter(function (id) { return !!inB[id]; });
+  var removed = idsA.filter(function (id) { return !inB[id]; });
+  var added = idsB.filter(function (id) { return !inA[id]; });
+  var sameOrder = idsA.length === idsB.length && idsA.every(function (id, i) { return id === idsB[i]; });
+  var tokA = {}, tokB = {}, order = [];
+  a.tokenTotals.forEach(function (t) { tokA[t.tokenId] = t.amount; order.push(t.tokenId); });
+  b.tokenTotals.forEach(function (t) { tokB[t.tokenId] = t.amount; if (!(t.tokenId in tokA)) order.push(t.tokenId); });
+  var tokens = [], tokensAdded = [], tokensRemoved = [], tokensChanged = [];
+  order.forEach(function (id) {
+    var aa = id in tokA ? tokA[id] : null;
+    var bb = id in tokB ? tokB[id] : null;
+    var change;
+    if (aa === null) { change = "added"; tokensAdded.push(id); }
+    else if (bb === null) { change = "removed"; tokensRemoved.push(id); }
+    else if (aa !== bb) { change = "changed"; tokensChanged.push(id); }
+    else change = "unchanged";
+    tokens.push({ tokenId: id, amountA: aa, amountB: bb, delta: (BigInt(bb === null ? "0" : bb) - BigInt(aa === null ? "0" : aa)).toString(), change: change });
+  });
+  var deltaNano = BigInt(b.totalNano) - BigInt(a.totalNano);
+  var deltaErg = deltaNano === 0n ? "0" : (deltaNano < 0n ? "-" : "") + nanoToErg((deltaNano < 0n ? -deltaNano : deltaNano).toString());
+  return {
+    valid: true, reason: null,
+    verdict: added.length === 0 && removed.length === 0 ? "same-set" : "changed",
+    boxCountA: a.boxCount, boxCountB: b.boxCount, countDelta: b.boxCount - a.boxCount,
+    common: common, added: added, removed: removed, sameOrder: sameOrder,
+    totalNanoA: a.totalNano, totalNanoB: b.totalNano, totalDeltaNano: deltaNano.toString(),
+    totalErgA: a.totalErg, totalErgB: b.totalErg, totalDeltaErg: deltaErg,
+    totalBytesA: a.totalBytes, totalBytesB: b.totalBytes, byteDelta: b.totalBytes - a.totalBytes,
+    tokens: tokens,
+    tokensSame: tokensAdded.length === 0 && tokensRemoved.length === 0 && tokensChanged.length === 0,
+    tokensAdded: tokensAdded, tokensRemoved: tokensRemoved, tokensChanged: tokensChanged
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets };
 }
 
 if (typeof document !== "undefined") {
@@ -5012,6 +5090,33 @@ if (typeof document !== "undefined") {
         });
       }
       msg += "Comparison only, over the bytes you pasted: which of the two transactions is the right one is not a question bytes alone answer, and a present proof is not a verified one. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("boxsetdiff-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("boxsetdiff-result");
+      var res = compareBoxSets(document.getElementById("boxsetdiff-a").value, document.getElementById("boxsetdiff-b").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.verdict === "same-set") {
+        msg = "✓ The two sets hold the same boxes — " + res.boxCountA + " box(es), " + res.totalNanoA + " nanoERG (" + res.totalErgA + " ERG), " + res.totalBytesA + " bytes in total" + (res.sameOrder ? ", pasted in the same order." : ", pasted in a different order — membership is what a set comparison judges, so the order difference is reported, not treated as a change.") + " Every token total is identical too. ";
+      } else {
+        msg = "⚠ The sets differ — " + res.boxCountA + " → " + res.boxCountB + " box(es) (" + (res.countDelta >= 0 ? "+" : "") + res.countDelta + "), " + res.common.length + " box(es) in both. ";
+        res.removed.forEach(function (id) { msg += "Removed: box " + id + ". "; });
+        res.added.forEach(function (id) { msg += "Added: box " + id + ". "; });
+        msg += "Total ERG " + res.totalNanoA + " → " + res.totalNanoB + " nanoERG (" + (res.totalDeltaNano.charAt(0) === "-" ? "" : "+") + res.totalDeltaNano + " nanoERG, " + (res.totalDeltaErg.charAt(0) === "-" || res.totalDeltaErg === "0" ? "" : "+") + res.totalDeltaErg + " ERG), total size " + res.totalBytesA + " → " + res.totalBytesB + " bytes (" + (res.byteDelta >= 0 ? "+" : "") + res.byteDelta + "). ";
+        res.tokens.forEach(function (t) {
+          if (t.change === "added") msg += "Token added: " + t.tokenId + " × " + t.amountB + " in the second set. ";
+          else if (t.change === "removed") msg += "Token removed: " + t.tokenId + " (was × " + t.amountA + "). ";
+          else if (t.change === "changed") msg += "Token " + t.tokenId + " total " + t.amountA + " → " + t.amountB + " (" + (t.delta.charAt(0) === "-" ? "" : "+") + t.delta + "). ";
+        });
+        msg += "A box whose contents changed at all is a different box, so it appears above as one removed plus one added — tool 41 diffs two single boxes field by field. ";
+      }
+      msg += "Comparison only, over the bytes you pasted: it fetches nothing and is not a live wallet balance, and which set is the right one is not a question bytes alone answer. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

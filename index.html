@@ -738,6 +738,17 @@
         <button type="submit" class="btn primary">Diff the transactions</button>
         <p id="txdiff-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="boxsetdiff-calc">
+        <h3>44 · Box set differ (two sets of boxes → which boxes changed?)</h3>
+        <p>Tool 33 totals one set of boxes and tool 41 diffs two single boxes field by field. Paste two sets of serialized boxes — a wallet's boxes before and after, a snapshot against a later one, one box per line in each — and this diffs the sets: which boxes are in both, which left, which arrived, and how the sets' ERG and per-token totals moved. A box's identity is its box ID, the Blake2b-256 hash of its full serialization, so a box whose contents changed at all is a different box: it shows here as one removed plus one added, never as an in-place edit — the field-by-field story of two single boxes is tool 41's job. Membership ignores the order the lines are pasted in, but the order is still reported, because a re-pasted set in a different order is a fact worth naming, not an error. Both sides are totalled by tool 33 itself, with its strictness carried over: an unparseable line, or the same box listed twice on one side, refuses the whole comparison with the side and line named, because a silently skipped or double-counted box would corrupt every delta. The honesty boundary is stated plainly: this compares the bytes you pasted — it fetches nothing and is not a live wallet balance, and which set is the right one is not a question bytes alone answer. Comparison only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="boxsetdiff-a">First set — serialized boxes (hex, one full box per line, as tool 33 takes them)</label>
+        <textarea id="boxsetdiff-a" rows="5" spellcheck="false" placeholder="e.g. c0843d00… (one box's full serialized bytes per line)" autocomplete="off"></textarea>
+        <label for="boxsetdiff-b">Second set — serialized boxes (hex, one full box per line)</label>
+        <textarea id="boxsetdiff-b" rows="5" spellcheck="false" placeholder="e.g. c0843d00… (one box's full serialized bytes per line)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Diff the box sets</button>
+        <p id="boxsetdiff-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -783,6 +794,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=43"></script>
+<script src="app.js?v=44"></script>
 </body>
 </html>

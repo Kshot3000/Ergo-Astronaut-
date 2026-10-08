@@ -493,6 +493,23 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   statement about the pasted bytes, not a live balance.
   Verified against an independent Python oracle over
   fleet-sdk's published box vectors.
+- **Transaction fee & balance checker** — a serialized
+  transaction plus the boxes it spends (matched by box ID
+  against the transaction's input list, strictly both ways):
+  exact input/output ERG totals, a plain verdict on whether
+  the ERG balances to zero as every valid non-coinbase
+  transaction must, the fee as the ERG locked in outputs
+  guarded by the miner fee contract (not a field, and not an
+  inputs-minus-outputs remainder), and per-token accounting —
+  in, out, burned, and minted, where a minted token's ID must
+  equal the first input's box ID or it is flagged. Data
+  inputs are read, not spent, and never enter the sums.
+  It composes the transaction parser and the box parser
+  rather than re-deriving their maths. Verified against an
+  independent Python oracle that builds transactions from
+  scratch over fleet-sdk's published box vectors: a balanced
+  fee-paying case, a burn-and-mint case, an unbalanced case,
+  and a data-input case.
 
 ## Cross-chain integration
 

@@ -608,6 +608,17 @@
         <button type="submit" class="btn primary">Summarize the set</button>
         <p id="boxset-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txfee-calc">
+        <h3>34 · Transaction fee &amp; balance checker (transaction + its input boxes → the fee, and whether it balances)</h3>
+        <p>Tool 29 reads a transaction's outputs, but a transaction's bytes never carry its input values — so the fee it paid is invisible from the transaction alone. Paste the transaction <em>and</em> the boxes it spends (one full serialized box per line, the same bytes tool 15 reads — an explorer links each input's box from the transaction's page), and this tool matches every pasted box's ID against the transaction's input list, then does the accounting exactly, in BigInt. Ergo creates no ERG inside a transaction, so inputs minus outputs must be exactly 0 — anything else is reported plainly as proof the pasted boxes are not this transaction's inputs, or the bytes are not a valid transaction. The fee itself is not a field and not a remainder: it is the ERG locked in the outputs guarded by the miner fee contract, the way real transactions pay it. Tokens are accounted per token ID: what came in, what went out, what was burned — and a token appearing only in outputs is a mint, whose ID the protocol fixes as the first input's box ID (flagged if it is anything else). Data inputs are read, not spent: their value never enters the sums, and pasting one among the inputs is refused with that stated. The match is strict both ways — a missing input box or an extra pasted box stops the check, because a partial accounting would print a confident, wrong fee. This is arithmetic over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txfee-tx">Serialized transaction (hex — the full bytes, as tool 29 takes them)</label>
+        <textarea id="txfee-tx" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (a full serialized transaction — SDKs and node APIs produce the bytes)" autocomplete="off"></textarea>
+        <label for="txfee-boxes">Input boxes (hex — one full serialized box per line, every box the transaction spends)</label>
+        <textarea id="txfee-boxes" rows="5" spellcheck="false" placeholder="e.g. c0843d0008cd… (one input box's full serialized bytes per line)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Check the fee &amp; balance</button>
+        <p id="txfee-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -653,6 +664,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=33"></script>
+<script src="app.js?v=34"></script>
 </body>
 </html>

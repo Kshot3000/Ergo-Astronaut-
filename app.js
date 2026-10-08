@@ -2880,8 +2880,117 @@ function summarizeBoxSet(boxesText, currentHeightStr) {
   };
 }
 
+/* ---------- Transaction fee & balance checker ---------- */
+/* Tool 29 parses a transaction but cannot say what it cost: the
+   bytes carry the outputs, never the input values. This tool
+   closes that gap the only honest way — the user also pastes the
+   transaction's input boxes (tool 15's bytes, one per line), each
+   pasted box's ID is matched against the transaction's input list,
+   and the accounting is then exact BigInt arithmetic:
+     - ERG must balance exactly. Ergo creates no ERG inside a
+       transaction (new coins enter only through the emission
+       contract in a miner's coinbase), so inputs − outputs is 0
+       for every valid non-coinbase transaction; a nonzero
+       difference is reported plainly as proof that the pasted
+       boxes are not this transaction's inputs, or the bytes are
+       not a valid transaction.
+     - The fee is not a field and is not the difference: it is the
+       ERG locked in outputs guarded by the miner fee contract
+       (FEE_CONTRACT_HEX — sigmastate's fee proposition), the way
+       TX_V2's second output in tool 29's vectors pays it.
+     - Tokens must conserve too: out ≤ in per token, the shortfall
+       being a burn — with exactly one exception. A token that
+       appears only in outputs was minted by this transaction, and
+       the protocol fixes a minted token's ID as the box ID of the
+       transaction's first input (that is also where tool 14's
+       note points). An output-only token with any other ID, or
+       out > in for a carried token, cannot occur in a valid
+       transaction and is flagged, never smoothed over.
+     - Data inputs are read, not spent: their value never enters
+       the sums, and pasting a data-input box among the inputs is
+       refused with that stated.
+   The match is strict in both directions — a missing input box
+   and an extra pasted box both stop the check — because a partial
+   accounting would print a confident, wrong fee. */
+function analyzeTxFee(txHex, boxesText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, signed: null, inputCount: null, inputNano: null, inputErg: null, outputNano: null, outputErg: null, differenceNano: null, differenceErg: null, balanced: null, feeNano: null, feeErg: null, feeOutputCount: null, tokenBalances: null, tokensConserved: null, mintedTokens: null, dataInputCount: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail("The transaction bytes do not parse: " + tx.reason);
+  var lines = (boxesText == null ? "" : String(boxesText)).split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  if (lines.length === 0) return fail("Paste the transaction's input boxes too, one full serialized box per line — a transaction's bytes carry its outputs but never its input values, so the fee and the balance can only be checked against the boxes it spends (explorers link each input's box from the transaction's page; tool 15 reads one box at a time).");
+  if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool checks at most 100 input boxes at a time, so a pasted set stays reviewable line by line.");
+  var byId = {};
+  for (var i = 0; i < lines.length; i++) {
+    var parsed = parseErgoBox(lines[i]);
+    if (!parsed.valid) return fail("Line " + (i + 1) + " does not parse as a serialized box: " + parsed.reason + " The whole check is refused rather than run on a partial input set — a missing input would understate the input total and invent a fee that is not there.");
+    if (Object.prototype.hasOwnProperty.call(byId, parsed.boxId)) return fail("Line " + (i + 1) + " is the same box as an earlier line (box ID " + parsed.boxId + ") — a box listed twice would double-count the same on-chain box in the input total, so the check is refused; remove the duplicate line.");
+    byId[parsed.boxId] = parsed;
+  }
+  var inputNano = 0n;
+  var inTokens = {};
+  var inOrder = [];
+  for (var k = 0; k < tx.inputs.length; k++) {
+    var want = tx.inputs[k].boxId;
+    if (!Object.prototype.hasOwnProperty.call(byId, want)) return fail("Input " + (k + 1) + " of the transaction (box ID " + want + ") is not among the pasted boxes — paste every box the transaction spends; a partial set would understate the input total and invent a fee that is not there.");
+    var box = byId[want];
+    delete byId[want];
+    inputNano += BigInt(box.valueNano);
+    for (var t = 0; t < box.tokens.length; t++) {
+      var tk = box.tokens[t];
+      if (!Object.prototype.hasOwnProperty.call(inTokens, tk.tokenId)) { inTokens[tk.tokenId] = 0n; inOrder.push(tk.tokenId); }
+      inTokens[tk.tokenId] += BigInt(tk.amount);
+    }
+  }
+  var leftover = Object.keys(byId);
+  if (leftover.length > 0) {
+    var extra = byId[leftover[0]];
+    if (tx.dataInputs.indexOf(extra.boxId) !== -1) return fail("The pasted box " + extra.boxId + " is a data input of this transaction — data inputs are read by the scripts, never spent, so their ERG and tokens do not enter the balance. Remove it from the input boxes.");
+    return fail("The pasted box " + extra.boxId + " is not an input of this transaction — the check covers exactly the boxes the transaction spends; an extra box would overstate the input total and invent a fee that is not there. Remove it.");
+  }
+  var feeNano = 0n;
+  var feeOutputCount = 0;
+  for (var o = 0; o < tx.outputs.length; o++) {
+    if (tx.outputs[o].ergoTree === FEE_CONTRACT_HEX) { feeNano += BigInt(tx.outputs[o].valueNano); feeOutputCount++; }
+  }
+  var outTokens = {};
+  for (var q = 0; q < tx.tokenTotals.length; q++) outTokens[tx.tokenTotals[q].tokenId] = BigInt(tx.tokenTotals[q].amount);
+  var firstInputId = tx.inputs[0].boxId;
+  var tokenBalances = [];
+  var mintedTokens = [];
+  var tokensConserved = true;
+  var seenOut = {};
+  var addBalance = function (tokenId) {
+    var inAmt = Object.prototype.hasOwnProperty.call(inTokens, tokenId) ? inTokens[tokenId] : 0n;
+    var outAmt = Object.prototype.hasOwnProperty.call(outTokens, tokenId) ? outTokens[tokenId] : 0n;
+    var minted = inAmt === 0n && outAmt > 0n && tokenId === firstInputId;
+    if (outAmt > inAmt && !minted) tokensConserved = false;
+    if (minted) mintedTokens.push({ tokenId: tokenId, amount: outAmt.toString() });
+    tokenBalances.push({ tokenId: tokenId, inAmount: inAmt.toString(), outAmount: outAmt.toString(), burnedAmount: (inAmt > outAmt ? inAmt - outAmt : 0n).toString(), minted: minted });
+  };
+  for (var a = 0; a < inOrder.length; a++) { seenOut[inOrder[a]] = true; addBalance(inOrder[a]); }
+  for (var b = 0; b < tx.tokenTotals.length; b++) { if (!seenOut[tx.tokenTotals[b].tokenId]) addBalance(tx.tokenTotals[b].tokenId); }
+  var outputNano = BigInt(tx.totalOutputNano);
+  var difference = inputNano - outputNano;
+  var differenceErg = (difference < 0n ? "-" : "") + nanoToErg((difference < 0n ? -difference : difference).toString());
+  return {
+    valid: true, reason: null,
+    txId: tx.txId, signed: tx.signed,
+    inputCount: tx.inputs.length,
+    inputNano: inputNano.toString(), inputErg: nanoToErg(inputNano.toString()),
+    outputNano: outputNano.toString(), outputErg: tx.totalOutputErg,
+    differenceNano: difference.toString(), differenceErg: differenceErg,
+    balanced: difference === 0n,
+    feeNano: feeNano.toString(), feeErg: nanoToErg(feeNano.toString()), feeOutputCount: feeOutputCount,
+    tokenBalances: tokenBalances, tokensConserved: tokensConserved,
+    mintedTokens: mintedTokens,
+    dataInputCount: tx.dataInputs.length
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee };
 }
 
 if (typeof document !== "undefined") {
@@ -3538,6 +3647,38 @@ if (typeof document !== "undefined") {
         msg += "At height " + res.currentHeight + ", " + res.eligibleCount + " of " + res.boxCount + (res.boxCount === 1 ? " box is" : " boxes are") + " old enough for storage rent (created + 1,051,200 blocks, tool 7's rule), holding " + res.eligibleErg + " ERG between them. ";
       }
       msg += "Summarized locally from the bytes you pasted — nothing was fetched, signed or sent, and this is a statement about those bytes, not a live wallet balance: a box may since have been spent, which only the chain can tell you.";
+      out.textContent = msg;
+    });
+
+    /* --- Transaction fee & balance checker --- */
+    document.getElementById("txfee-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txfee-result");
+      var res = analyzeTxFee(document.getElementById("txfee-tx").value, document.getElementById("txfee-boxes").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Transaction " + res.txId + " (" + (res.signed ? "signed" : "unsigned") + ", " + res.inputCount + (res.inputCount === 1 ? " input" : " inputs") + (res.dataInputCount > 0 ? " plus " + res.dataInputCount + " data input(s), read but not spent" : "") + "): inputs hold " + res.inputErg + " ERG (" + res.inputNano + " nanoERG), outputs hold " + res.outputErg + " ERG (" + res.outputNano + " nanoERG). ";
+      msg += res.balanced
+        ? "The ERG balances exactly — inputs minus outputs is 0, as it must be: a transaction creates no ERG. "
+        : "⚠ The ERG does NOT balance: inputs minus outputs is " + res.differenceNano + " nanoERG (" + res.differenceErg + " ERG), which no valid non-coinbase transaction can do — the pasted boxes are not this transaction's real inputs, or the bytes are not a valid transaction. The figures below are the arithmetic of what was pasted, not a verdict on a real transaction. ";
+      msg += res.feeOutputCount > 0
+        ? "Fee paid: " + res.feeErg + " ERG (" + res.feeNano + " nanoERG), locked in " + res.feeOutputCount + (res.feeOutputCount === 1 ? " output" : " outputs") + " guarded by the miner fee contract — the fee is that output, not an inputs-minus-outputs remainder. "
+        : "No output is guarded by the miner fee contract, so no fee is paid inside this transaction's own outputs. ";
+      if (res.tokenBalances.length === 0) {
+        msg += "Tokens: none on either side. ";
+      } else {
+        msg += "Tokens: " + res.tokenBalances.map(function (tb) {
+          if (tb.minted) return "minted " + tb.outAmount + " raw of new token " + tb.tokenId + " (a minted token's ID is the first input's box ID — this one matches)";
+          var s = tb.inAmount + " raw in, " + tb.outAmount + " raw out of " + tb.tokenId;
+          if (BigInt(tb.burnedAmount) > 0n) s += " — " + tb.burnedAmount + " raw burned";
+          if (BigInt(tb.outAmount) > BigInt(tb.inAmount)) s += " — ⚠ more out than in, which no valid transaction can do for a token it does not mint";
+          return s;
+        }).join("; ") + ". ";
+        if (!res.tokensConserved) msg += "⚠ At least one token does not conserve, so as pasted this cannot be a valid transaction. ";
+      }
+      msg += "Checked locally from the bytes you pasted — nothing was fetched, signed or sent, and the pasted input boxes are taken as the transaction's inputs because their box IDs match its input list; only the chain can confirm they are the boxes it really spent.";
       out.textContent = msg;
     });
 

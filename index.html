@@ -476,6 +476,15 @@
         <button type="submit" class="btn primary">Check this box</button>
         <p id="health-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="emission-calc">
+        <h3>26 · Emission &amp; supply calculator (block height → new coins + total issued)</h3>
+        <p>Ergo's issuance is written into the protocol, so any block height has an exact answer. Give me a height and I work it out with the chain's own monetary rules — the monetary settings in the reference node's configuration, run through its EmissionRules: a flat 75 ERG per block below height 525,600, then 3 ERG less every 64,800-block epoch (72, 69, 66, …) until the rate reaches 0 at block 2,080,800 and the full 97,739,925 ERG maximum supply stands issued. The foundation's share is 7.5 ERG in the fixed era, then 4.5 and 1.5 ERG over the next two epochs, then nothing; the miner receives the rest — except that since block 777,217, EIP-27 diverts 12 ERG of each reward of 15 ERG or more (or all but 3 ERG of a smaller one) into a re-emission contract, and from block 2,080,800 that contract pays the miner 3 ERG a block in recycled coins, no new issuance at all. The schedule is protocol-fixed, so this tool fetches nothing and claims no live chain data — you supply the height, and the arithmetic is exact BigInt throughout. Schedule only — it signs and sends nothing.</p>
+        <label for="emission-height">Block height</label>
+        <input id="emission-height" inputmode="numeric" placeholder="e.g. 1889822" autocomplete="off">
+        <button type="submit" class="btn primary">Read the schedule at this height</button>
+        <p id="emission-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -521,6 +530,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=25"></script>
+<script src="app.js?v=26"></script>
 </body>
 </html>

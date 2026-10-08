@@ -360,6 +360,26 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   can never disagree with theirs; all inputs are
   user-supplied and it claims no live chain data. Analysis
   only — it signs and sends nothing.
+- **Emission & supply calculator** — given any block height,
+  the new coins that block issues and the total issued by its
+  end, worked out with the chain's own monetary rules (the
+  reference node's monetary settings run through its
+  EmissionRules): a flat 75 ERG per block below height
+  525,600, then 3 ERG less every 64,800-block epoch until the
+  rate reaches 0 at block 2,080,800 and the full 97,739,925
+  ERG maximum supply stands issued. The foundation's share
+  (7.5 ERG in the fixed era, then 4.5 and 1.5 ERG, then
+  nothing) and the miner's are reported separately, and the
+  EIP-27 layer is applied on top: from block 777,217, 12 ERG
+  of each reward of 15 ERG or more — or all but 3 ERG of a
+  smaller one — is diverted to the re-emission contract, and
+  from block 2,080,800 that contract pays the miner 3 ERG a
+  block in recycled coins rather than new issuance. The
+  schedule is protocol-fixed, so it fetches nothing and
+  claims no live chain data; the height is user-supplied and
+  the arithmetic is exact BigInt, cross-checked against a
+  brute-force sum over every block. Schedule only — it signs
+  and sends nothing.
 
 ## Cross-chain integration
 

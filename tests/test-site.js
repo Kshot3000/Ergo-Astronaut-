@@ -32,8 +32,8 @@ check("cross-chain in README", readme.includes("Rosen Bridge") && readme.include
 /* document structure */
 check("exactly one <h1>", (html.match(/<h1[ >]/g) || []).length === 1);
 check("has <main> landmark", /<main[\s>]/.test(html));
-check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network", "p2shbuild-hex", "p2shbuild-network", "hash-input", "hash-mode", "hash-expected", "b58-input", "b58-direction", "vlq-input", "vlq-direction", "zigzag-input", "zigzag-direction", "zigzag-width", "health-bytes", "health-erg", "health-created", "health-current"].every(id => html.includes(`for="${id}"`)));
-check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=25"));
+check("all main form controls labelled", ["q", "erg", "nanoerg", "addr-in", "rent-bytes", "rent-erg", "mine-hash", "mine-unit", "net-hash", "net-unit", "mine-reward", "minbox-bytes", "minbox-erg", "token-decimals", "token-raw", "token-display", "rentclock-created", "rentclock-current", "p2pk-pubkey", "p2pk-network", "payplan-boxes", "payplan-amount", "payplan-fee", "tree-hex", "tree-network", "addrtree-in", "babel-fee", "babel-price", "babel-decimals", "netconv-in", "boxid-bytes", "boxid-expected", "boxparse-bytes", "p2s-hex", "p2s-network", "boxbuild-value", "boxbuild-tree", "boxbuild-height", "boxbuild-tokens", "boxbuild-registers", "boxbuild-txid", "boxbuild-index", "sigma-hex", "sigma-spec", "treebuild-pubkey", "treebuild-network", "p2shbuild-hex", "p2shbuild-network", "hash-input", "hash-mode", "hash-expected", "b58-input", "b58-direction", "vlq-input", "vlq-direction", "zigzag-input", "zigzag-direction", "zigzag-width", "health-bytes", "health-erg", "health-created", "health-current", "emission-height"].every(id => html.includes(`for="${id}"`)));
+check("cache keys present", html.includes("styles.css?v=3") && html.includes("app.js?v=26"));
 check("storage rent tool on hub", html.includes('id="rent-calc"') && html.includes("1,250,000 nanoERG per byte"));
 check("mining estimator on hub, no live-data claim", html.includes('id="mining-calc"') && html.includes("claims no live network data") && readme.includes("Autolykos mining-share estimator"));
 check("min box value tool on hub", html.includes('id="minbox-calc"') && html.includes("360 nanoERG per byte") && readme.includes("Minimum box value checker"));
@@ -57,6 +57,7 @@ check("base58 codec tool on hub", html.includes('id="b58-calc"') && html.include
 check("vlq codec tool on hub", html.includes('id="vlq-calc"') && html.includes("VLQ codec") && html.includes("canonical") && readme.includes("VLQ codec"));
 check("zigzag codec tool on hub", html.includes('id="zigzag-calc"') && html.includes("ZigZag codec") && html.includes("zig-zagged") && html.includes("feffffffffffffffff01") && readme.includes("ZigZag codec"));
 check("box health tool on hub", html.includes('id="health-calc"') && html.includes("Box health checker") && html.includes("claims no live chain data") && html.includes("360 nanoERG per byte") && html.includes("1,250,000 nanoERG per byte") && readme.includes("Box health checker"));
+check("emission tool on hub", html.includes('id="emission-calc"') && html.includes("Emission &amp; supply calculator") && html.includes("97,739,925 ERG maximum supply") && html.includes("claims no live chain data") && html.includes("EIP-27") && readme.includes("Emission & supply calculator"));
 check("catalogue has 14 cards", (html.match(/class="card"/g) || []).length === 14);
 
 /* catalogue links — all verified HTTP 200 at launch */
@@ -617,6 +618,32 @@ const healthE = app.analyzeBoxHealth("112", "1", "0", "2000000");
 check("health eligible funded box rent remainder", healthE.verdict === "funded" && healthE.eligible === true && healthE.payments === "7" && healthE.valueAfterRentNano === "860000000" && healthE.valueAfterRentErg === "0.86" && healthE.ageBlocks === "2000000");
 check("health exactly-one-rent box is consumable, not funded", (() => { const r = app.analyzeBoxHealth("112", "0.14", "1000000", "1000000"); return r.consumableAtFirstRent === true && r.verdict === "consumable-at-eligibility" && r.payments === "0"; })());
 check("health rejects junk", app.analyzeBoxHealth("x", "1", "0", "0") === null && app.analyzeBoxHealth("112", "x", "0", "0") === null && app.analyzeBoxHealth("112", "1", "x", "0") === null && app.analyzeBoxHealth("112", "1", "0", "x") === null && app.analyzeBoxHealth("112", "1", "100", "99") === null && app.analyzeBoxHealth("0", "1", "0", "0") === null && app.analyzeBoxHealth(null, null, null, null) === null);
+
+/* Emission & supply calculator — a literal port of EmissionRules
+   (sigmastate-interpreter) over the mainnet monetary settings in
+   ergoplatform/ergo's application.conf (fixedRatePeriod 525,600,
+   fixedRate 75 ERG, founders 7.5 ERG, epochLength 64,800, reduction
+   3 ERG), with the EIP-27 diversion layer from papers/emission.md.
+   Expected figures computed with an independent Python build BEFORE
+   coding and cross-checked against a brute-force sum over every
+   block: first-year issued 19,710,000 ERG, total 97,739,925 ERG,
+   last emitting block 2,080,799. */
+check("emission constants", app.EMISSION_FIXED_RATE_PERIOD === 525600n && app.EMISSION_FIXED_RATE_NANO === 75000000000n && app.EMISSION_EPOCH_LENGTH === 64800n && app.EMISSION_ONE_EPOCH_REDUCTION_NANO === 3000000000n && app.EMISSION_TOTAL_NANO === 97739925000000000n && app.EIP27_ACTIVATION_HEIGHT === 777217n && app.EIP27_REEMISSION_START_HEIGHT === 2080800n);
+check("emission rate curve", app.emissionAtHeight(1n) === 75000000000n && app.emissionAtHeight(525599n) === 75000000000n && app.emissionAtHeight(525600n) === 72000000000n && app.emissionAtHeight(590400n) === 69000000000n && app.emissionAtHeight(777217n) === 63000000000n && app.emissionAtHeight(1889822n) === 9000000000n && app.emissionAtHeight(2080799n) === 3000000000n && app.emissionAtHeight(2080800n) === 0n && app.emissionAtHeight(9999999n) === 0n);
+check("emission foundation and miner split", app.foundationRewardAtHeight(1n) === 7500000000n && app.foundationRewardAtHeight(525600n) === 4500000000n && app.foundationRewardAtHeight(590400n) === 1500000000n && app.foundationRewardAtHeight(655200n) === 0n && app.minersRewardAtHeight(1n) === 67500000000n && app.minersRewardAtHeight(590400n) === 67500000000n && app.minersRewardAtHeight(655200n) === 66000000000n);
+check("emission issued totals", app.issuedAfterHeight(262800n) === 19710000000000000n && app.issuedAfterHeight(525600n) === 39419997000000000n && app.issuedAfterHeight(2080799n) === 97739925000000000n && app.issuedAfterHeight(2080800n) === 97739925000000000n && app.issuedAfterHeight(5000000n) === 97739925000000000n);
+const emFixed = app.analyzeEmission("262800");
+check("emission fixed-era analysis", emFixed.phase === "fixed" && emFixed.epoch === null && emFixed.eip27 === false && emFixed.emissionErg === "75" && emFixed.minerErg === "67.5" && emFixed.foundationErg === "7.5" && emFixed.issuedErg === "19710000" && emFixed.remainingErg === "78029925" && emFixed.totalErg === "97739925" && close(emFixed.percentIssued, 20.1657));
+const emDecl = app.analyzeEmission("525600");
+check("emission first declining block", emDecl.phase === "declining" && emDecl.epoch === "1" && emDecl.emissionErg === "72" && emDecl.minerErg === "67.5" && emDecl.foundationErg === "4.5" && emDecl.issuedErg === "39419997");
+const emEip = app.analyzeEmission("777217");
+check("emission EIP-27 diversion at activation", emEip.eip27 === true && emEip.emissionErg === "63" && emEip.divertedErg === "12" && emEip.minerErg === "51" && emEip.foundationErg === "0" && emEip.issuedErg === "56438259");
+const emLate = app.analyzeEmission("1889822");
+check("emission late-era small-reward diversion", emLate.eip27 === true && emLate.emissionErg === "9" && emLate.divertedErg === "6" && emLate.minerErg === "3" && emLate.issuedErg === "96604332");
+const emEnd = app.analyzeEmission("2080800");
+check("emission re-emission era", emEnd.phase === "reemission" && emEnd.emissionErg === "0" && emEnd.reemissionErg === "3" && emEnd.minerErg === "3" && emEnd.issuedErg === "97739925" && emEnd.remainingErg === "0" && close(emEnd.percentIssued, 100));
+check("emission last issuing block completes supply", app.analyzeEmission("2080799").remainingErg === "0" && app.analyzeEmission("2080799").emissionErg === "3" && app.analyzeEmission("2080799").divertedErg === "0" && app.analyzeEmission("2080799").minerErg === "3");
+check("emission rejects junk", app.analyzeEmission("0") === null && app.analyzeEmission("-1") === null && app.analyzeEmission("1.5") === null && app.analyzeEmission("x") === null && app.analyzeEmission("") === null && app.analyzeEmission(null) === null && app.analyzeEmission("100000001") === null && app.analyzeEmission("100000000") !== null);
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

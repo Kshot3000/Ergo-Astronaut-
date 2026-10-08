@@ -472,6 +472,110 @@ function analyzeBoxHealth(sizeStr, ergStr, creationStr, currentStr) {
   };
 }
 
+/* ---------- Emission & supply calculator ---------- */
+/* Ergo's issuance is fixed by protocol rules, not voted per block:
+   the monetary settings in ergoplatform/ergo's application.conf
+   (fixedRatePeriod 525,600 blocks, fixedRate 75 ERG, founders'
+   initial reward 7.5 ERG, epochLength 64,800 blocks, oneEpochReduction
+   3 ERG) plugged into EmissionRules in sigmastate-interpreter:
+   blocks below 525,600 issue a flat 75 ERG; from 525,600 the rate
+   drops 3 ERG every 64,800-block epoch (72, 69, 66, ...) until it
+   reaches 0 at block 2,080,800, by which point exactly 97,739,925 ERG
+   — the maximum supply — has been issued. The foundation's share is
+   7.5 ERG during the fixed era, then 4.5 and 1.5 ERG over the next
+   two epochs, then nothing; the miner receives the rest. On top of
+   that sits EIP-27 (papers/emission.md in ergoplatform/ergo,
+   activated at block 777,217): until emission ends, 12 ERG of each
+   block reward of 15 ERG or more — or all but 3 ERG of a smaller
+   one — is diverted to a re-emission contract instead of the miner,
+   and from block 2,080,800 that contract pays the miner 3 ERG per
+   block: recycled coins, not new issuance (the EIP sized it to last
+   about 4,566,336 blocks, roughly 17.4 years). Every figure here is
+   a literal BigInt port of those rules, cross-checked before coding
+   against a brute-force sum over every block: total issued
+   97,739,925 ERG, first-year issued 19,710,000 ERG, last emitting
+   block 2,080,799. The schedule is protocol-fixed, so this claims
+   no live chain data — the height is user-supplied. */
+var EMISSION_FIXED_RATE_PERIOD = 525600n;
+var EMISSION_FIXED_RATE_NANO = 75000000000n;
+var EMISSION_FOUNDERS_INITIAL_NANO = 7500000000n;
+var EMISSION_EPOCH_LENGTH = 64800n;
+var EMISSION_ONE_EPOCH_REDUCTION_NANO = 3000000000n;
+var EMISSION_TOTAL_NANO = 97739925000000000n;
+var EIP27_ACTIVATION_HEIGHT = 777217n;
+var EIP27_REEMISSION_START_HEIGHT = 2080800n;
+var EIP27_DIVERTED_NANO = 12000000000n;
+var EIP27_REEMISSION_REWARD_NANO = 3000000000n;
+var EMISSION_MAX_HEIGHT = 100000000n;
+function emissionAtHeight(h) {
+  if (h < EMISSION_FIXED_RATE_PERIOD) return EMISSION_FIXED_RATE_NANO;
+  var epoch = 1n + (h - EMISSION_FIXED_RATE_PERIOD) / EMISSION_EPOCH_LENGTH;
+  var rate = EMISSION_FIXED_RATE_NANO - EMISSION_ONE_EPOCH_REDUCTION_NANO * epoch;
+  return rate > 0n ? rate : 0n;
+}
+function foundationRewardAtHeight(h) {
+  if (h < EMISSION_FIXED_RATE_PERIOD) return EMISSION_FOUNDERS_INITIAL_NANO;
+  if (h < EMISSION_FIXED_RATE_PERIOD + EMISSION_EPOCH_LENGTH) return EMISSION_FOUNDERS_INITIAL_NANO - EMISSION_ONE_EPOCH_REDUCTION_NANO;
+  if (h < EMISSION_FIXED_RATE_PERIOD + 2n * EMISSION_EPOCH_LENGTH) return EMISSION_FOUNDERS_INITIAL_NANO - 2n * EMISSION_ONE_EPOCH_REDUCTION_NANO;
+  return 0n;
+}
+function minersRewardAtHeight(h) {
+  if (h < EMISSION_FIXED_RATE_PERIOD + 2n * EMISSION_EPOCH_LENGTH) return EMISSION_FIXED_RATE_NANO - EMISSION_FOUNDERS_INITIAL_NANO;
+  return emissionAtHeight(h);
+}
+function issuedAfterHeight(h) {
+  if (h < EMISSION_FIXED_RATE_PERIOD) return EMISSION_FIXED_RATE_NANO * h;
+  var fixedIssue = EMISSION_FIXED_RATE_NANO * (EMISSION_FIXED_RATE_PERIOD - 1n);
+  var epoch = (h - EMISSION_FIXED_RATE_PERIOD) / EMISSION_EPOCH_LENGTH;
+  var fullEpochs = epoch < 24n ? epoch : 24n;
+  var epochSum = fullEpochs * EMISSION_FIXED_RATE_NANO - EMISSION_ONE_EPOCH_REDUCTION_NANO * fullEpochs * (fullEpochs + 1n) / 2n;
+  var heightInEpoch = (h - EMISSION_FIXED_RATE_PERIOD) % EMISSION_EPOCH_LENGTH + 1n;
+  var rateThisEpoch = EMISSION_FIXED_RATE_NANO - EMISSION_ONE_EPOCH_REDUCTION_NANO * (epoch + 1n);
+  if (rateThisEpoch < 0n) rateThisEpoch = 0n;
+  return fixedIssue + epochSum * EMISSION_EPOCH_LENGTH + heightInEpoch * rateThisEpoch;
+}
+function analyzeEmission(heightStr) {
+  var hs = parseChainHeight(heightStr);
+  if (hs === null) return null;
+  var h = BigInt(hs);
+  if (h < 1n || h > EMISSION_MAX_HEIGHT) return null;
+  var emission = emissionAtHeight(h);
+  var foundation = foundationRewardAtHeight(h);
+  var eip27 = h >= EIP27_ACTIVATION_HEIGHT && h < EIP27_REEMISSION_START_HEIGHT;
+  var diverted = 0n;
+  if (eip27) {
+    diverted = emission >= 15000000000n ? EIP27_DIVERTED_NANO : emission - EIP27_REEMISSION_REWARD_NANO;
+    if (diverted < 0n) diverted = 0n;
+  }
+  var reemission = h >= EIP27_REEMISSION_START_HEIGHT ? EIP27_REEMISSION_REWARD_NANO : 0n;
+  var miner = h >= EIP27_REEMISSION_START_HEIGHT ? reemission : minersRewardAtHeight(h) - diverted;
+  var issued = issuedAfterHeight(h);
+  var remaining = EMISSION_TOTAL_NANO - issued;
+  var epoch = h >= EMISSION_FIXED_RATE_PERIOD ? (1n + (h - EMISSION_FIXED_RATE_PERIOD) / EMISSION_EPOCH_LENGTH).toString() : null;
+  return {
+    height: h.toString(),
+    phase: h >= EIP27_REEMISSION_START_HEIGHT ? "reemission" : (h < EMISSION_FIXED_RATE_PERIOD ? "fixed" : "declining"),
+    epoch: epoch,
+    eip27: eip27,
+    emissionNano: emission.toString(),
+    emissionErg: nanoToErg(emission.toString()),
+    minerNano: miner.toString(),
+    minerErg: nanoToErg(miner.toString()),
+    foundationNano: foundation.toString(),
+    foundationErg: nanoToErg(foundation.toString()),
+    divertedNano: diverted.toString(),
+    divertedErg: nanoToErg(diverted.toString()),
+    reemissionNano: reemission.toString(),
+    reemissionErg: nanoToErg(reemission.toString()),
+    issuedNano: issued.toString(),
+    issuedErg: nanoToErg(issued.toString()),
+    remainingNano: remaining.toString(),
+    remainingErg: nanoToErg(remaining.toString()),
+    totalErg: nanoToErg(EMISSION_TOTAL_NANO.toString()),
+    percentIssued: Number(issued * 1000000n / EMISSION_TOTAL_NANO) / 10000
+  };
+}
+
 /* ---------- UTXO payment planner ---------- */
 /* Ergo's eUTXO model spends boxes whole: to pay an amount plus the
    transaction fee, a wallet selects input boxes (in some order) until
@@ -1640,7 +1744,7 @@ function buildErgoBox(fields) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission };
 }
 
 if (typeof document !== "undefined") {
@@ -1837,6 +1941,30 @@ if (typeof document !== "undefined") {
         } else {
           msg += " It becomes rent-eligible at height " + res.eligibilityHeight + ", " + res.blocksRemaining + " blocks away (roughly " + fmtEstimate(res.approxDaysRemaining) + " days at the 2-minute block target).";
         }
+      }
+      out.textContent = msg;
+    });
+
+    /* --- emission & supply calculator --- */
+    document.getElementById("emission-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("emission-result");
+      var res = analyzeEmission(document.getElementById("emission-height").value);
+      if (res === null) {
+        out.textContent = "Enter a block height as a whole number from 1 up — heights are on the explorer's blocks page.";
+        return;
+      }
+      var msg;
+      if (res.phase === "reemission") {
+        msg = "Block " + res.height + " is past the end of emission: the last new coins were issued at block 2,080,799, and the full maximum of " + res.totalErg + " ERG is in circulation. This block instead pays the miner " + res.reemissionErg + " ERG from the EIP-27 re-emission contract — recycled coins collected during the declining era, not new issuance. The EIP sized that contract to last about 4,566,336 blocks (roughly 17.4 years) from block 2,080,800.";
+      } else {
+        msg = "Block " + res.height + (res.phase === "fixed" ? " is in the fixed-rate era (blocks below 525,600)" : " is in declining epoch " + res.epoch + " (the rate drops 3 ERG every 64,800 blocks)") + ": it issues " + res.emissionErg + " ERG of new coins";
+        if (res.eip27) {
+          msg += ". Under EIP-27 (active since block 777,217), " + res.divertedErg + " ERG of that reward is diverted to the re-emission contract instead of the miner, so the miner keeps " + res.minerErg + " ERG and the foundation receives " + res.foundationErg + " ERG.";
+        } else {
+          msg += " — " + res.minerErg + " ERG to the miner and " + res.foundationErg + " ERG to the foundation.";
+        }
+        msg += " By the end of this block, " + res.issuedErg + " ERG of the " + res.totalErg + " ERG maximum has been issued (" + fmtEstimate(res.percentIssued) + "%), with " + res.remainingErg + " ERG left to issue.";
       }
       out.textContent = msg;
     });

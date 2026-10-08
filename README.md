@@ -564,6 +564,27 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   showing them. Planning only — it builds no transaction
   and mints nothing. Verified against an independent
   Python oracle over the fleet-recorded box IDs.
+- **Transaction output auditor** — a pre-sign audit of a
+  transaction's output side alone, from its bytes only:
+  tool 34's fee-and-balance check needs the input boxes
+  pasted alongside, but everything a transaction creates
+  is determined by the transaction itself. Per output it
+  reports the standalone serialized size and the protocol
+  minimum value for that size (360 nanoERG per byte),
+  flagging any below-minimum output — which can never be
+  created on-chain — with its exact shortfall; the
+  miner-fee-contract outputs are summed as the fee the
+  outputs pay, and a transaction with no fee-contract
+  output is flagged plainly; a token whose ID equals the
+  first input's box ID is reported as a mint, with its
+  amount and output. What it cannot see is stated in its
+  own copy: whether the inputs cover the outputs is
+  tool 34, with the input boxes. It composes the
+  transaction parser and the minimum-value figure rather
+  than re-deriving their maths. Verified against an
+  independent Python oracle over fleet-sdk's published
+  transaction vectors plus a from-scratch synthetic
+  mint-and-dust transaction.
 
 ## Cross-chain integration
 

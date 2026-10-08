@@ -1957,6 +1957,7 @@ function parseErgoTransaction(txHex) {
     totalNano += outValue;
     outputs.push({
       index: o,
+      byteLength: boxIdParts.length,
       boxId: bytesToHex(blake2b256(Uint8Array.from(boxIdParts))),
       valueNano: outValue.toString(),
       valueErg: nanoToErg(outValue.toString()),
@@ -3123,6 +3124,88 @@ function planTokenPayment(boxesText, paymentStr, feeStr, tokensText) {
   };
 }
 
+/* ---------- Transaction output auditor ---------- */
+/* A pre-sign audit of a transaction's OUTPUT side alone. Tool 34
+   needs the input boxes pasted alongside the transaction, because a
+   transaction's bytes never carry its input values; but a wallet,
+   a reviewer or a counterparty often holds only the transaction —
+   and everything on the output side is fully determined by those
+   bytes, so it can be audited exactly, with no pasted boxes and no
+   chain lookup. Per output: its standalone serialized size (the
+   parser now reports it — the embedded form with its token
+   indexes swapped for the full 32-byte token IDs, plus the
+   creating transaction ID and the VLQ output index that complete
+   a box's standalone serialization), the protocol minimum value
+   for that size at
+   360 nanoERG per byte (tool 5's figure) and the shortfall when an
+   output sits below it — a below-minimum output can never be
+   created on-chain, so spotting one before signing is the point.
+   Fee outputs are the ones guarded by the miner fee contract
+   (tool 34's definition) and are summed as the fee the outputs
+   themselves pay; a transaction with no fee-contract output is
+   flagged plainly — nothing in its outputs pays a miner, whatever
+   its inputs hold. A token whose ID equals the first input's box
+   ID is a mint (the protocol fixes a new token's ID that way —
+   tools 34/37), reported with its amount and output. Differing
+   creation heights across outputs are reported as a fact, not an
+   error. What this audit can NOT see is stated in its own copy:
+   whether inputs cover the outputs — that is tool 34, with the
+   input boxes. Verified against an independent Python oracle
+   (oracle-txaudit.py) over fleet's register-free vectors plus a
+   from-scratch synthetic mint-and-dust transaction. */
+function auditTxOutputs(txHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, signed: null, byteLength: null, inputCount: null, dataInputCount: null, outputCount: null, totalOutputNano: null, totalOutputErg: null, tokenTotals: null, feeNano: null, feeErg: null, feeOutputIndexes: null, hasFeeOutput: null, outputs: null, mints: null, heightsDiffer: null, allMeetMinimum: null, belowMinimum: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  var mintId = tx.inputs.length ? tx.inputs[0].boxId : null;
+  var fee = 0n;
+  var feeIdx = [];
+  var mints = [];
+  var below = [];
+  var heights = {};
+  var outs = tx.outputs.map(function (o) {
+    var minStr = minBoxValueNano(String(o.byteLength));
+    var min = BigInt(minStr);
+    var value = BigInt(o.valueNano);
+    var isFee = o.ergoTree === FEE_CONTRACT_HEX;
+    if (isFee) { fee += value; feeIdx.push(o.index); }
+    heights[o.creationHeight] = true;
+    var outMints = [];
+    o.tokens.forEach(function (t) {
+      if (mintId && t.tokenId === mintId) {
+        var m = { tokenId: t.tokenId, amount: t.amount, outputIndex: o.index };
+        mints.push(m); outMints.push(m);
+      }
+    });
+    var meets = value >= min;
+    if (!meets) below.push({ index: o.index, shortfallNano: (min - value).toString() });
+    return {
+      index: o.index, boxId: o.boxId, byteLength: o.byteLength,
+      valueNano: o.valueNano, valueErg: o.valueErg,
+      minNano: minStr, minErg: nanoToErg(minStr), meetsMinimum: meets,
+      shortfallNano: meets ? "0" : (min - value).toString(),
+      isFee: isFee, creationHeight: o.creationHeight,
+      tokenCount: o.tokens.length, registerCount: o.registers.length,
+      mints: outMints
+    };
+  });
+  return {
+    valid: true, reason: null,
+    txId: tx.txId, signed: tx.signed, byteLength: tx.byteLength,
+    inputCount: tx.inputs.length, dataInputCount: tx.dataInputs.length,
+    outputCount: tx.outputs.length,
+    totalOutputNano: tx.totalOutputNano, totalOutputErg: tx.totalOutputErg,
+    tokenTotals: tx.tokenTotals,
+    feeNano: fee.toString(), feeErg: nanoToErg(fee.toString()),
+    feeOutputIndexes: feeIdx, hasFeeOutput: feeIdx.length > 0,
+    outputs: outs, mints: mints,
+    heightsDiffer: Object.keys(heights).length > 1,
+    allMeetMinimum: below.length === 0, belowMinimum: below
+  };
+}
+
 /* ---------- Transaction JSON converter ---------- */
 /* The same unsigned transaction in the two forms Ergo developers
    actually move between: the EIP-12 / fleet-sdk JSON dialect (what
@@ -3353,7 +3436,7 @@ function planTokenMint(firstInputId, nameStr, descStr, decStr, amountStr, typeSt
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs };
 }
 
 if (typeof document !== "undefined") {
@@ -4122,6 +4205,28 @@ if (typeof document !== "undefined") {
       msg += "The issuance box carries " + res.amountRaw + " raw tokens (displayed as " + res.displayAmount + " with " + res.decimals + " decimals) and registers " + res.registerLines.join(", ") + (res.assetType ? " — asset type: " + res.assetType : "") + ". ";
       msg += "To assemble the issuance box: tool 30's transaction builder takes the token line \"" + res.boxbuildTokens + "\" and the register hexes above, one per line in R4-first order; tool 17's box builder takes the same token line and the registers as typed specs — " + res.boxspecRegisters.split("\n").join(", ") + ". ";
       msg += "Planned locally from what you typed: nothing was fetched, signed, sent or minted — the token exists only once a real transaction spending that first input confirms, and whether the box is still unspent is a chain fact to check on an explorer.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txaudit-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txaudit-result");
+      var res = auditTxOutputs(document.getElementById("txaudit-tx").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Transaction " + res.txId + " (" + res.byteLength + " bytes, " + (res.signed ? "signed" : "unsigned") + "): " + res.inputCount + " input(s), " + res.dataInputCount + " data input(s), " + res.outputCount + " output(s) holding " + res.totalOutputErg + " ERG in total. ";
+      msg += res.hasFeeOutput
+        ? "Fee paid by its outputs: " + res.feeErg + " ERG in the miner-fee-contract output(s) at index " + res.feeOutputIndexes.join(", ") + ". "
+        : "⚠ No output is guarded by the miner fee contract — nothing in this transaction's outputs pays a miner. ";
+      msg += res.allMeetMinimum
+        ? "Every output meets the protocol minimum for its size. "
+        : "⚠ Output(s) below the protocol minimum for their size: " + res.belowMinimum.map(function (b) { return "#" + b.index + " short by " + b.shortfallNano + " nanoERG"; }).join(", ") + " — a below-minimum output can never be created on-chain. ";
+      if (res.mints.length) msg += "This transaction mints: " + res.mints.map(function (m) { return m.amount + " of token " + m.tokenId + " in output #" + m.outputIndex; }).join("; ") + " (a new token's ID is its minting transaction's first input's box ID). ";
+      if (res.heightsDiffer) msg += "Its outputs carry differing creation heights — reported as a fact; wallets normally stamp them all with one height. ";
+      msg += "Per output: " + res.outputs.map(function (o) { return "#" + o.index + " " + o.valueErg + " ERG, " + o.byteLength + " bytes (minimum " + o.minErg + " ERG)" + (o.isFee ? ", fee contract" : "") + (o.tokenCount ? ", " + o.tokenCount + " token(s)" : "") + (o.registerCount ? ", " + o.registerCount + " register(s)" : ""); }).join(" · ") + ". ";
+      msg += "Output side only, from the bytes you pasted: whether the inputs cover these outputs needs the input boxes — that is tool 34. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

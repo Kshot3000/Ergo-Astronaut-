@@ -678,6 +678,15 @@
         <button type="submit" class="btn primary">Plan the mint</button>
         <p id="mintplan-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txaudit-calc">
+        <h3>38 · Transaction output auditor (transaction bytes → a pre-sign audit of everything it creates)</h3>
+        <p>Tool 34 checks a transaction's fee and balance, but it needs the input boxes pasted alongside — a transaction's bytes never carry its input values. A wallet, a reviewer or a counterparty often holds only the transaction itself, and everything on the output side is fully determined by those bytes, so this audits exactly that side, with nothing else needed. For every output it reports the box's standalone serialized size and the protocol minimum value for that size (360 nanoERG per byte, tool 5's figure): a below-minimum output can never be created on-chain, so one sitting in a transaction you are about to sign is worth spotting first, with its exact shortfall. The outputs guarded by the miner fee contract are summed as the fee the outputs themselves pay — and a transaction with no fee-contract output is flagged plainly, because nothing in its outputs pays a miner, whatever its inputs hold. A token whose ID equals the first input's box ID is a mint (the protocol fixes a new token's ID that way — tools 34 and 37), reported with its amount and output, and differing creation heights across outputs are reported as a fact. What this audit cannot see is stated plainly: whether the inputs cover the outputs — that needs the input boxes, and it is tool 34. Audit only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txaudit-tx">Serialized transaction (hex — the full bytes, as tool 29 takes them)</label>
+        <textarea id="txaudit-tx" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (a full serialized transaction — SDKs and node APIs produce the bytes)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Audit the outputs</button>
+        <p id="txaudit-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -723,6 +732,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=37"></script>
+<script src="app.js?v=38"></script>
 </body>
 </html>

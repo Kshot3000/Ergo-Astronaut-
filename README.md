@@ -394,6 +394,20 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   verified against the EIP's own published examples with an
   independent Python build. Registers only — it builds no
   transaction, signs nothing and mints nothing.
+- **EIP-44 data-hash codec** — encodes arbitrary data (text or
+  hex bytes) into its ADH representation under the proposed
+  EIP-44 arbitrary-data signing standard: head byte = network
+  byte + type 4, content = Blake2b-256(data), then the usual
+  4-byte Blake2b-256 checksum, Base58-written — and decodes a
+  representation back to the hash it carries. It also shows
+  the exact bytes a wallet would sign (0x00 invalidator +
+  network byte + hash), so a data signature can never double
+  as a transaction signature. Verified against an independent
+  Python (hashlib) build. Labelled honestly everywhere:
+  EIP-44 is a Proposed standard, not an adopted one — an ADH
+  string is a data representation for message signing, NOT a
+  payment address, and the hash is one-way. It holds no keys,
+  signs nothing and sends nothing.
 
 ## Cross-chain integration
 

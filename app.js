@@ -733,6 +733,94 @@ function decodeEip4Registers(r4Str, r5Str, r6Str, r7Str) {
   return out;
 }
 
+/* ---------- EIP-44 arbitrary data hash (ADH) codec ---------- */
+/* EIP-0044 (Arbitrary Data Signing Standard, status: Proposed)
+   extends the address codeset with type 4, ADH — arbitrary data
+   hash. Its encoding pseudocode is the ordinary address
+   construction pointed at data instead of a key or script:
+   head byte = network byte (0x00 mainnet / 0x10 testnet) + 4;
+   body = head + blake2b256(data); checksum = first 4 bytes of
+   blake2b256(body); representation = base58(body + checksum).
+   Hashing the data first keeps the representation short and
+   hardware-wallet friendly. For signing, the EIP has the prover
+   sign 0x00 || network byte || blake2b256(data) — the leading
+   0x00 is a transaction invalidator (a serialized transaction
+   starts with its input count, never 0), so a data signature can
+   never be tricked into being a transaction signature, and the
+   network byte stops testnet signatures replaying on mainnet.
+   Verified against an independent Python (hashlib) build before
+   coding. This is a PROPOSED standard, not an adopted one: an
+   ADH string is a data representation for message signing, NOT
+   a payment address — Ergo's spendable address types are 1-3. */
+var ADH_TYPE_CODE = 4;
+function adhDataBytes(dataStr, modeStr) {
+  var mode = (modeStr == null ? "" : String(modeStr)).trim().toLowerCase();
+  if (mode === "text") {
+    var text = dataStr == null ? "" : String(dataStr);
+    if (text === "") return null;
+    return utf8Bytes(text);
+  }
+  if (mode === "hex") {
+    var cleaned = (dataStr == null ? "" : String(dataStr)).replace(/\s+/g, "");
+    if (cleaned.toLowerCase().indexOf("0x") === 0) cleaned = cleaned.slice(2);
+    if (cleaned === "") return null;
+    return hexToBytes(cleaned);
+  }
+  return null;
+}
+function buildAdhRepresentation(dataStr, modeStr, networkStr) {
+  var net = (networkStr == null ? "" : String(networkStr)).trim().toLowerCase();
+  if (net !== "mainnet" && net !== "testnet") return null;
+  var bytes = adhDataBytes(dataStr, modeStr);
+  if (!bytes || bytes.length === 0) return null;
+  var netByte = net === "mainnet" ? 0x00 : 0x10;
+  var prefix = netByte | ADH_TYPE_CODE;
+  var hash = blake2b256(bytes);
+  var body = new Uint8Array(1 + hash.length);
+  body[0] = prefix;
+  body.set(hash, 1);
+  var checksum = blake2b256(body).subarray(0, 4);
+  var full = new Uint8Array(body.length + 4);
+  full.set(body, 0);
+  full.set(checksum, body.length);
+  var representation = base58Encode(full);
+  var out = {
+    representation: representation,
+    dataHash: bytesToHex(hash),
+    network: net === "mainnet" ? "Mainnet" : "Testnet",
+    prefix: prefix,
+    byteLength: bytes.length,
+    signedBytesHex: "00" + bytesToHex([netByte]) + bytesToHex(hash)
+  };
+  var back = decodeAdhRepresentation(representation);
+  if (!back || back.dataHash !== out.dataHash || back.network !== out.network) return null;
+  return out;
+}
+function decodeAdhRepresentation(raw) {
+  var str = typeof raw === "string" ? raw.trim() : "";
+  if (!str || /\s/.test(str)) return null;
+  var decoded = base58Decode(str);
+  if (!decoded || decoded.length !== 37) return null;
+  var prefix = decoded[0];
+  var networkCode = prefix >> 4;
+  var typeCode = prefix & 0x0f;
+  if (typeCode !== ADH_TYPE_CODE) return null;
+  if (networkCode !== 0 && networkCode !== 1) return null;
+  var body = decoded.subarray(0, decoded.length - 4);
+  var stored = decoded.subarray(decoded.length - 4);
+  var digest = blake2b256(body);
+  for (var i = 0; i < 4; i++) if (digest[i] !== stored[i]) return null;
+  var netByte = networkCode === 0 ? 0x00 : 0x10;
+  var hashHex = bytesToHex(decoded.subarray(1, 33));
+  return {
+    network: networkCode === 0 ? "Mainnet" : "Testnet",
+    typeCode: typeCode,
+    prefix: prefix,
+    dataHash: hashHex,
+    signedBytesHex: "00" + bytesToHex([netByte]) + hashHex
+  };
+}
+
 /* ---------- UTXO payment planner ---------- */
 /* Ergo's eUTXO model spends boxes whole: to pay an amount plus the
    transaction fee, a wallet selects input boxes (in some order) until
@@ -1901,7 +1989,7 @@ function buildErgoBox(fields) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation };
 }
 
 if (typeof document !== "undefined") {
@@ -2161,6 +2249,31 @@ if (typeof document !== "undefined") {
       if (dec.decimals !== null) parts.push("R6 decimals: " + dec.decimals + (dec.decimalsForm === "int" ? " (carried as an Int constant — a form some tokens use in the wild; EIP-4's own form is the text string)" : " (carried as text, EIP-4's own form)"));
       if (dec.assetType !== null) parts.push("R7 asset type: " + dec.assetType + " (category " + dec.assetCategory + (dec.assetSubcategory !== null ? ", subcategory " + dec.assetSubcategory : ", no subcategory") + ")");
       out.textContent = "Decoded — " + parts.join(" · ") + ". Registers read locally; nothing was fetched or verified against the chain, so check the token ID on the explorer for the full picture.";
+    });
+
+    /* --- EIP-44 ADH codec --- */
+    document.getElementById("adh-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("adh-result");
+      var dir = document.getElementById("adh-direction").value;
+      if (dir === "encode") {
+        var enc = buildAdhRepresentation(
+          document.getElementById("adh-data").value,
+          document.getElementById("adh-mode").value,
+          document.getElementById("adh-network").value);
+        if (enc === null) {
+          out.textContent = "To encode: enter the data — any text, or hex bytes in hex mode (an even number of hex digits). Empty data has nothing to stamp, so it is refused rather than hashed.";
+          return;
+        }
+        out.textContent = "Your " + enc.network + " ADH representation: " + enc.representation + " — head byte 0x" + enc.prefix.toString(16) + " (network + type 4), then the Blake2b-256 hash of your " + enc.byteLength + "-byte data: " + enc.dataHash + ", then the 4-byte checksum. A wallet following EIP-44 would sign these bytes: " + enc.signedBytesHex + " (00 invalidator + network byte + hash). Remember: this is a proposed standard's data representation, not a payment address — never send ERG to it, and the data itself cannot be recovered from the hash.";
+        return;
+      }
+      var dec = decodeAdhRepresentation(document.getElementById("adh-rep").value);
+      if (dec === null) {
+        out.textContent = "To decode: paste one complete ADH representation exactly as written — Base58, 37 decoded bytes (head byte + 32-byte hash + 4-byte checksum), head type 4 with a valid checksum. Payment addresses (types 1-3), truncated strings and tampered checksums are refused rather than guessed at.";
+        return;
+      }
+      out.textContent = "Decoded — " + dec.network + " ADH (type 4) carrying data hash " + dec.dataHash + ". The bytes a wallet would sign for this data are " + dec.signedBytesHex + " (00 invalidator + network byte + hash). The hash is one-way: the original data cannot be recovered from this string, only re-hashed and compared. And it is not a payment address — never send ERG to it.";
     });
 
     /* --- P2PK address builder --- */

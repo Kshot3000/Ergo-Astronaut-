@@ -522,6 +522,32 @@
         <button type="submit" class="btn primary">Convert</button>
         <p id="eip4-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="adh-calc">
+        <h3>28 · EIP-44 data-hash codec (arbitrary data ⇄ its ADH representation)</h3>
+        <p>Ergo addresses are a prefix byte, some content and a Blake2b-256 checksum, Base58-written — and EIP-44, the ecosystem's proposed arbitrary-data signing standard, points that exact machinery at data instead of a key: it adds address type 4, ADH (arbitrary data hash), whose content is simply the Blake2b-256 hash of your data. The result is a short, checksummed string that stands for the data — for proving ownership or stamping a document, a wallet signs the bytes <code>00</code> + network byte + that hash, and the leading <code>00</code> matters: a serialized transaction begins with its input count, never 0, so a data signature can never be tricked into doubling as a transaction signature, and the network byte stops a testnet signature replaying on mainnet. Two honest warnings. First, EIP-44 is a <em>proposed</em> standard, not an adopted one — Ergo's spendable address types today are 1 (P2PK), 2 (P2SH) and 3 (P2S), so this string is a data representation for message signing, <strong>not a payment address: never send ERG to it</strong>. Second, the hash is one-way — decoding a representation gives the hash back, never the original data. Everything runs locally on what you type; this tool holds no keys, signs nothing and sends nothing.</p>
+        <label for="adh-direction">Direction</label>
+        <select id="adh-direction">
+          <option value="encode">Encode: data → ADH representation</option>
+          <option value="decode">Decode: ADH representation → its data hash</option>
+        </select>
+        <label for="adh-data">Data (encode)</label>
+        <input id="adh-data" placeholder="e.g. abc" autocomplete="off">
+        <label for="adh-mode">Data format (encode)</label>
+        <select id="adh-mode">
+          <option value="text">Text (UTF-8)</option>
+          <option value="hex">Hex bytes</option>
+        </select>
+        <label for="adh-network">Network (encode)</label>
+        <select id="adh-network">
+          <option value="mainnet">Mainnet</option>
+          <option value="testnet">Testnet</option>
+        </select>
+        <label for="adh-rep">ADH representation (decode)</label>
+        <input id="adh-rep" placeholder="e.g. ADbZQWsrRvexd1KVgzefLNtCUN3nwHAc95cRMehrQHcE5UtYbB" autocomplete="off">
+        <button type="submit" class="btn primary">Convert</button>
+        <p id="adh-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -567,6 +593,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=27"></script>
+<script src="app.js?v=28"></script>
 </body>
 </html>

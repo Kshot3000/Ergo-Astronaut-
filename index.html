@@ -548,6 +548,15 @@
         <button type="submit" class="btn primary">Convert</button>
         <p id="adh-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txparse-calc">
+        <h3>29 · Serialized transaction parser (transaction bytes → inputs, outputs, ID)</h3>
+        <p>Tools 15 and 17 take a single box apart and put one back together — this one takes the whole transaction. Paste a transaction's serialized bytes and I read them locally in the exact layout Ergo serializes a transaction: the inputs (each spent box's ID, its spending proof — empty in an unsigned transaction — and any context extension constants), the data inputs (boxes the scripts read but do not spend), the distinct token IDs the outputs use, and the outputs themselves as embedded boxes whose tokens are named by index into that ID list. I recompute the transaction ID the way the chain defines it — the Blake2b-256 of the <em>unsigned</em> serialization, proofs stripped and extensions kept, so a signed and an unsigned copy share one ID — and each output's box ID from its standalone serialization, the same rule as tool 14, with the outputs' ERG and token totals added up exactly. Two honest limits, both shared with fleet-sdk's own transaction deserializer, which keeps a separate, shorter list of "deserializable" vectors for exactly this reason: an output whose script carries no size field and is not the standard P2PK tree or the miner fee contract cannot be delimited without parsing the full script, and a register or extension constant of an exotic type (an Option, Box or AvlTree constant) stops the parse — both reported plainly rather than guessed past. And no fee is shown, ever: a fee is inputs minus outputs, and the input boxes' values are not in a transaction's bytes, only their IDs. Verified against fleet-sdk's published transaction vectors before it shipped here. Parsing only — it signs and sends nothing.</p>
+        <label for="txparse-bytes">Serialized transaction bytes (hex)</label>
+        <textarea id="txparse-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c76…" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Parse the transaction</button>
+        <p id="txparse-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -593,6 +602,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=28"></script>
+<script src="app.js?v=29"></script>
 </body>
 </html>

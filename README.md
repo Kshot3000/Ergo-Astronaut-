@@ -408,6 +408,25 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   string is a data representation for message signing, NOT a
   payment address, and the hash is one-way. It holds no keys,
   signs nothing and sends nothing.
+- **Serialized transaction parser** — parses a whole
+  transaction's serialized bytes in the layout fleet-sdk's
+  transaction serializer writes: inputs (spent box ID, spending
+  proof, context extension constants), data inputs, the
+  distinct token ID list, and the outputs as embedded boxes
+  whose tokens are named by index into that list. Recomputes
+  the transaction ID as the Blake2b-256 of the unsigned
+  serialization (proofs stripped, extensions kept — a signed
+  and an unsigned copy share one ID) and each output's box ID
+  from its standalone serialization, and totals the outputs'
+  ERG and tokens exactly. Verified against fleet-sdk's
+  published transaction vectors — the ones its own
+  deserializer round-trips — and an independent Python build.
+  Honest limits, both fleet-sdk's own: an output script with
+  no size field that is not the P2PK tree or the miner fee
+  contract cannot be delimited, and an exotic register or
+  extension constant stops the parse plainly. No fee is shown:
+  input box values are not in a transaction's bytes, only
+  their IDs. It signs and sends nothing.
 
 ## Cross-chain integration
 

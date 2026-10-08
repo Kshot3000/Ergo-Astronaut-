@@ -3287,8 +3287,73 @@ function convertTxJson(direction, text) {
   };
 }
 
+/* --- Tool 37: token mint planner (issuance designer) ---
+   A new Ergo token gets its ID from the chain, not from its
+   metadata: the token ID is the box ID of the FIRST input of
+   the minting transaction (EIP-4; fleet-sdk's builder takes
+   inputs[0].boxId as the minting token id, and its mock chain
+   enforces the same rule). That is what makes the ID unique —
+   a box can be spent only once, so no second mint can ever
+   reuse it. Given that first input's box ID plus the token's
+   name, description, decimals, optional EIP-4 asset type and
+   raw amount, this plans the whole issuance box content: the
+   token ID, the EIP-4 registers (composed from tool 27's
+   encoder, never re-derived), the display amount (tool 6's
+   converter), and the exact field text tools 17 and 30 take —
+   the issuance box's token line ("<tokenId> <rawAmount>") and
+   its register lines in R4-first order. The registers are
+   decoded back through tool 27's decoder before anything is
+   shown, and a decoded mismatch stops the plan. Semantics
+   verified against an independent Python build
+   (oracle-mintplan.py) over the fleet-recorded box IDs before
+   any JS. Planning only: it builds no transaction, signs
+   nothing and mints nothing — the token exists only once a
+   real minting transaction spending that first input confirms,
+   and whether that box is still unspent is a chain fact only
+   an explorer can tell you. */
+function planTokenMint(firstInputId, nameStr, descStr, decStr, amountStr, typeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, tokenId: null, name: null, description: null, decimals: null, assetType: null, amountRaw: null, displayAmount: null, registers: null, registerLines: null, boxbuildTokens: null, boxbuildRegisters: null, boxspecRegisters: null };
+  };
+  var id = (firstInputId == null ? "" : String(firstInputId)).trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(id)) return fail("The first input's box ID is 64 hex characters — it becomes the token ID, so it has to be exact. Find it on the box itself (tools 15 and 33 show a box's ID) or as the first input of the minting transaction (tool 29).");
+  var regs = buildEip4Registers(nameStr, descStr, decStr, typeStr);
+  if (!regs) return fail("The metadata does not encode (tool 27's EIP-4 rules): the name must be non-empty, the decimals a whole number written without a leading zero (0–999), and the asset type one of the listed EIP-4 types.");
+  var amt = (amountStr == null ? "" : String(amountStr)).trim();
+  if (!/^\d+$/.test(amt)) return fail("The amount is the raw token amount as a whole decimal number — on-chain token amounts are integers; the decimals only shape how the amount is displayed.");
+  if (BigInt(amt) === 0n) return fail("The amount is zero — a mint that creates zero tokens creates nothing. Give the raw amount to issue (with " + regs.decimals + " decimals, raw 1 is the smallest displayable step).");
+  var registers = { R4: regs.r4Hex };
+  if (regs.r5Hex) registers.R5 = regs.r5Hex;
+  registers.R6 = regs.r6Hex;
+  if (regs.r7Hex) registers.R7 = regs.r7Hex;
+  var back = decodeEip4Registers(registers.R4 || "", registers.R5 || "", registers.R6 || "", registers.R7 || "");
+  if (!back || back.name !== regs.name || back.description !== (regs.description === "" ? null : regs.description) || back.decimals !== regs.decimals || back.assetType !== regs.assetType) return fail("The EIP-4 registers did not decode back to the metadata they were built from, so nothing is shown.");
+  var keys = Object.keys(registers);
+  /* Tool 17's box builder takes typed specs, not raw constants —
+     every EIP-4 register is a Coll[Byte] constant, which is
+     exactly tool 17's bytes:<payload> spec. Tool 30's
+     transaction builder takes the raw constant hex instead, so
+     the plan carries both forms. */
+  var specOf = function (hex) {
+    var b = hexToBytes(hex);
+    var n = 0, i = 1;
+    for (;;) { var byte = b[i]; i++; n = n * 128 + (byte & 0x7f); if (!(byte & 0x80)) break; }
+    return "bytes:" + bytesToHex(b.slice(i, i + n));
+  };
+  return {
+    valid: true, reason: null, tokenId: id,
+    name: regs.name, description: regs.description, decimals: regs.decimals, assetType: regs.assetType,
+    amountRaw: BigInt(amt).toString(), displayAmount: tokenRawToDisplay(amt, regs.decimals),
+    registers: registers,
+    registerLines: keys.map(function (k) { return k + " " + registers[k]; }),
+    boxbuildTokens: id + " " + BigInt(amt).toString(),
+    boxbuildRegisters: keys.map(function (k) { return registers[k]; }).join("\n"),
+    boxspecRegisters: keys.map(function (k) { return specOf(registers[k]); }).join("\n")
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint };
 }
 
 if (typeof document !== "undefined") {
@@ -4035,6 +4100,29 @@ if (typeof document !== "undefined") {
         box.value = res.json;
         out.textContent = "✓ Converted to EIP-12 / fleet JSON: transaction " + res.txId + " — " + res.inputCount + (res.inputCount === 1 ? " input" : " inputs") + (res.dataInputCount > 0 ? ", " + res.dataInputCount + " data input(s)" : "") + ", " + res.outputCount + (res.outputCount === 1 ? " output" : " outputs") + " holding " + res.totalOutputErg + " ERG (" + res.totalOutputNano + " nanoERG) in total, from " + res.byteLength + " serialized bytes. Converted locally: nothing was fetched, signed or sent.";
       }
+    });
+
+    /* --- Token mint planner --- */
+    document.getElementById("mintplan-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("mintplan-result");
+      var res = planTokenMint(
+        document.getElementById("mintplan-first-input").value,
+        document.getElementById("mintplan-name").value,
+        document.getElementById("mintplan-desc").value,
+        document.getElementById("mintplan-decimals").value,
+        document.getElementById("mintplan-amount").value,
+        document.getElementById("mintplan-type").value
+      );
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Mint plan for \"" + res.name + "\": token ID " + res.tokenId + " — the box ID of the minting transaction's first input, which is what makes the ID unique (that box can be spent only once). ";
+      msg += "The issuance box carries " + res.amountRaw + " raw tokens (displayed as " + res.displayAmount + " with " + res.decimals + " decimals) and registers " + res.registerLines.join(", ") + (res.assetType ? " — asset type: " + res.assetType : "") + ". ";
+      msg += "To assemble the issuance box: tool 30's transaction builder takes the token line \"" + res.boxbuildTokens + "\" and the register hexes above, one per line in R4-first order; tool 17's box builder takes the same token line and the registers as typed specs — " + res.boxspecRegisters.split("\n").join(", ") + ". ";
+      msg += "Planned locally from what you typed: nothing was fetched, signed, sent or minted — the token exists only once a real transaction spending that first input confirms, and whether the box is still unspent is a chain fact to check on an explorer.";
+      out.textContent = msg;
     });
 
     /* --- P2S address builder --- */

@@ -650,6 +650,34 @@
         <label for="txjson-output">Converted transaction</label>
         <textarea id="txjson-output" rows="6" readonly spellcheck="false" placeholder="The converted form appears here"></textarea>
       </form>
+
+      <form class="tool" id="mintplan-calc">
+        <h3>37 · Token mint planner (first input + metadata → the token ID and its issuance box content)</h3>
+        <p>A new Ergo token gets its ID from the chain, not from its metadata: the token ID is the box ID of the <em>first input</em> of the minting transaction — the rule EIP-4 states and fleet-sdk's builder follows. That is what makes the ID unique: a box can be spent only once, so no second mint can ever reuse it. Tool 27 encodes a token's metadata into its EIP-4 registers, and tool 34 checks a finished transaction's mint against this same rule; this planner puts the pieces together before anything is built. Give it the first input's box ID (tools 15 and 33 show a box's ID; tool 29 lists a transaction's inputs), the token's name, description, decimals and optional asset type, and the raw amount to issue, and it returns the token ID, the issuance registers, the display amount, and the exact field text the builders take for the issuance box — the token line and raw register hexes for tool 30's transaction builder, and the registers as typed <code>bytes:</code> specs for tool 17's box builder. Planning only: it builds no transaction, signs nothing and mints nothing — the token exists only once a real minting transaction spending that first input confirms, and whether that box is still unspent is a chain fact only an explorer can tell you.</p>
+        <label for="mintplan-first-input">First input's box ID (64 hex characters — this becomes the token ID)</label>
+        <input id="mintplan-first-input" spellcheck="false" placeholder="e.g. 135baeca…" autocomplete="off">
+        <label for="mintplan-name">Token name</label>
+        <input id="mintplan-name" placeholder="e.g. Astronaut Token" autocomplete="off">
+        <label for="mintplan-desc">Token description (optional)</label>
+        <input id="mintplan-desc" placeholder="e.g. Hub test token" autocomplete="off">
+        <label for="mintplan-decimals">Decimals</label>
+        <input id="mintplan-decimals" inputmode="numeric" placeholder="e.g. 2" autocomplete="off">
+        <label for="mintplan-amount">Raw amount to issue (whole tokens are integers on-chain)</label>
+        <input id="mintplan-amount" inputmode="numeric" placeholder="e.g. 1000000" autocomplete="off">
+        <label for="mintplan-type">Asset type (optional)</label>
+        <select id="mintplan-type">
+          <option value="">None — plain token</option>
+          <option value="picture">NFT — picture artwork</option>
+          <option value="audio">NFT — audio artwork</option>
+          <option value="video">NFT — video artwork</option>
+          <option value="collection">NFT — artwork collection</option>
+          <option value="attachments">NFT — file attachments</option>
+          <option value="membership">Membership token — threshold signature</option>
+          <option value="nft">NFT (category only)</option>
+        </select>
+        <button type="submit" class="btn primary">Plan the mint</button>
+        <p id="mintplan-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -695,6 +723,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=36"></script>
+<script src="app.js?v=37"></script>
 </body>
 </html>

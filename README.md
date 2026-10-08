@@ -548,6 +548,22 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   builds the transaction and its Blake2b-256 ID from
   scratch over fleet-sdk's published box vectors, with the
   extracted box IDs asserted against the recorded ones.
+- **Token mint planner** — the issuance side of a new
+  token, planned before anything is built: a token's ID
+  is the box ID of the minting transaction's first input
+  (the EIP-4 rule fleet-sdk's builder follows — a box can
+  be spent only once, so the ID can never be reused), so
+  from that box ID plus the token's name, description,
+  decimals, optional asset type and raw amount, the
+  planner returns the token ID, the EIP-4 issuance
+  registers, the display amount, and the exact token and
+  register field text the box and transaction builders
+  take for the issuance box. It composes the EIP-4 codec
+  and the token amount converter rather than re-deriving
+  their maths, and decodes its own registers back before
+  showing them. Planning only — it builds no transaction
+  and mints nothing. Verified against an independent
+  Python oracle over the fleet-recorded box IDs.
 
 ## Cross-chain integration
 

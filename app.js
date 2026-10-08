@@ -3123,8 +3123,172 @@ function planTokenPayment(boxesText, paymentStr, feeStr, tokensText) {
   };
 }
 
+/* ---------- Transaction JSON converter ---------- */
+/* The same unsigned transaction in the two forms Ergo developers
+   actually move between: the EIP-12 / fleet-sdk JSON dialect (what
+   dApps, wallets and fleet's builders exchange) and the serialized
+   bytes tools 29/30 work in. The dialect, stated exactly: top level
+   {id?, inputs, dataInputs?, outputs}; an input is {boxId,
+   extension?} where extension maps a numeric-string key to one
+   Sigma constant in hex, exactly as a register is written; a data
+   input is {boxId}; an output is {value, ergoTree, creationHeight,
+   assets?, additionalRegisters?} with value and asset amounts as
+   decimal strings (JSON numbers are accepted only when they are
+   safe integers, and are re-emitted as strings — a float or an
+   unsafe integer is refused rather than rounded), and
+   additionalRegisters maps R4–R9 to constant hex, positionally,
+   with no gaps. The form is UNSIGNED by definition: it has no
+   place for spending proofs, so a signed transaction is refused in
+   both directions instead of having its proofs silently dropped —
+   tool 29 shows a signed transaction's full contents, and tool 30
+   builds signed bytes from pasted proofs. JSON -> bytes is
+   assembled by tool 30's builder, which round-trips its own output
+   through tool 29's parser before anything is shown; an "id" the
+   pasted JSON carries is checked against the computed transaction
+   ID and a mismatch is reported, never hidden. Bytes -> JSON is
+   tool 29's parse re-emitted in the dialect. Verified in the tests
+   against an independent Python build (oracle-txjson.py) whose
+   box IDs were asserted against the fleet-recorded ones before its
+   output was trusted. Conversion is just a change of notation:
+   nothing here signs, broadcasts or spends anything. */
+function convertTxJson(direction, text) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, direction: direction, txHex: null, json: null, txId: null, byteLength: null, inputCount: null, dataInputCount: null, outputCount: null, totalOutputNano: null, totalOutputErg: null, tokenIds: null, idMismatch: false, claimedId: null };
+  };
+  if (direction !== "json-to-bytes" && direction !== "bytes-to-json") return fail("Pick a direction: JSON to bytes, or bytes to JSON.");
+  var raw = text == null ? "" : String(text).trim();
+  if (raw === "") return fail(direction === "json-to-bytes" ? "Paste one unsigned transaction in the EIP-12 / fleet JSON form (a single JSON object with inputs and outputs)." : "Paste one unsigned transaction's serialized bytes as hex (tools 29 and 30 work in the same bytes).");
+  if (direction === "bytes-to-json") {
+    var parsed = parseErgoTransaction(raw);
+    if (!parsed.valid) return fail("These bytes do not parse as a transaction (tool 29's reader): " + parsed.reason);
+    if (parsed.signed) {
+      var proofAt = 0;
+      parsed.inputs.forEach(function (inp, ix) { if (proofAt === 0 && inp.proofLength > 0) proofAt = ix + 1; });
+      return fail("This transaction is signed — input " + proofAt + " carries a spending proof — and the EIP-12 / fleet JSON form is an unsigned form with no place for proofs. Dropping them silently would produce JSON that describes a different, unsigned transaction, so the conversion is refused: tool 29 shows the signed bytes' full contents, and tool 30 rebuilds signed bytes from pasted proofs.");
+    }
+    var jInputs = parsed.inputs.map(function (inp) {
+      var o = { boxId: inp.boxId };
+      if (inp.extension.length > 0) {
+        var ext = {};
+        inp.extension.forEach(function (e) { ext[String(e.key)] = e.rawHex; });
+        o.extension = ext;
+      }
+      return o;
+    });
+    var jObj = { id: parsed.txId, inputs: jInputs };
+    if (parsed.dataInputs.length > 0) jObj.dataInputs = parsed.dataInputs.map(function (id) { return { boxId: id }; });
+    jObj.outputs = parsed.outputs.map(function (op) {
+      var o = { value: op.valueNano, ergoTree: op.ergoTree, creationHeight: op.creationHeight };
+      if (op.tokens.length > 0) o.assets = op.tokens.map(function (tk) { return { tokenId: tk.tokenId, amount: tk.amount }; });
+      if (op.registers.length > 0) {
+        var regs = {};
+        op.registers.forEach(function (rg) { regs[rg.name] = rg.rawHex; });
+        o.additionalRegisters = regs;
+      }
+      return o;
+    });
+    return {
+      valid: true, reason: null, direction: direction,
+      txHex: null, json: JSON.stringify(jObj, null, 2), txId: parsed.txId,
+      byteLength: parsed.byteLength, inputCount: parsed.inputs.length,
+      dataInputCount: parsed.dataInputs.length, outputCount: parsed.outputs.length,
+      totalOutputNano: parsed.totalOutputNano, totalOutputErg: parsed.totalOutputErg,
+      tokenIds: parsed.tokenIds, idMismatch: false, claimedId: null
+    };
+  }
+  /* --- json-to-bytes --- */
+  var doc;
+  try { doc = JSON.parse(raw); } catch (err) { return fail("That is not valid JSON (" + err.message + ") — paste a single JSON object, exactly as a wallet, fleet-sdk or a dApp connector emits it."); }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return fail("The JSON must be a single object with \"inputs\" and \"outputs\" — an array or a bare value is not a transaction in this dialect.");
+  var amountStr = function (x, what) {
+    if (typeof x === "string" && /^\d+$/.test(x.trim())) return x.trim();
+    if (typeof x === "number" && Number.isSafeInteger(x) && x >= 0) return String(x);
+    return null;
+  };
+  if (!Array.isArray(doc.inputs)) return fail("The JSON carries no \"inputs\" list — the dialect is {inputs: [{boxId, extension?}], dataInputs?, outputs: [...]}.");
+  var inFields = [];
+  for (var i = 0; i < doc.inputs.length; i++) {
+    var jin = doc.inputs[i] || {};
+    var iWhat = "Input " + (i + 1);
+    if (typeof jin !== "object" || Array.isArray(jin)) return fail(iWhat + " is not an object — each input is {boxId, extension?}.");
+    if (jin.proofBytes != null && String(jin.proofBytes) !== "") return fail(iWhat + " carries proofBytes — this dialect is the unsigned form, which has no place for spending proofs, so a signed JSON transaction is refused rather than have its proofs dropped silently. Tool 30 builds signed bytes from pasted proofs.");
+    if (jin.spendingProof != null) return fail(iWhat + " carries a spendingProof — this dialect is the unsigned EIP-12 / fleet form, which has no place for proofs, so the transaction is refused rather than have its proofs dropped silently. Tool 30 builds signed bytes from pasted proofs.");
+    if (typeof jin.boxId !== "string" || !/^[0-9a-fA-F]{64}$/.test(jin.boxId.trim())) return fail(iWhat + ": a box ID is 64 hex characters — got \"" + jin.boxId + "\".");
+    var extList = [];
+    if (jin.extension != null) {
+      if (typeof jin.extension !== "object" || Array.isArray(jin.extension)) return fail(iWhat + ": \"extension\" maps numeric-string keys to Sigma constants in hex, e.g. {\"0\": \"0e02cafe\"}.");
+      var eKeys = Object.keys(jin.extension);
+      for (var e = 0; e < eKeys.length; e++) {
+        if (!/^\d+$/.test(eKeys[e])) return fail(iWhat + ": extension key \"" + eKeys[e] + "\" is not a number — keys are numeric strings (\"0\", \"1\", …).");
+        if (typeof jin.extension[eKeys[e]] !== "string") return fail(iWhat + ", extension key " + eKeys[e] + ": the value is one Sigma constant as a hex string (tool 18 reads them).");
+        extList.push({ key: eKeys[e], value: jin.extension[eKeys[e]] });
+      }
+    }
+    inFields.push({ boxId: jin.boxId.trim().toLowerCase(), proofHex: null, extension: extList });
+  }
+  var diFields = [];
+  if (doc.dataInputs != null) {
+    if (!Array.isArray(doc.dataInputs)) return fail("\"dataInputs\" is a list of {boxId} objects (boxes the scripts read but do not spend).");
+    for (var d = 0; d < doc.dataInputs.length; d++) {
+      var jdi = doc.dataInputs[d];
+      var diId = typeof jdi === "string" ? jdi : (jdi && typeof jdi === "object" ? jdi.boxId : null);
+      if (typeof diId !== "string" || !/^[0-9a-fA-F]{64}$/.test(diId.trim())) return fail("Data input " + (d + 1) + ": a box ID is 64 hex characters — each data input is {boxId: \"…\"}.");
+      diFields.push(diId.trim().toLowerCase());
+    }
+  }
+  if (!Array.isArray(doc.outputs)) return fail("The JSON carries no \"outputs\" list — each output is {value, ergoTree, creationHeight, assets?, additionalRegisters?}.");
+  var outFields = [];
+  for (var o = 0; o < doc.outputs.length; o++) {
+    var jout = doc.outputs[o] || {};
+    var oWhat = "Output " + (o + 1);
+    if (typeof jout !== "object" || Array.isArray(jout)) return fail(oWhat + " is not an object — each output is {value, ergoTree, creationHeight, assets?, additionalRegisters?}.");
+    var oVal = amountStr(jout.value, oWhat);
+    if (oVal === null) return fail(oWhat + ": \"value\" is the box value in nanoERG as a decimal string (a safe-integer number is also accepted) — got " + JSON.stringify(jout.value) + ", and an amount is never rounded to fit.");
+    if (typeof jout.ergoTree !== "string" || !/^(0x)?[0-9a-fA-F]+$/.test(jout.ergoTree.trim()) || jout.ergoTree.replace(/^0x/, "").length % 2 !== 0) return fail(oWhat + ": \"ergoTree\" is the guarding script as hex (an even number of 0-9/a-f characters).");
+    var oHeight = amountStr(jout.creationHeight, oWhat);
+    if (oHeight === null) return fail(oWhat + ": \"creationHeight\" is a whole block number (a number, or digits as a string).");
+    var oTokens = [];
+    if (jout.assets != null) {
+      if (!Array.isArray(jout.assets)) return fail(oWhat + ": \"assets\" is a list of {tokenId, amount} pairs.");
+      for (var t = 0; t < jout.assets.length; t++) {
+        var ja = jout.assets[t] || {};
+        if (typeof ja.tokenId !== "string" || !/^[0-9a-fA-F]{64}$/.test(ja.tokenId.trim())) return fail(oWhat + ", asset " + (t + 1) + ": a token ID is 64 hex characters.");
+        var aAmt = amountStr(ja.amount, oWhat);
+        if (aAmt === null) return fail(oWhat + ", asset " + (t + 1) + ": \"amount\" is the raw token amount as a decimal string (a safe-integer number is also accepted) — never rounded to fit.");
+        oTokens.push({ tokenId: ja.tokenId.trim().toLowerCase(), amount: aAmt });
+      }
+    }
+    var oRegs = [];
+    if (jout.additionalRegisters != null) {
+      if (typeof jout.additionalRegisters !== "object" || Array.isArray(jout.additionalRegisters)) return fail(oWhat + ": \"additionalRegisters\" maps register names to Sigma constants in hex, e.g. {\"R4\": \"0e04deadbeef\"}.");
+      var rKeys = Object.keys(jout.additionalRegisters);
+      for (var r = 0; r < rKeys.length; r++) {
+        if (!/^R[4-9]$/.test(rKeys[r])) return fail(oWhat + ": register key \"" + rKeys[r] + "\" is not one of R4–R9 — a box's non-mandatory registers are exactly R4 through R9.");
+        var expect = "R" + (4 + r);
+        var sorted = rKeys.slice().sort(function (a, b) { return Number(a.slice(1)) - Number(b.slice(1)); });
+        if (sorted[r] !== expect) return fail(oWhat + ": registers are positional and must start at R4 with no gaps — got " + sorted.join(", ") + ", so " + expect + " is missing. A register cannot be skipped: R5's bytes would be read as R4.");
+        if (typeof jout.additionalRegisters[rKeys[r]] !== "string") return fail(oWhat + ", register " + rKeys[r] + ": the value is one Sigma constant as a hex string (tool 18 reads them).");
+      }
+      var ordered = rKeys.slice().sort(function (a, b) { return Number(a.slice(1)) - Number(b.slice(1)); });
+      oRegs = ordered.map(function (k) { return jout.additionalRegisters[k]; });
+    }
+    outFields.push({ valueNano: oVal, ergoTree: jout.ergoTree.trim(), creationHeight: oHeight, tokens: oTokens, registers: oRegs });
+  }
+  var built = buildErgoTransaction({ inputs: inFields, dataInputs: diFields, outputs: outFields });
+  if (!built.valid) return fail("The JSON is well-formed, but the transaction it describes does not assemble (tool 30's builder): " + built.reason);
+  var claimed = typeof doc.id === "string" ? doc.id.trim().toLowerCase() : null;
+  return {
+    valid: true, reason: null, direction: direction,
+    txHex: built.txHex, json: null, txId: built.txId,
+    byteLength: built.byteLength, inputCount: inFields.length,
+    dataInputCount: diFields.length, outputCount: outFields.length,
+    totalOutputNano: built.totalOutputNano, totalOutputErg: built.totalOutputErg,
+    tokenIds: built.tokenIds, idMismatch: claimed !== null && claimed !== built.txId, claimedId: claimed
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson };
 }
 
 if (typeof document !== "undefined") {
@@ -3850,6 +4014,27 @@ if (typeof document !== "undefined") {
       }
       msg += "Selected in two phases — boxes carrying still-needed tokens first, in your listed order, then the rest in order until the ERG covered — and planned locally from the bytes you pasted: nothing was fetched, signed or sent, and a pasted box may since have been spent, which only the chain can tell you.";
       out.textContent = msg;
+    });
+
+    /* --- Transaction JSON converter --- */
+    document.getElementById("txjson-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txjson-result");
+      var box = document.getElementById("txjson-output");
+      var dir = document.getElementById("txjson-direction").value;
+      var res = convertTxJson(dir, document.getElementById("txjson-input").value);
+      if (!res.valid) {
+        box.value = "";
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      if (dir === "json-to-bytes") {
+        box.value = res.txHex;
+        out.textContent = "✓ Converted to serialized bytes: transaction " + res.txId + " — " + res.byteLength + " bytes, " + res.inputCount + (res.inputCount === 1 ? " input" : " inputs") + (res.dataInputCount > 0 ? ", " + res.dataInputCount + " data input(s)" : "") + ", " + res.outputCount + (res.outputCount === 1 ? " output" : " outputs") + " holding " + res.totalOutputErg + " ERG (" + res.totalOutputNano + " nanoERG) in total" + (res.tokenIds.length > 0 ? ", with " + res.tokenIds.length + " distinct token ID(s)" : "") + "." + (res.idMismatch ? " ⚠ The pasted JSON claimed id " + res.claimedId + ", which does NOT match the computed transaction ID above — the JSON's id was stale or wrong; the bytes and the computed ID are what the fields actually describe." : (res.claimedId ? " The pasted JSON's id matches the computed transaction ID." : "")) + " Converted locally: nothing was fetched, signed or sent.";
+      } else {
+        box.value = res.json;
+        out.textContent = "✓ Converted to EIP-12 / fleet JSON: transaction " + res.txId + " — " + res.inputCount + (res.inputCount === 1 ? " input" : " inputs") + (res.dataInputCount > 0 ? ", " + res.dataInputCount + " data input(s)" : "") + ", " + res.outputCount + (res.outputCount === 1 ? " output" : " outputs") + " holding " + res.totalOutputErg + " ERG (" + res.totalOutputNano + " nanoERG) in total, from " + res.byteLength + " serialized bytes. Converted locally: nothing was fetched, signed or sent.";
+      }
     });
 
     /* --- P2S address builder --- */

@@ -528,6 +528,26 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   ordering, a one-box cover, token and ERG shortfalls, an
   unrequested token riding into change, and the
   zero-ERG-change trap.
+- **Transaction JSON converter** — the same unsigned
+  transaction in the two notations Ergo developers move
+  between: the EIP-12 / fleet-sdk JSON dialect (inputs with
+  optional context extensions, data inputs, outputs with
+  string amounts and R4–R9 registers as Sigma-constant hex)
+  and the serialized bytes the parser and builder tools
+  work in, converted either way. The JSON form is unsigned
+  by definition, so a signed transaction is refused in
+  both directions rather than have its spending proofs
+  silently dropped; amounts are never rounded (a JSON
+  number is accepted only as a safe integer and re-emitted
+  as a string); registers must start at R4 with no gaps,
+  because they are positional; and an `id` in pasted JSON
+  that disagrees with the computed transaction ID is
+  reported, never hidden. It composes the transaction
+  builder and parser rather than re-deriving their maths.
+  Verified against an independent Python oracle that
+  builds the transaction and its Blake2b-256 ID from
+  scratch over fleet-sdk's published box vectors, with the
+  extracted box IDs asserted against the recorded ones.
 
 ## Cross-chain integration
 

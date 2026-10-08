@@ -634,6 +634,22 @@
         <button type="submit" class="btn primary">Plan the payment</button>
         <p id="tokenplan-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txjson-calc">
+        <h3>36 · Transaction JSON converter (EIP-12 / fleet JSON ⇄ the serialized bytes)</h3>
+        <p>Tools 29 and 30 work in serialized bytes, but dApps, wallets and fleet-sdk speak JSON — the EIP-12 unsigned-transaction form: <code>{inputs: [{boxId, extension?}], dataInputs?, outputs: [{value, ergoTree, creationHeight, assets?, additionalRegisters?}]}</code>, with values and amounts as decimal strings and registers and extension values as Sigma constants in hex, exactly as tools 15 and 18 display them. This converts between the two notations, in either direction, locally. The JSON form is unsigned by definition — it has no place for spending proofs — so a signed transaction is refused in both directions rather than have its proofs silently dropped: tool 29 shows a signed transaction's full contents, and tool 30 rebuilds signed bytes from pasted proofs. Amounts are never rounded to fit: a value given as a JSON number is accepted only when it is a safe integer, and is re-emitted as a string. Registers are positional, so additionalRegisters must start at R4 with no gaps — R5 written without R4 would be read back as R4, and that is refused instead of converted. If the pasted JSON carries an <code>id</code> that disagrees with the computed transaction ID, the mismatch is reported, never hidden. Conversion is just a change of notation: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txjson-direction">Direction</label>
+        <select id="txjson-direction">
+          <option value="json-to-bytes">JSON → serialized bytes</option>
+          <option value="bytes-to-json">Serialized bytes → JSON</option>
+        </select>
+        <label for="txjson-input">Transaction (JSON object, or serialized bytes as hex)</label>
+        <textarea id="txjson-input" rows="6" spellcheck="false" placeholder="e.g. {&quot;inputs&quot;: [{&quot;boxId&quot;: &quot;…&quot;}], &quot;outputs&quot;: […]} — or a transaction's hex bytes" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Convert the transaction</button>
+        <p id="txjson-result" role="status" aria-live="polite"></p>
+        <label for="txjson-output">Converted transaction</label>
+        <textarea id="txjson-output" rows="6" readonly spellcheck="false" placeholder="The converted form appears here"></textarea>
+      </form>
     </div>
   </section>
 
@@ -679,6 +695,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=35"></script>
+<script src="app.js?v=36"></script>
 </body>
 </html>

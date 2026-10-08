@@ -588,6 +588,15 @@
         <button type="submit" class="btn primary">Derive the addresses</button>
         <p id="hd-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="pubkey-calc">
+        <h3>32 · Public key inspector (compressed key → the point behind it)</h3>
+        <p>Every P2PK address and ProveDlog script on Ergo carries a compressed secp256k1 public key — 33 bytes: a prefix (02 for even y, 03 for odd y) and an x-coordinate. But the prefix and length are all tools 8 and 19 check, and they are not enough: a compressed key is only a real key if its x names a point actually on the curve, where y² = x³ + 7 modulo the field prime p. Roughly half of all x values have no point at all — x³ + 7 is a quadratic non-residue for them — and any x ≥ p is outside the field entirely; an address formatted around such bytes guards a key nobody can ever hold. This inspector does the real check: because p is 3 modulo 4, a square root of x³ + 7, when one exists, is (x³ + 7)^((p+1)/4) mod p — it recovers y, pins the parity the prefix claims (the other root, p − y, is the point's negation, so the same x under the other prefix is a different, also valid point), re-verifies the curve equation, and re-compresses the point before showing anything. It then shows the full point (x and y), the uncompressed form (04 + x + y), the SGroupElement Sigma constant (07 + the compressed key) that tool 18 reads and writes, and the key's P2PK addresses on both networks, round-tripped through tool 11's decoder. A public key is public — inspecting one proves no ownership of it, and no private key can be found from the point. Public keys only: never type a private key or seed into any website, this one included.</p>
+        <label for="pubkey-in">Compressed public key (hex — 66 characters, starting 02 or 03)</label>
+        <textarea id="pubkey-in" rows="2" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (the secp256k1 generator point — the public key of private key 1)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Inspect the public key</button>
+        <p id="pubkey-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -633,6 +642,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=31"></script>
+<script src="app.js?v=32"></script>
 </body>
 </html>

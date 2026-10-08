@@ -462,6 +462,22 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   further seeds across accounts, branches and both networks.
   The page warns in plain words never to type a real seed
   into any website, this one included.
+- **Public key inspector** — the curve-membership check the
+  address builders do not make: a compressed secp256k1 key
+  (02/03 prefix + x) is only a real key if x names a point on
+  the curve, y² = x³ + 7 (mod p). This tool recovers y as
+  (x³ + 7)^((p+1)/4) mod p (valid because p ≡ 3 mod 4), pins
+  the prefix's parity, refuses x ≥ p and non-residue x (x = 0
+  among them) as keys no private key can exist for, and shows
+  the full point, the uncompressed form, the SGroupElement
+  Sigma constant, and both networks' P2PK addresses,
+  round-tripped through the address decoder. Verified
+  against an independent Python oracle (pure-Python EC
+  multiplication, pow-based decompression, hashlib address
+  construction): the generator point, its negation, the keys
+  of private keys 2 and 3, and my own address's key, which
+  re-encodes to that exact address. Inspecting a public key
+  proves no ownership of it.
 
 ## Cross-chain integration
 

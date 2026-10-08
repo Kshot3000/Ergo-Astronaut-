@@ -2712,8 +2712,78 @@ function deriveHdAddresses(seedHex, accountStr, changeStr, countStr) {
   return { valid: true, reason: null, account: account.value, change: changeParsed.value, rows: rows };
 }
 
+/* ---------- Public key inspector (compressed key -> curve point) ---------- */
+/* The check tools 8 and 19 do not make: they accept any 33 bytes
+   starting 02 or 03 as a compressed public key, but a compressed key
+   is only a real key if its x-coordinate names a point on secp256k1 —
+   y^2 = x^3 + 7 (mod p). About half of all x values have no point at
+   all (x^3 + 7 is then a quadratic non-residue mod p), and any
+   x >= p is out of the field entirely; an "address" built from those
+   bytes guards a key nobody can ever hold. This inspector recovers y
+   the standard way — the field prime is 3 (mod 4), so a square root
+   of the right-hand side, when one exists, is rhs^((p+1)/4) mod p —
+   then pins the parity the prefix claims (02 = even y, 03 = odd y;
+   the other root, p - y, is the point's negation, so the same x
+   under the other prefix is a different, also valid, point). The
+   recovered point is re-verified against the curve equation and
+   re-compressed before anything is shown, and the P2PK addresses
+   are round-tripped through tool 11's decoder. Also shown: the
+   uncompressed form (04 + x + y) and the SGroupElement Sigma
+   constant (type byte 07 + the compressed bytes) that tool 18
+   reads and writes. Verified against an independent Python oracle
+   (pure-Python EC multiplication for the keys of private keys 1-3,
+   pow-based decompression, hashlib address construction) in the
+   tests, including the generator, its negation, my own address's
+   key, and the non-residue x = 0. A public key is public: inspecting
+   one proves no ownership of it and finds no private key. */
+function secpPowMod(base, exp) {
+  var acc = 1n, b = secpMod(base), e = exp;
+  while (e > 0n) { if ((e & 1n) === 1n) acc = secpMod(acc * b); b = secpMod(b * b); e >>= 1n; }
+  return acc;
+}
+function bigIntToHex64(v) {
+  var s = v.toString(16);
+  while (s.length < 64) s = "0" + s;
+  return s;
+}
+function inspectPublicKey(pubkeyHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, publicKey: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
+  };
+  var s = (pubkeyHex == null ? "" : String(pubkeyHex)).trim().toLowerCase();
+  if (s.indexOf("0x") === 0) s = s.slice(2);
+  if (!/^[0-9a-f]{66}$/.test(s)) return fail("Enter a compressed public key as 66 hex characters (33 bytes) starting 02 or 03 — public keys only: never enter a private key or seed phrase anywhere, including here. An uncompressed key (65 bytes, starting 04) is not the form Ergo P2PK scripts carry; compressing it is just its x-coordinate plus a 02/03 prefix for its y's parity, which this tool reads rather than writes.");
+  var prefix = parseInt(s.slice(0, 2), 16);
+  if (prefix !== 2 && prefix !== 3) return fail("That is not a compressed public key: a compressed secp256k1 key is 33 bytes and starts 02 (even y) or 03 (odd y) — this starts " + s.slice(0, 2) + ".");
+  var x = BigInt("0x" + s.slice(2));
+  if (x >= SECP_P) return fail("This key's x-coordinate is outside the secp256k1 field — x must be less than the field prime p (ffffffff…fffffffefffffc2f), and this x is not. No point on the curve has this x, so no private key exists for it: it is not a public key at all, whatever address could be formatted around its bytes.");
+  var rhs = secpMod(x * x * x + 7n);
+  var y = secpPowMod(rhs, (SECP_P + 1n) / 4n);
+  if (secpMod(y * y) !== rhs) return fail("This x-coordinate has no point on secp256k1: x^3 + 7 is a quadratic non-residue modulo p, so no y satisfies y^2 = x^3 + 7 for it. Roughly half of all x values are like this. No private key exists for these bytes — it is not a public key at all, whatever address could be formatted around them.");
+  if (((y & 1n) === 1n) !== (prefix === 3)) y = SECP_P - y;
+  if (secpMod(y * y) !== secpMod(x * x * x + 7n) || ((y & 1n) === 1n) !== (prefix === 3)) {
+    return fail("Internal check failed: the recovered point does not satisfy the curve equation at the prefix's parity — refusing to show it.");
+  }
+  var recompressed = ((y & 1n) === 1n ? "03" : "02") + bigIntToHex64(x);
+  if (recompressed !== s) return fail("Internal round-trip check failed: the recovered point does not re-compress to exactly this key — refusing to show it.");
+  var mainnet = p2pkAddressFromPublicKey(s, "mainnet");
+  var testnet = p2pkAddressFromPublicKey(s, "testnet");
+  var back = decodeErgoAddress(mainnet);
+  if (!mainnet || !testnet || !back.valid || back.publicKey !== s) {
+    return fail("Internal round-trip check failed: the P2PK address built from this key does not decode back to it — refusing to show it.");
+  }
+  return {
+    valid: true, reason: null, publicKey: s,
+    x: bigIntToHex64(x), y: bigIntToHex64(y),
+    yParity: (y & 1n) === 1n ? "odd" : "even",
+    uncompressedHex: "04" + bigIntToHex64(x) + bigIntToHex64(y),
+    sigmaConstantHex: "07" + s,
+    mainnet: mainnet, testnet: testnet
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey };
 }
 
 if (typeof document !== "undefined") {
@@ -3329,6 +3399,21 @@ if (typeof document !== "undefined") {
         return "#" + r.index + " — " + r.path + " — public key " + r.publicKey + " — mainnet " + r.mainnet + " — testnet " + r.testnet;
       }).join("; ") + ". ";
       msg += "Only public keys and addresses are shown — no private key ever leaves the derivation, and the seed you typed never left this page: it was not stored, logged or sent anywhere. Prefer a test seed for trying this out; a real seed belongs in a wallet, not a website.";
+      out.textContent = msg;
+    });
+
+    /* --- Public key inspector --- */
+    document.getElementById("pubkey-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("pubkey-result");
+      var res = inspectPublicKey(document.getElementById("pubkey-in").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ That is a real point on the curve: x " + res.x + ", y " + res.y + " (" + res.yParity + ", as its " + res.publicKey.slice(0, 2) + " prefix claims) — y² = x³ + 7 (mod p) holds and the point re-compresses to exactly this key. ";
+      msg += "Uncompressed form: " + res.uncompressedHex + ". As a Sigma constant it is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses (tools 8 and 19 build the same): mainnet " + res.mainnet + " — testnet " + res.testnet + ", round-tripped through tool 11's decoder before being shown. ";
+      msg += "Inspection only: a public key is public — this proves the point is real, and proves no ownership of the key; the private half is never asked for and cannot be found from the point. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

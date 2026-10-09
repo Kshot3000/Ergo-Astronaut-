@@ -877,6 +877,44 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   and a from-scratch synthetic carrying two tokens
   split across outputs, one of them minted.
 
+- **Transaction register extractor** — takes a
+  serialized transaction plus an output number and
+  a register name (R4–R9) and returns that one
+  register of that one output: its Sigma type, its
+  decoded value, its raw constant bytes (exactly
+  what the sigma constant inspector takes on its
+  own), the output's box ID, and the register's
+  text when it is a Coll[SByte] holding printable
+  UTF-8 — the form EIP-4 name, description and
+  decimals registers take. Registers are where a
+  box keeps its data, yet the parser and the
+  output auditor only show them inline inside a
+  whole output. Verified before it is shown: the
+  register is located three times (the transaction
+  parser, an independent raw-offset re-walk that
+  must skip every input, data input, listed token
+  ID and earlier output to reach this output's
+  register section at all, and the output
+  extractor's standalone box re-parsed with the
+  box parser) and all three must agree on type,
+  value and raw bytes byte-for-byte, and the
+  unsigned form must re-parse to the same
+  transaction ID carrying the same register —
+  registers are signed over verbatim, so signing
+  can never change them (the signed and unsigned
+  differ vectors extract identically). Honest
+  boundary: a register is content, never proof —
+  extraction reads it from the pasted bytes and
+  does not prove the output exists on chain as a
+  box, that bytes shown as text were meant as
+  text, or that any script reads the value the
+  way a reader expects. Verified against an
+  independent Python oracle over the fleet vectors
+  and a from-scratch synthetic minting-style
+  transaction whose issuance output carries
+  EIP-4-style R4/R5/R6 byte-collection registers
+  and an SLong R7.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

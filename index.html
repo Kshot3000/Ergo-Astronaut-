@@ -813,6 +813,19 @@
         <button type="submit" class="btn primary">Extract the token</button>
         <p id="txtoken-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txreg-calc">
+        <h3>51 · Transaction register extractor (transaction bytes + an output number + a register → that register's type, value and raw constant)</h3>
+        <p>Tools 47–50 lift out a transaction's output boxes, its inputs' proofs, its data inputs and its listed tokens; the one section none of them can lift out on its own is a single register of a single output. Registers R4–R9 are where a box keeps its data — a minting output's EIP-4 name, description and decimals live in R4, R5 and R6, oracle boxes keep their values there, contracts read them — yet tools 29 and 38 only show them inline inside a whole output, so one chosen register could not be lifted out with its output's box ID, its Sigma type, its decoded value and its raw constant bytes, or carried into tool 18 (which decodes exactly one constant) on its own. This tool returns one chosen register of one chosen output, and also shows the register's text when it is a Coll[SByte] holding printable UTF-8 — the EIP-4 case. The register is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every input, data input, listed token ID and earlier output exactly to reach this output's register section at all, and once by tool 47's standalone box for the same output re-parsed with the box parser, and all three must agree on the register's type, value and raw bytes byte-for-byte; on top of that, the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same register, because registers are signed over verbatim and signing can never change them. The honesty boundary is stated plainly: a register is content, never proof — extraction reads it from the bytes you paste, and does not prove the output exists on chain as a box, that bytes shown as text were meant as text, or that any script will read the value the way you expect. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txreg-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txreg-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <label for="txreg-output">Output number (1 = the transaction's first output)</label>
+        <input id="txreg-output" type="text" inputmode="numeric" placeholder="e.g. 1" autocomplete="off">
+        <label for="txreg-register">Register (R4, R5, R6, R7, R8 or R9)</label>
+        <input id="txreg-register" type="text" placeholder="e.g. R4" autocomplete="off">
+        <button type="submit" class="btn primary">Extract the register</button>
+        <p id="txreg-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -858,6 +871,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=50"></script>
+<script src="app.js?v=51"></script>
 </body>
 </html>

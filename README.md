@@ -1355,6 +1355,44 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   has one token carried by two different
   outputs.
 
+- **Block header inspector** — takes a
+  serialized block header (the full bytes,
+  Autolykos solution included) and returns every
+  header field with the header ID recomputed and
+  checked: version, parent ID, AD-proofs root,
+  transactions root, the 33-byte state root,
+  timestamp (VLQ, shown in milliseconds and ISO
+  form), extension root, nBits with the
+  difficulty decoded by the exact compact-bits
+  algorithm, height, the 3 miner-vote bytes and
+  any extra-fields bytes, plus the Autolykos
+  solution — miner key and nonce on version 2+,
+  and on version 1 the one-time key and distance
+  d as well. An optional expected ID is compared
+  against the recomputed one (Blake2b-256 over
+  the full serialized header, the reference
+  definition). Every other tool works below the
+  header; this one opens the header itself.
+  Verified before it is shown: the header is
+  located twice (the field parser, and an
+  independent offset-only re-walk that must land
+  on the same boundaries and the same timestamp,
+  height and nBits), the parsed fields must
+  re-serialize byte-for-byte to the pasted
+  bytes, and the walk must end exactly at the
+  last byte. Honest boundary: inspection
+  recomputes the ID and decodes the fields — it
+  does not verify the Autolykos proof-of-work
+  hit against the difficulty target, and an ID
+  is only a hash of the pasted bytes, not proof
+  the block sits on the main chain. Verified
+  against an independent Python oracle over
+  three real mainnet headers whose published
+  IDs it reproduces bit-for-bit (versions 1, 2
+  and 4, heights 3132, 471746 and 1890980) plus
+  a from-scratch mutation whose ID only the
+  oracle computes.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

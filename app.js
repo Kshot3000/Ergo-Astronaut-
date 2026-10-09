@@ -6528,8 +6528,204 @@ function extractTxDistinctTokenSet(txHex) {
   };
 }
 
+/* Tool 62: block header inspector. Every other tool on this hub
+   works below the header — boxes, transactions, trees. This one
+   opens the header itself: the ~220 bytes that head every Ergo
+   block and whose Blake2b-256 hash is the block's ID. Give it a
+   serialized header (the bytes a node or sigma-rust holds for a
+   block, solution included) and it walks the reference layout
+   exactly as ergo-chain-types defines it: version byte, parent
+   ID, AD-proofs root, transactions root, the 33-byte ADDigest
+   state root (in that order — the transactions root precedes the
+   state root on the wire), the timestamp as a VLQ u64, the
+   extension root, nBits as the header's one fixed-width number
+   (4 big-endian bytes, NOT a VLQ), the height as a VLQ u32, the
+   3 miner-vote bytes, and — for version 2 and up — one length
+   byte for any not-yet-defined extra fields. Then the Autolykos
+   solution: version 1 headers carry miner key, one-time key,
+   nonce and a length-prefixed distance d; version 2 and up
+   carry only miner key and nonce (the one-time key and d exist
+   in JSON displays of later headers but are NOT serialized).
+   It returns every field, the timestamp in milliseconds and
+   ISO form, the difficulty decoded from nBits with the exact
+   compact-bits algorithm (a signed-magnitude encoding: the top
+   byte is the byte count, the low three bytes the mantissa's
+   head, the sign bit honoured), and the header ID recomputed
+   as Blake2b-256 over the full serialized bytes — which is
+   exactly the reference definition, the hash of the no-PoW
+   serialization followed by the solution bytes. An optional
+   expected ID can be supplied and is compared. The header is
+   verified before anything is shown: it is located twice —
+   once by the field parser and once by an independent
+   offset-only re-walk that must land on the same field
+   boundaries and the same timestamp, height and nBits — the
+   parsed fields must re-serialize byte-for-byte to the pasted
+   bytes, and the walk must end exactly at the last byte (a
+   serialized header has no trailing room). Honesty boundary:
+   inspection recomputes the ID and decodes the fields; it does
+   NOT verify the Autolykos proof-of-work hit against the
+   difficulty target, and an ID is only a hash of these bytes —
+   it does not prove the block is on the main chain or was ever
+   accepted; that verdict belongs to a full node. Verified
+   against an independent Python oracle (oracle-header.py) over
+   three real mainnet headers whose published IDs it must
+   reproduce bit-for-bit — a version 1 header from height 3132
+   (the one sigma-rust pins in its own parser test), a version
+   2 header from height 471746 (same source) and the version 4
+   header at the explorer's chain tip on 2026-10-09 (height
+   1890980) — plus a from-scratch mutation whose ID only the
+   oracle computes. */
+function decodeCompactBits(nBits) {
+  var n = Number(nBits) >>> 0;
+  var size = (n >>> 24) & 0xff;
+  if (size === 0) return 0n;
+  var buf = [];
+  for (var i = 0; i < size; i++) buf.push(i < 3 ? (n >>> (16 - 8 * i)) & 0xff : 0);
+  var negative = (buf[0] & 0x80) === 0x80;
+  if (negative) buf[0] &= 0x7f;
+  var v = 0n;
+  for (var j = 0; j < buf.length; j++) v = (v << 8n) | BigInt(buf[j]);
+  return negative ? -v : v;
+}
+
+function inspectBlockHeader(headerHex, expectedStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, headerId: null, idMatches: null, expectedId: null, version: null, autolykosVersion: null, parentId: null, adProofsRoot: null, transactionsRoot: null, stateRoot: null, extensionRoot: null, timestampMs: null, timestampIso: null, nBits: null, nBitsHex: null, difficulty: null, height: null, votesHex: null, votes: null, unparsedHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null, byteLength: null, withoutPowLength: null, solutionLength: null };
+  };
+  if (typeof headerHex !== "string") return fail("Paste the serialized block header as hex first — the full header bytes, Autolykos solution included, exactly as a node serializes them.");
+  var cleaned = headerHex.replace(/\s+/g, "");
+  if (cleaned === "" || !/^[0-9a-fA-F]+$/.test(cleaned) || cleaned.length % 2 !== 0) return fail("That is not even-length hex — a serialized block header is a whole number of bytes written as hex.");
+  var expectedId = null;
+  if (typeof expectedStr === "string" && expectedStr.trim() !== "") {
+    var ex = expectedStr.replace(/\s+/g, "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(ex)) return fail("An expected header ID is 64 hex characters (32 bytes) — check the value you pasted, or clear it to just recompute the ID.");
+    expectedId = ex;
+  }
+  var bytes = hexToBytes(cleaned);
+  if (!bytes || bytes.length < 139) return fail("Those bytes are too short to be a serialized block header — even an empty version 1 header runs well past 139 bytes once its roots, votes and Autolykos v1 solution are counted.");
+  var pos = 0;
+  var err = null;
+  var take = function (n, what) {
+    if (err) return null;
+    if (pos + n > bytes.length) { err = "The header ends inside " + what + " — the bytes are truncated, or they are not a serialized block header at all."; return null; }
+    var s = bytes.subarray(pos, pos + n); pos += n; return s;
+  };
+  var takeVlq = function (what) {
+    if (err) return null;
+    var r = readVlqBig(bytes, pos);
+    if (!r) { err = "The header's " + what + " is not a readable VLQ where the layout requires one — the bytes are truncated or not a serialized block header."; return null; }
+    pos += r.length; return r;
+  };
+  var version = bytes[pos]; pos += 1;
+  if (version === 0) return fail("The version byte is 0 — Ergo block versions start at 1, so these are not serialized block header bytes.");
+  var parentId = take(32, "the parent ID");
+  var adProofsRoot = take(32, "the AD-proofs root");
+  var transactionsRoot = take(32, "the transactions root");
+  var stateRoot = take(33, "the state root");
+  var tsR = takeVlq("timestamp");
+  if (!err && tsR.value > 0xffffffffffffffffn) return fail("The timestamp VLQ decodes past 64 bits — the reference layout stores it as a u64, so these bytes are not a serialized block header.");
+  var extensionRoot = take(32, "the extension root");
+  var nBitsBytes = take(4, "the nBits field");
+  var htR = takeVlq("height");
+  if (!err && htR.value > 0xffffffffn) return fail("The height VLQ decodes past 32 bits — the reference layout stores it as a u32, so these bytes are not a serialized block header.");
+  var votes = take(3, "the miner votes");
+  var unparsed = null;
+  if (!err && version > 1) {
+    var ul = take(1, "the extra-fields length byte");
+    if (!err) { var uln = ul[0]; var ub = take(uln, "the extra header fields"); if (!err) unparsed = ub; }
+  }
+  if (err) return fail(err);
+  var withoutPowLength = pos;
+  var minerPk = take(33, "the Autolykos miner public key");
+  if (!err && minerPk[0] !== 0x02 && minerPk[0] !== 0x03) return fail("The Autolykos miner public key does not start with a compressed-point prefix (02 or 03) where the solution must begin — the field walk has drifted, so these bytes are not a serialized block header in the reference layout.");
+  var onetimePk = null;
+  var powDistance = null;
+  var nonce = null;
+  if (!err && version === 1) {
+    onetimePk = take(33, "the Autolykos v1 one-time public key");
+    if (!err && onetimePk[0] !== 0x02 && onetimePk[0] !== 0x03) return fail("The Autolykos v1 one-time public key does not start with a compressed-point prefix (02 or 03) — the field walk has drifted, so these bytes are not a serialized block header in the reference layout.");
+    nonce = take(8, "the Autolykos nonce");
+    var dlB = take(1, "the Autolykos v1 distance length");
+    if (!err) {
+      var dBytes = take(dlB[0], "the Autolykos v1 distance");
+      if (!err) { var dv = 0n; for (var di = 0; di < dBytes.length; di++) dv = (dv << 8n) | BigInt(dBytes[di]); powDistance = dv.toString(); }
+    }
+  } else if (!err) {
+    nonce = take(8, "the Autolykos nonce");
+  }
+  if (err) return fail(err);
+  if (pos !== bytes.length) return fail("There are " + (bytes.length - pos) + " trailing byte(s) after the Autolykos solution — a serialized block header ends exactly at the solution, so these bytes carry something a header does not.");
+  var nBits = ((nBitsBytes[0] << 24) | (nBitsBytes[1] << 16) | (nBitsBytes[2] << 8) | nBitsBytes[3]) >>> 0;
+  var timestampMs = tsR.value;
+  var height = Number(htR.value);
+  /* Independent re-walk: offsets only, no field decoding beyond
+     the two VLQ skips, and it must agree on every boundary. */
+  var w = 1 + 32 + 32 + 32 + 33;
+  var wTs = readVlqBig(bytes, w);
+  if (!wTs || wTs.value !== timestampMs) return fail("Internal error: the re-walked timestamp does not match the parsed timestamp — nothing was shown rather than an unverified header.");
+  w += wTs.length + 32;
+  var wNBits = ((bytes[w] << 24) | (bytes[w + 1] << 16) | (bytes[w + 2] << 8) | bytes[w + 3]) >>> 0;
+  if (wNBits !== nBits) return fail("Internal error: the re-walked nBits does not match the parsed nBits — nothing was shown rather than an unverified header.");
+  w += 4;
+  var wHt = readVlqBig(bytes, w);
+  if (!wHt || Number(wHt.value) !== height) return fail("Internal error: the re-walked height does not match the parsed height — nothing was shown rather than an unverified header.");
+  w += wHt.length + 3;
+  if (version > 1) w += 1 + bytes[w];
+  if (w !== withoutPowLength) return fail("Internal error: the re-walk reaches the Autolykos solution at a different offset than the parser — nothing was shown rather than an unverified header.");
+  /* Re-serialize the parsed fields and demand the pasted bytes back. */
+  var rebuilt = [version]
+    .concat(Array.from(parentId), Array.from(adProofsRoot), Array.from(transactionsRoot), Array.from(stateRoot))
+    .concat(writeVlqBig(timestampMs))
+    .concat(Array.from(extensionRoot))
+    .concat(Array.from(nBitsBytes))
+    .concat(writeVlqBig(htR.value))
+    .concat(Array.from(votes));
+  if (version > 1) rebuilt = rebuilt.concat([unparsed.length], Array.from(unparsed));
+  rebuilt = rebuilt.concat(Array.from(minerPk));
+  if (version === 1) {
+    var dArr = [];
+    var dvv = BigInt(powDistance);
+    if (dvv === 0n) dArr = [0];
+    else { while (dvv > 0n) { dArr.unshift(Number(dvv & 0xffn)); dvv >>= 8n; } }
+    rebuilt = rebuilt.concat(Array.from(onetimePk), Array.from(nonce), [dArr.length], dArr);
+  } else {
+    rebuilt = rebuilt.concat(Array.from(nonce));
+  }
+  if (bytesToHex(rebuilt) !== bytesToHex(bytes)) return fail("Internal error: the parsed fields do not re-serialize to the pasted bytes — nothing was shown rather than an unverified header.");
+  var headerId = bytesToHex(blake2b256(bytes));
+  return {
+    valid: true, reason: null,
+    headerId: headerId,
+    idMatches: expectedId === null ? null : headerId === expectedId,
+    expectedId: expectedId,
+    version: version,
+    autolykosVersion: version === 1 ? 1 : 2,
+    parentId: bytesToHex(parentId),
+    adProofsRoot: bytesToHex(adProofsRoot),
+    transactionsRoot: bytesToHex(transactionsRoot),
+    stateRoot: bytesToHex(stateRoot),
+    extensionRoot: bytesToHex(extensionRoot),
+    timestampMs: timestampMs.toString(),
+    timestampIso: new Date(Number(timestampMs)).toISOString(),
+    nBits: nBits,
+    nBitsHex: "0x" + nBits.toString(16).padStart(8, "0"),
+    difficulty: decodeCompactBits(nBits).toString(),
+    height: height,
+    votesHex: bytesToHex(votes),
+    votes: Array.from(votes),
+    unparsedHex: version > 1 ? bytesToHex(unparsed) : null,
+    minerPk: bytesToHex(minerPk),
+    onetimePk: onetimePk ? bytesToHex(onetimePk) : null,
+    nonce: bytesToHex(nonce),
+    powDistance: powDistance,
+    byteLength: bytes.length,
+    withoutPowLength: withoutPowLength,
+    solutionLength: bytes.length - withoutPowLength
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, inspectBlockHeader };
 }
 
 if (typeof document !== "undefined") {
@@ -7787,6 +7983,27 @@ if (typeof document !== "undefined") {
       msg += res.mintedCount + " of them is minted by this transaction, and the outputs carry " + res.totalEntryCount + " token entr" + (res.totalEntryCount === 1 ? "y" : "ies") + " in total across all outputs. ";
       msg += "The distinct-token section exactly as serialized (count byte included) is " + res.tokenSectionHex + " — the token IDs, one per line, are: " + res.tokenLines.split("\n").join(", ") + ". ";
       msg += "The set was located twice — by the transaction parser and by an independent re-walk that skips every input and data input exactly to reach the token section — and every listed token also extracts on its own through tool 50 with the same total and minted flag, tool 38's output audit carries the same per-token totals and minted set, and the unsigned form (tool 45) re-parses to the same transaction ID carrying the same list in the same order, because the list is signed over verbatim and signing can never change it. Extraction only: a token ID is an identifier, never a token — this does not prove a listed token exists on chain, what its name or decimals are, or that the inputs actually carried a non-minted token in, and nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("header-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("header-result");
+      var res = inspectBlockHeader(document.getElementById("header-bytes").value, document.getElementById("header-expected").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Block header " + res.headerId + " — version " + res.version + ", height " + res.height + ", timestamp " + res.timestampMs + " ms (" + res.timestampIso + "). ";
+      if (res.idMatches === true) msg += "The ID you supplied matches the recomputed ID exactly. ";
+      if (res.idMatches === false) msg += "⚠ The ID you supplied (" + res.expectedId + ") does NOT match the recomputed ID — these bytes are a well-formed header, but they are not the header that ID names. ";
+      msg += "Parent " + res.parentId + "; AD-proofs root " + res.adProofsRoot + "; transactions root " + res.transactionsRoot + "; state root " + res.stateRoot + " (33 bytes — the AVL tree digest carries one extra byte over a plain 32-byte hash); extension root " + res.extensionRoot + ". ";
+      msg += "nBits " + res.nBitsHex + " (" + res.nBits + ") decodes to difficulty " + res.difficulty + " exactly. Miner votes " + res.votesHex + " (bytes " + res.votes.join(", ") + "). ";
+      if (res.version > 1) msg += res.unparsedHex === "" ? "The extra-fields length byte is 0 — no fields beyond the reference layout. " : "The header carries " + (res.unparsedHex.length / 2) + " extra-field byte(s) past the reference layout: " + res.unparsedHex + ". ";
+      msg += "Autolykos v" + res.autolykosVersion + " solution (" + res.solutionLength + " of the " + res.byteLength + " bytes): miner public key " + res.minerPk + ", nonce " + res.nonce;
+      if (res.autolykosVersion === 1) msg += ", one-time public key " + res.onetimePk + ", distance d = " + res.powDistance;
+      msg += ". ";
+      msg += "The header was located twice — by the field parser and by an independent offset-only re-walk — and the parsed fields re-serialize byte-for-byte to the bytes you pasted; the ID is Blake2b-256 over the full serialized header, the reference definition. Inspection only: this recomputes the ID and decodes the fields — it does not verify the Autolykos proof-of-work hit against the difficulty target, and an ID is only a hash of these bytes, not proof the block sits on the main chain; that verdict belongs to a full node. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

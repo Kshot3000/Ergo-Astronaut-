@@ -936,6 +936,17 @@
         <p id="txdtokset-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="header-calc">
+        <h3>62 · Block header inspector (serialized header bytes → every header field, with the header ID recomputed and checked)</h3>
+        <p>Every other tool here works below the header — boxes, transactions, trees. This one opens the header itself: the ~220 bytes that head every Ergo block, whose Blake2b-256 hash is the block's ID. Paste a serialized block header — the bytes a node or sigma-rust holds for a block, Autolykos solution included — and I walk the reference layout exactly: version byte, parent ID, AD-proofs root, transactions root, the 33-byte state root (the AVL digest carries one extra byte; note the transactions root precedes it on the wire), the timestamp as a VLQ, the extension root, nBits as the header's one fixed-width number (4 big-endian bytes, not a VLQ), the height as a VLQ, the 3 miner-vote bytes, and, for version 2 and up, one length byte for any not-yet-defined extra fields. Then the Autolykos solution: version 1 headers carry miner key, one-time key, nonce and a length-prefixed distance; version 2 and up serialize only miner key and nonce, whatever JSON displays show. The tool returns every field, the difficulty decoded from nBits with the exact compact-bits algorithm, and the header ID recomputed as Blake2b-256 over the full serialized bytes — the reference definition — and if you supply the ID you expect, it is compared. The header is verified before anything is shown: it is located twice, once by the field parser and once by an independent offset-only re-walk, the parsed fields must re-serialize byte-for-byte to the bytes you pasted, and the walk must end exactly at the last byte. The honesty boundary is stated plainly: this recomputes the ID and decodes the fields — it does not verify the Autolykos proof-of-work hit against the difficulty target, and an ID is only a hash of these bytes, not proof the block sits on the main chain; that verdict belongs to a full node. Inspection only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="header-bytes">Serialized block header (hex, solution included)</label>
+        <textarea id="header-bytes" rows="3" spellcheck="false" placeholder="e.g. 04… (the full serialized header, ~220 bytes on mainnet today)" autocomplete="off"></textarea>
+        <label for="header-expected">Expected header ID (optional — 64 hex characters, compared against the recomputed ID)</label>
+        <input id="header-expected" type="text" spellcheck="false" placeholder="leave blank to just recompute the ID" autocomplete="off">
+        <button type="submit" class="btn primary">Inspect the header</button>
+        <p id="header-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -981,6 +992,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=61"></script>
+<script src="app.js?v=62"></script>
 </body>
 </html>

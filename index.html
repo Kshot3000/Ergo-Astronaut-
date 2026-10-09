@@ -854,6 +854,19 @@
         <button type="submit" class="btn primary">Extract the ErgoTree</button>
         <p id="txtree-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txouttoken-calc">
+        <h3>54 · Transaction output token extractor (transaction bytes + an output number + a token number → that one token entry, expanded)</h3>
+        <p>Tools 47–53 lift out a transaction's output boxes, its inputs' proofs, its data inputs, its listed tokens as a whole, a single output register, a single extension entry and a single output's ErgoTree; the one per-item view none of them gives is a single token entry inside a single output. Tool 50 answers at the level of the transaction's distinct-token list — every output that carries a token and the total — and tools 29 and 47 show an output's tokens only inline inside a whole transaction or a whole standalone box, where the embedded form names each token only by its index into the distinct-token list. This tool returns one chosen token of one chosen output expanded: its full 32-byte token ID, its exact raw amount, its position inside the output and its index in the distinct-token list, the output's box ID and ERG value, the output's full token list in order, and whether this transaction mints the token (its ID equals the transaction's first input's box ID — the same rule tools 37, 38 and 50 use). The token is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every input (proof and extension constants), data input, listed token ID and earlier output exactly and expands this output's token index through the distinct-token list it re-read, and once by tool 47's standalone box for this output re-parsed with the box parser, and all three must agree; tool 50's view of the same token must place the same amount in this output, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same token in the same position, because signing can never change an output. The honesty boundary is stated plainly: a token entry is copied from the bytes you paste, never verified against the chain — extraction does not prove the output exists on chain as a box. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txouttoken-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txouttoken-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <label for="txouttoken-output">Output number (1 = the transaction's first output)</label>
+        <input id="txouttoken-output" type="text" inputmode="numeric" placeholder="e.g. 1" autocomplete="off">
+        <label for="txouttoken-token">Token number within that output (1 = the first token it carries)</label>
+        <input id="txouttoken-token" type="text" inputmode="numeric" placeholder="e.g. 1" autocomplete="off">
+        <button type="submit" class="btn primary">Extract the output token</button>
+        <p id="txouttoken-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -899,6 +912,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=53"></script>
+<script src="app.js?v=54"></script>
 </body>
 </html>

@@ -1009,6 +1009,42 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   carrying a size-flagged tree alongside a
   plain P2PK output.
 
+- **Transaction output token extractor** — takes a
+  serialized transaction plus an output number
+  and a token number within that output and
+  returns that one token entry expanded: its
+  full 32-byte token ID (an embedded output
+  names its tokens only by index into the
+  transaction's distinct-token list), its
+  exact raw amount, its position inside the
+  output and its index in the distinct-token
+  list, the output's box ID and ERG value, the
+  output's full token list in order, and
+  whether this transaction mints the token
+  (its ID equals the transaction's first
+  input's box ID). Verified before it is
+  shown: the token is located three times (the
+  transaction parser, an independent
+  raw-offset re-walk that expands this output's
+  token index through the distinct-token list
+  it re-read, and the standalone-box
+  extractor's output re-parsed with the box
+  parser), the transaction-level token
+  extractor's view of the same token must
+  place the same amount in this output, and
+  the unsigned form must re-parse to the same
+  transaction ID carrying the same token in
+  the same position — signing can never change
+  an output. Honest boundary: a token entry is
+  copied from the pasted bytes, never verified
+  against the chain — extraction does not
+  prove the output exists on chain as a box.
+  Verified against an independent Python
+  oracle over the fleet vectors, the differ
+  pair and a from-scratch synthetic with two
+  tokens split across two outputs, the second
+  of them minted.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

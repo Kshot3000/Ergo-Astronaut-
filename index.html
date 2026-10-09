@@ -878,6 +878,17 @@
         <button type="submit" class="btn primary">Extract the register set</button>
         <p id="txregset-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txextset-calc">
+        <h3>56 · Transaction input extension-set extractor (transaction bytes + an input number → that input's complete context extension, in order)</h3>
+        <p>Tool 52 lifts one entry out of one input's context extension, which is the right grain for checking a single parameter — but an extension is usually a set: an oracle or dApp input passes several keyed values that the spent box's script reads together when it runs. Tools 29 and 39 show a set only inline inside a whole transaction or a whole input audit, and tool 48 returns the whole extension only as a side dish to an input's proof, so one chosen input's complete set could not be lifted out on its own. This tool returns every entry the input carries, in order, each with its key, its Sigma type, its decoded value and its raw constant bytes (exactly what tool 18 decodes on its own), plus the entry's text when it is a Coll[SByte] holding printable UTF-8, alongside the spent box's ID, the input's key list, and the raw extension-section hex exactly as serialized, entry-count byte included, so the whole set can be carried or compared as one string. A key an input carries twice — the malformed case tool 39 flags — is reported as a duplicate and the set is shown exactly as serialized, never merged or deduplicated. An input carrying no entries is refused plainly rather than shown an empty set as if it were a result. The set is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every earlier input exactly (box ID, proof, extension constants) and decodes this input's whole extension again capturing its section bytes, and once by tool 48's extraction of the same input, and all three must agree on every entry's key, type, value and raw bytes; every entry's raw constant must also decode standalone through tool 18, every distinct key must extract on its own through tool 52, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same set, because extensions are kept verbatim in the unsigned form and signing can never change them. The honesty boundary is stated plainly: an extension set is content, never proof — extraction reads it from the bytes you paste, and does not prove the spent box's script reads these keys, reads them as these types, or that the box exists on chain. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txextset-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txextset-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <label for="txextset-input">Input number (1 = the transaction's first input)</label>
+        <input id="txextset-input" type="text" inputmode="numeric" placeholder="e.g. 1" autocomplete="off">
+        <button type="submit" class="btn primary">Extract the extension set</button>
+        <p id="txextset-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -923,6 +934,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=55"></script>
+<script src="app.js?v=56"></script>
 </body>
 </html>

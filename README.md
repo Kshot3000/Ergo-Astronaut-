@@ -1086,6 +1086,47 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   holding a negative SLong and a text
   register.
 
+- **Transaction input extension-set extractor** — takes a
+  serialized transaction plus an input number
+  and returns that input's complete context
+  extension in order: every entry it carries,
+  each with its key, Sigma type, decoded
+  value, raw constant bytes and — for a
+  Coll[SByte] holding printable UTF-8 — its
+  text, alongside the spent box's ID, the
+  input's key list, any key carried twice
+  (reported, never merged), and the raw
+  extension-section hex exactly as serialized
+  (entry-count byte included). Where the
+  context-extension extractor lifts one entry,
+  this lifts the set as one record — an oracle
+  or dApp input's parameters only mean
+  anything together. An input carrying no
+  entries is refused plainly. Verified before
+  it is shown: the set is located three times
+  (the transaction parser, an independent
+  raw-offset re-walk that skips every earlier
+  input and decodes this input's whole
+  extension again, and the input proof
+  extractor's view of the same input), every
+  entry's raw constant must decode standalone
+  through the Sigma constant inspector, every
+  distinct key must extract on its own through
+  the context-extension extractor, and the
+  unsigned form must re-parse to the same
+  transaction ID carrying the same set —
+  extensions are kept verbatim in the unsigned
+  form and signing can never change them.
+  Honest boundary: an extension set is
+  content, never proof — extraction reads it
+  from the pasted bytes and does not prove
+  the spent box's script reads these keys or
+  reads them as these types. Verified against
+  an independent Python oracle over the fleet
+  vectors, the differ pair and a from-scratch
+  synthetic with two extension-carrying
+  inputs.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

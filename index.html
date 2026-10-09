@@ -1013,6 +1013,17 @@
         <p id="headerpow-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="headerjoin-calc">
+        <h3>67 · Block header PoW attacher (header-without-PoW bytes + Autolykos solution → the full serialized header)</h3>
+        <p>Tool 66 splits a header into its two halves; this one — the exact inverse, in the line of tool 46's transaction proof attacher — joins them back. Paste the header-without-PoW bytes and an Autolykos solution as separate hex records and it reassembles the full serialized header and recomputes its ID. The halves are parsed separately before they ever meet: the without-PoW field walk (version, the four roots, VLQ timestamp, extension root, fixed-width nBits, VLQ height, votes, and on version 2+ the extra-fields section) must end exactly at its last byte — a full header, which carries a solution already, or a truncated prefix is refused, never trimmed — and the solution walk, read against the version the prefix declares (version 2+: miner key and nonce, 41 bytes; version 1: miner key, one-time key, nonce and the length-prefixed distance), must end exactly at its last byte too, so a version 1 solution can never be silently attached to a version 2+ prefix or the reverse. A well-formed solution from a different header joins cleanly and is reported as exactly what it is — a new header carrying that solution, with the ID the joined bytes hash to. The join is verified before anything is shown: the prefix fields re-serialize to the bytes you pasted, tool 62 inspects the joined bytes with every field matching the two separate parses, tool 66 splits them back into exactly the halves you supplied, and tool 63 rebuilds the identical header. The honesty boundary is stated plainly: joining proves only that these bytes reassemble — it does not verify the solution's proof-of-work hit against the difficulty target, and a joined header is a block only if a node accepts it. Joining only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="headerjoin-without">Header without proof-of-work (hex, the first half tool 66 splits off)</label>
+        <textarea id="headerjoin-without" rows="3" spellcheck="false" placeholder="e.g. 04069e46… (every header field up to the solution, nothing after it)" autocomplete="off"></textarea>
+        <label for="headerjoin-solution">Autolykos solution (hex, the second half tool 66 splits off)</label>
+        <textarea id="headerjoin-solution" rows="2" spellcheck="false" placeholder="e.g. 0204b680… (miner key + nonce on version 2+; miner key + one-time key + nonce + distance on version 1)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Attach the proof-of-work</button>
+        <p id="headerjoin-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1058,6 +1069,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=66"></script>
+<script src="app.js?v=67"></script>
 </body>
 </html>

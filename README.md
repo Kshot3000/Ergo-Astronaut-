@@ -1504,6 +1504,33 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   the three real mainnet headers, a mutation,
   a version 3 extra-fields synthetic and a
   version 1 zero-distance synthetic.
+- **Block header PoW attacher** — the exact
+  inverse of the extractor: the
+  header-without-PoW bytes and an Autolykos
+  solution in as separate hex records, the
+  full serialized header and its recomputed
+  ID out. The halves are parsed separately
+  first — the without-PoW field walk must
+  end exactly at its last byte (a full
+  header or a truncated prefix is refused,
+  never trimmed) and the solution walk,
+  read against the version the prefix
+  declares, must end exactly at its last
+  byte too, so a version 1 solution can
+  never attach to a version 2+ prefix or
+  the reverse. The joined bytes must
+  inspect with every field matching the
+  separate parses, split back into exactly
+  the halves supplied, and rebuild
+  identically through the header builder.
+  A well-formed solution from a different
+  header joins cleanly and is reported as
+  the new header it forms. Joining verifies
+  no proof-of-work hit. Verified against an
+  independent Python oracle over the six
+  extractor splits rejoined to their exact
+  headers, plus two cross-joins whose IDs
+  only the oracle computes.
 
 ## Cross-chain integration
 

@@ -711,6 +711,28 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   plus a from-scratch token-amount variant: identical,
   reordered, one box swapped, a token total changed and
   a strict subset.
+- **Unsigned-form extractor** — takes one serialized
+  transaction and returns the unsigned form its
+  transaction ID is computed over: every input's
+  spending proof replaced by a single zero length byte,
+  everything else verbatim, as hex ready to paste into
+  the transaction parser, the JSON converter or the
+  differ. The extraction is verified before it is
+  shown — the result must hash (Blake2b-256) to the
+  transaction's own ID and re-parse as the same
+  transaction, unsigned. It reports which inputs were
+  stripped and how many bytes were removed in total,
+  counting any proof-length VLQ bytes that shrank (a
+  proof over 127 bytes has a multi-byte length). The
+  unsigned form cannot be spent and the removed proofs
+  are gone from the copy; no proof that was present
+  was verified, only removed. Verified against an
+  independent Python oracle: the fleet unsigned vectors
+  are the identity, the fleet signed vector and two
+  synthetics strip back to their exact unsigned forms
+  (one of them to the differ's unsigned base vector,
+  byte for byte), and a from-scratch 200-byte proof
+  strips 201 bytes.
 
 ## Cross-chain integration
 

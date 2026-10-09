@@ -4134,8 +4134,100 @@ function compareBoxSets(aText, bText) {
   };
 }
 
+/* ---------- Unsigned-form extractor ----------
+   Tool 29 reports a transaction's ID, and tool 42 reports the
+   unsigned size, but neither shows the unsigned bytes themselves —
+   the exact form the ID is the Blake2b-256 of: every input's proof
+   replaced by a single 0x00 length byte, everything else verbatim.
+   Tool 36 refuses signed bytes rather than drop proofs silently;
+   this tool makes that drop explicit and returns the unsigned hex
+   itself, so it can be pasted into the parser, the JSON converter
+   or the differ. The splice is done by a raw offset walk (proof
+   length VLQ, proof bytes, then the context extension walked
+   constant by constant with the parser's own type/data readers),
+   and the result is never trusted from the walk alone: its
+   Blake2b-256 must equal the parsed transaction's ID and it must
+   re-parse as the same transaction, unsigned, before anything is
+   shown. A proof longer than 127 bytes has a multi-byte length
+   VLQ, so stripping can remove more than the proof bytes
+   themselves — bytesRemoved counts the whole difference. The
+   honesty boundary: the unsigned form is not spendable and the
+   removed proofs are gone from this copy — extraction is a
+   transformation of the bytes you pasted, and no proof that was
+   present has been verified, only removed. Verified against an
+   independent Python oracle (oracle-txstrip.py): the fleet
+   unsigned vectors are the identity, the fleet signed vector and
+   two synthetics strip back to their exact unsigned forms, and a
+   from-scratch 200-byte proof strips 201 bytes. */
+function extractUnsignedTx(txHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, signed: null, alreadyUnsigned: null, byteLength: null, unsignedByteLength: null, bytesRemoved: null, inputCount: null, outputCount: null, totalProofBytes: null, strippedInputs: null, proofs: null, unsignedHex: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  var cleaned = String(txHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  var pos = 0;
+  var cnt = readVlqBig(bytes, pos);
+  if (!cnt) return fail("Internal error: the input count could not be re-read — nothing was extracted.");
+  pos += cnt.length;
+  var unsigned = Array.from(bytes.subarray(0, pos));
+  var pushAll = function (arr) { for (var i = 0; i < arr.length; i++) unsigned.push(arr[i]); };
+  var proofs = [];
+  for (var i = 0; i < tx.inputs.length; i++) {
+    var boxIdBytes = bytes.subarray(pos, pos + 32);
+    pos += 32;
+    var pl = readVlqBig(bytes, pos);
+    if (!pl) return fail("Internal error: input " + (i + 1) + "'s proof length could not be re-read — nothing was extracted.");
+    pos += pl.length;
+    var proofLen = Number(pl.value);
+    var proofHex = proofLen > 0 ? bytesToHex(bytes.subarray(pos, pos + proofLen)) : null;
+    pos += proofLen;
+    var extStart = pos;
+    var ec = readVlqBig(bytes, pos);
+    if (!ec) return fail("Internal error: input " + (i + 1) + "'s context extension count could not be re-read — nothing was extracted.");
+    pos += ec.length;
+    for (var e = 0; e < Number(ec.value); e++) {
+      var kv = readVlqBig(bytes, pos);
+      if (!kv) return fail("Internal error: input " + (i + 1) + "'s context extension could not be re-walked — nothing was extracted.");
+      pos += kv.length;
+      var eType = parseSigmaType(bytes, pos);
+      if (!eType) return fail("Internal error: input " + (i + 1) + "'s context extension could not be re-walked — nothing was extracted.");
+      pos += eType.length;
+      var eData = parseSigmaData(eType.node, bytes, pos);
+      if (!eData) return fail("Internal error: input " + (i + 1) + "'s context extension could not be re-walked — nothing was extracted.");
+      pos += eData.length;
+    }
+    pushAll(boxIdBytes);
+    unsigned.push(0);
+    pushAll(bytes.subarray(extStart, pos));
+    proofs.push({ index: i, boxId: tx.inputs[i].boxId, proofLength: proofLen, proofHex: proofHex });
+  }
+  pushAll(bytes.subarray(pos));
+  var unsignedHex = bytesToHex(Uint8Array.from(unsigned));
+  if (bytesToHex(blake2b256(Uint8Array.from(unsigned))) !== tx.txId) return fail("Internal error: the extracted form does not hash to the transaction ID — nothing was shown rather than a wrong extraction.");
+  var re = parseErgoTransaction(unsignedHex);
+  if (!re.valid || re.txId !== tx.txId || re.signed) return fail("Internal error: the extracted form does not re-parse as this same transaction, unsigned — nothing was shown rather than a wrong extraction.");
+  var stripped = proofs.filter(function (p) { return p.proofLength > 0; });
+  return {
+    valid: true, reason: null,
+    txId: tx.txId,
+    signed: tx.signed,
+    alreadyUnsigned: !tx.signed,
+    byteLength: tx.byteLength,
+    unsignedByteLength: unsigned.length,
+    bytesRemoved: tx.byteLength - unsigned.length,
+    inputCount: tx.inputs.length,
+    outputCount: tx.outputs.length,
+    totalProofBytes: proofs.reduce(function (s, p) { return s + p.proofLength; }, 0),
+    strippedInputs: stripped.map(function (p) { return p.index; }),
+    proofs: proofs,
+    unsignedHex: unsignedHex
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx };
 }
 
 if (typeof document !== "undefined") {
@@ -5117,6 +5209,25 @@ if (typeof document !== "undefined") {
         msg += "A box whose contents changed at all is a different box, so it appears above as one removed plus one added — tool 41 diffs two single boxes field by field. ";
       }
       msg += "Comparison only, over the bytes you pasted: it fetches nothing and is not a live wallet balance, and which set is the right one is not a question bytes alone answer. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txstrip-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txstrip-result");
+      var res = extractUnsignedTx(document.getElementById("txstrip-bytes").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.alreadyUnsigned) {
+        msg = "✓ This transaction is already unsigned — no input carries a proof, so its unsigned form is byte-for-byte the transaction itself: " + res.byteLength + " bytes, transaction ID " + res.txId + " (the Blake2b-256 of exactly these bytes, re-parsed and verified before being shown). ";
+      } else {
+        msg = "✓ Stripped the proof from input(s) " + res.strippedInputs.map(function (i) { return (i + 1) + " (" + res.proofs[i].proofLength + " bytes)"; }).join(", ") + " — " + res.totalProofBytes + " proof byte(s) in total: " + res.byteLength + " bytes → " + res.unsignedByteLength + " unsigned bytes (" + res.bytesRemoved + " byte(s) removed, including any proof-length VLQ bytes that shrank). Transaction ID " + res.txId + " — the Blake2b-256 of the unsigned form below, which was re-parsed as this same transaction, unsigned, before being shown. ";
+      }
+      msg += "Unsigned transaction hex: " + res.unsignedHex + " ";
+      msg += "Extraction only, over the bytes you pasted: the unsigned form cannot be spent and the removed proofs are gone from this copy — keep the original if you need them; no proof that was present was verified, only removed. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

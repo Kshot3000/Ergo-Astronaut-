@@ -1210,6 +1210,52 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   from-scratch synthetic whose three-entry set
   carries the also-spent case in the middle.
 
+- **Transaction input-set extractor** — takes a
+  serialized transaction and returns its complete
+  input set in order: every box the transaction
+  spends, each with its proof length and proof
+  bytes (or plainly none), its context extension's
+  count, keys and every entry's type, value and
+  raw constant, and its own raw serialized slice,
+  alongside the signed-input count, total proof
+  bytes, total extension entries, the raw
+  input-section hex exactly as serialized (count
+  byte included) and the spent box IDs one per
+  line. Where the proof, extension and
+  extension-set extractors lift one input or one
+  entry, this lifts the set as one record — a
+  transaction spends its inputs together, their
+  order is part of the signed bytes, and the
+  first input's box ID is also the ID of any
+  token the transaction mints. Verified before
+  it is shown: the set is located twice (the
+  transaction parser, and an independent
+  raw-offset re-walk of the input section that
+  captures the section bytes as it goes), every
+  input must also extract on its own through
+  the input proof extractor, every
+  extension-carrying input's set must extract
+  through the extension-set extractor, the
+  input auditor must list the same inputs with
+  the same totals, the unsigned form must
+  re-parse to the same transaction ID carrying
+  the same box IDs and extensions with every
+  proof stripped, and re-attaching every
+  extracted proof line to that unsigned form
+  must reproduce the transaction exactly.
+  Honest boundary: an input set names boxes and
+  carries their proofs and parameters, never
+  the boxes' contents — extraction reads it
+  from the pasted bytes and does not prove the
+  named boxes exist on chain, are unspent, hold
+  enough ERG or tokens, or that a present proof
+  satisfies a box's script. Verified against an
+  independent Python oracle over the fleet
+  vectors, the differ pair and a from-scratch
+  three-input synthetic covering
+  signed+extension, unsigned+extension and
+  signed+extensionless inputs.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

@@ -6038,8 +6038,137 @@ function extractTxDataInputSet(txHex) {
   };
 }
 
+/* ---------- Transaction input-set extractor ---------- */
+/* Tools 48, 52 and 56 lift one input's proof, one extension
+   entry and one input's whole extension — but a transaction
+   spends its inputs as a set: the boxes it consumes, in an
+   order that is itself part of the signed bytes, with the
+   first input's box ID doubling as the ID of any token the
+   transaction mints. Tools 29 and 39 show the set only inline
+   inside a whole transaction or a whole input audit, so the
+   complete set could not be lifted out as one record. This
+   returns every input in order — box ID, proof (length and
+   bytes, or none), context extension (count, keys and every
+   entry's type, value and raw constant) and the input's own
+   raw serialized slice — alongside the signed-input count,
+   total proof bytes, total extension entries, the raw
+   input-section hex exactly as serialized (count byte
+   included) and the spent box IDs one per line. Verified
+   before it is shown: the set is located twice — once by the
+   transaction parser and once by an independent raw-offset
+   re-walk of the input section that captures the section
+   bytes as it goes — and the two must agree on every input's
+   box ID, proof and extension byte-for-byte; every input
+   must also extract on its own through tool 48 with the
+   same proof and extension, every extension-carrying input's
+   set must extract through tool 56, tool 39's input audit
+   must list the same inputs with the same totals, the
+   unsigned form (tool 45) must re-parse to the same
+   transaction ID carrying the same box IDs and extensions
+   with every proof stripped, and re-attaching every
+   extracted proof line to that unsigned form through
+   tool 46 must reproduce this transaction exactly.
+   Honesty boundary: an input set names boxes and carries
+   their proofs and parameters, never the boxes' contents —
+   extraction reads it from the pasted bytes; it does not
+   prove the named boxes exist on chain, are unspent, hold
+   enough ERG or tokens, or that a present proof satisfies
+   a box's script. Verified against an independent Python
+   oracle (oracle-txinset.py) over the fleet vectors, the
+   differ pair and a from-scratch three-input synthetic
+   covering signed+extension, unsigned+extension and
+   signed+extensionless inputs. */
+function extractTxInputSet(txHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, signed: null, inputCount: null, entries: null, signedCount: null, totalProofBytes: null, extensionEntryCount: null, inputLines: null, proofLines: null, inputSectionHex: null, byteLength: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  var cleaned = String(txHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  var pos = 0;
+  var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong input set."); };
+  var sectionStart = pos;
+  var cnt = readVlqBig(bytes, pos);
+  if (!cnt) return walkFail("the input count");
+  pos += cnt.length;
+  if (Number(cnt.value) !== tx.inputs.length) return fail("Internal error: the re-walked input count does not match the count the transaction parser reports — nothing was shown rather than an unverified extraction.");
+  var walked = [];
+  for (var i = 0; i < tx.inputs.length; i++) {
+    var inStart = pos;
+    if (pos + 32 > bytes.length) return walkFail("input " + (i + 1) + "'s box ID");
+    var wBoxId = bytesToHex(bytes.subarray(pos, pos + 32));
+    pos += 32;
+    var pl = readVlqBig(bytes, pos);
+    if (!pl) return walkFail("input " + (i + 1) + "'s proof length");
+    pos += pl.length;
+    var wProofLen = Number(pl.value);
+    if (pos + wProofLen > bytes.length) return walkFail("input " + (i + 1) + "'s proof");
+    var wProofHex = wProofLen > 0 ? bytesToHex(bytes.subarray(pos, pos + wProofLen)) : null;
+    pos += wProofLen;
+    var ec = readVlqBig(bytes, pos);
+    if (!ec) return walkFail("input " + (i + 1) + "'s context extension count");
+    pos += ec.length;
+    var wExt = [];
+    for (var e = 0; e < Number(ec.value); e++) {
+      var kv = readVlqBig(bytes, pos);
+      if (!kv) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += kv.length;
+      var cStart = pos;
+      var eType = parseSigmaType(bytes, pos);
+      if (!eType) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += eType.length;
+      var eData = parseSigmaData(eType.node, bytes, pos);
+      if (!eData) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += eData.length;
+      wExt.push({ key: Number(kv.value), type: sigmaTypeName(eType.node), value: eData.value, rawHex: bytesToHex(bytes.subarray(cStart, pos)) });
+    }
+    walked.push({ boxId: wBoxId, proofHex: wProofHex, proofLength: wProofLen, extension: wExt, inputHex: bytesToHex(bytes.subarray(inStart, pos)) });
+  }
+  var walkedSection = bytesToHex(bytes.subarray(sectionStart, pos));
+  var sameExt = function (a, b) { return a.length === b.length && a.every(function (x, xi) { return x.key === b[xi].key && x.type === b[xi].type && x.value === b[xi].value && x.rawHex === b[xi].rawHex; }); };
+  for (var w = 0; w < walked.length; w++) {
+    var inp0 = tx.inputs[w];
+    if (walked[w].boxId !== inp0.boxId || walked[w].proofHex !== inp0.proofBytes || walked[w].proofLength !== inp0.proofLength || !sameExt(walked[w].extension, inp0.extension)) return fail("Internal error: the re-walked input " + (w + 1) + " does not match the input the transaction parser reports — nothing was shown rather than an unverified extraction.");
+  }
+  var entries = tx.inputs.map(function (inp, ii) {
+    return { position: ii, boxId: inp.boxId, proofLength: inp.proofLength, proofHex: inp.proofBytes, hasProof: inp.proofLength > 0, extensionCount: inp.extension.length, extensionKeys: inp.extension.map(function (x) { return x.key; }), extension: inp.extension, inputHex: walked[ii].inputHex };
+  });
+  for (var s = 0; s < entries.length; s++) {
+    var solo = extractTxInputProof(cleaned, String(s + 1));
+    if (!solo.valid || solo.boxId !== entries[s].boxId || solo.proofHex !== entries[s].proofHex || solo.proofLength !== entries[s].proofLength || !sameExt(solo.extension, entries[s].extension)) return fail("Internal error: input " + (s + 1) + " does not extract on its own through tool 48 with the same proof and extension — nothing was shown rather than an unverified extraction.");
+    if (entries[s].extensionCount > 0) {
+      var set56 = extractTxExtensionSet(cleaned, String(s + 1));
+      if (!set56.valid || !sameExt(set56.entries, entries[s].extension)) return fail("Internal error: input " + (s + 1) + "'s extension set does not extract through tool 56 with the same entries — nothing was shown rather than an unverified extraction.");
+    }
+  }
+  var audited = auditTxInputs(cleaned);
+  if (!audited.valid || audited.inputCount !== entries.length || audited.inputs.some(function (ai, aii) { return ai.boxId !== entries[aii].boxId || ai.proofLength !== entries[aii].proofLength || !sameExt(ai.extension, entries[aii].extension); })) return fail("Internal error: tool 39's input audit does not list the same input set — nothing was shown rather than an unverified extraction.");
+  var stripped = extractUnsignedTx(cleaned);
+  if (!stripped.valid) return fail("Internal error: the unsigned form could not be extracted for the cross-check — nothing was shown rather than an unverified extraction.");
+  var reParsed = parseErgoTransaction(stripped.unsignedHex);
+  if (!reParsed.valid || reParsed.txId !== tx.txId || reParsed.inputs.length !== tx.inputs.length || reParsed.inputs.some(function (ri, rii) { return ri.boxId !== tx.inputs[rii].boxId || ri.proofLength !== 0 || !sameExt(ri.extension, tx.inputs[rii].extension); })) return fail("Internal error: the unsigned form does not carry the same input set with proofs stripped — nothing was shown rather than an unverified extraction.");
+  var proofLines = tx.inputs.map(function (x) { return x.proofBytes === null ? "-" : x.proofBytes; }).join("\n");
+  var reattached = attachTxProofs(stripped.unsignedHex, proofLines);
+  if (!reattached.valid || reattached.signedHex !== cleaned.toLowerCase().replace(/^0x/, "")) return fail("Internal error: re-attaching every extracted proof to the unsigned form does not reproduce this transaction byte-for-byte — nothing was shown rather than an unverified extraction.");
+  return {
+    valid: true, reason: null,
+    txId: tx.txId,
+    signed: tx.signed,
+    inputCount: tx.inputs.length,
+    entries: entries,
+    signedCount: entries.filter(function (en) { return en.hasProof; }).length,
+    totalProofBytes: entries.reduce(function (sum, en) { return sum + en.proofLength; }, 0),
+    extensionEntryCount: entries.reduce(function (sum, en) { return sum + en.extensionCount; }, 0),
+    inputLines: tx.inputs.map(function (x) { return x.boxId; }).join("\n"),
+    proofLines: proofLines,
+    inputSectionHex: walkedSection,
+    byteLength: tx.byteLength
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet };
 }
 
 if (typeof document !== "undefined") {
@@ -7249,6 +7378,22 @@ if (typeof document !== "undefined") {
       if (res.alsoSpentCount > 0) msg += res.alsoSpentCount + " of them is also spent by this same transaction — the box is both read and consumed, so it cannot be read again by a later transaction. ";
       msg += "The data-input section exactly as serialized (count byte included) is " + res.dataInputSectionHex + " — the set in tool 30's field form, one box ID per line, is: " + res.dataInputLines.split("\n").join(", ") + ". ";
       msg += "The set was located twice — by the transaction parser and by an independent re-walk that skips every input exactly to reach the data-input section — and every entry also extracts on its own through tool 49, tool 39's input audit lists the same set, and the unsigned form (tool 45) re-parses to the same transaction ID carrying the same set, because data inputs are signed over verbatim and signing can never change them. Extraction only: a data-input set is a list of references, never content — this does not prove the named boxes exist on chain, are unspent, or hold what a script expects, and nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txinset-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txinset-result");
+      var res = extractTxInputSet(document.getElementById("txinset-bytes").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Transaction " + res.txId + " (" + res.byteLength + " bytes) spends " + res.inputCount + " input(s), in order: ";
+      msg += res.entries.map(function (en) { return (en.position + 1) + ". box " + en.boxId + " — " + (en.hasProof ? en.proofLength + "-byte proof " + en.proofHex : "no proof (unsigned)") + (en.extensionCount > 0 ? ", extension keys " + en.extensionKeys.join(", ") + " (" + en.extension.map(function (x) { return "key " + x.key + " = " + x.type + " " + x.value; }).join("; ") + ")" : ", no context extension") + ", raw input bytes " + en.inputHex; }).join("; ") + ". ";
+      msg += res.signedCount + " of them carry proofs (" + res.totalProofBytes + " proof bytes in total) and the set carries " + res.extensionEntryCount + " context-extension entr" + (res.extensionEntryCount === 1 ? "y" : "ies") + " in total. ";
+      msg += "The input section exactly as serialized (count byte included) is " + res.inputSectionHex + " — the spent box IDs, one per line, are: " + res.inputLines.split("\n").join(", ") + ". ";
+      msg += "The set was located twice — by the transaction parser and by an independent re-walk of the input section — and every input also extracts on its own through tool 48, every extension-carrying input's set extracts through tool 56, tool 39's input audit lists the same set, the unsigned form (tool 45) re-parses to the same transaction ID carrying the same box IDs and extensions with every proof stripped, and re-attaching every extracted proof line to that unsigned form through tool 46 reproduces this transaction exactly. Extraction only: an input set names boxes and carries their proofs and parameters, never the boxes' contents — this does not prove the named boxes exist on chain, are unspent, hold enough ERG or tokens, or that a present proof satisfies a box's script, and nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

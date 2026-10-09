@@ -4226,8 +4226,99 @@ function extractUnsignedTx(txHex) {
   };
 }
 
+function attachTxProofs(txHex, proofsText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, byteLength: null, signedByteLength: null, bytesAdded: null, inputCount: null, outputCount: null, totalProofBytes: null, attachedInputs: null, proofs: null, signedHex: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  if (tx.signed) {
+    var signedIdx = tx.inputs.filter(function (inp) { return inp.proofLength > 0; }).map(function (inp, i) { return tx.inputs.indexOf(inp) + 1; });
+    return fail("This transaction already carries a spending proof (on input(s) " + signedIdx.join(", ") + ") — attaching here would silently replace proofs, which this tool does not do. Work from its unsigned form instead: tool 45 extracts it, and tool 40 compares a before/after pair.");
+  }
+  var lines = (proofsText == null ? "" : String(proofsText)).split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  if (lines.length !== tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), so paste exactly " + tx.inputs.length + " proof line(s) — one per input, in input order, each either the proof bytes as hex or a single dash (-) to leave that input unsigned. Got " + lines.length + " line(s); nothing was attached rather than guess which input a proof belongs to.");
+  var wanted = [];
+  for (var w = 0; w < lines.length; w++) {
+    if (lines[w] === "-") { wanted.push(null); continue; }
+    var pb = hexToBytes(lines[w].replace(/\s+/g, ""));
+    if (!pb || pb.length === 0) return fail("Proof line " + (w + 1) + " (for input " + (w + 1) + ") is not valid hex — a proof is bytes, pasted as an even number of 0-9/a-f characters, or a single dash (-) to leave that input unsigned. Nothing was attached.");
+    wanted.push(bytesToHex(pb));
+  }
+  var cleaned = String(txHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  var pos = 0;
+  var cnt = readVlqBig(bytes, pos);
+  if (!cnt) return fail("Internal error: the input count could not be re-read — nothing was attached.");
+  pos += cnt.length;
+  var signed = Array.from(bytes.subarray(0, pos));
+  var pushAll = function (arr) { for (var i = 0; i < arr.length; i++) signed.push(arr[i]); };
+  for (var i = 0; i < tx.inputs.length; i++) {
+    var boxIdBytes = bytes.subarray(pos, pos + 32);
+    pos += 32;
+    var pl = readVlqBig(bytes, pos);
+    if (!pl) return fail("Internal error: input " + (i + 1) + "'s proof length could not be re-read — nothing was attached.");
+    pos += pl.length + Number(pl.value);
+    var extStart = pos;
+    var ec = readVlqBig(bytes, pos);
+    if (!ec) return fail("Internal error: input " + (i + 1) + "'s context extension count could not be re-read — nothing was attached.");
+    pos += ec.length;
+    for (var e = 0; e < Number(ec.value); e++) {
+      var kv = readVlqBig(bytes, pos);
+      if (!kv) return fail("Internal error: input " + (i + 1) + "'s context extension could not be re-walked — nothing was attached.");
+      pos += kv.length;
+      var eType = parseSigmaType(bytes, pos);
+      if (!eType) return fail("Internal error: input " + (i + 1) + "'s context extension could not be re-walked — nothing was attached.");
+      pos += eType.length;
+      var eData = parseSigmaData(eType.node, bytes, pos);
+      if (!eData) return fail("Internal error: input " + (i + 1) + "'s context extension could not be re-walked — nothing was attached.");
+      pos += eData.length;
+    }
+    pushAll(boxIdBytes);
+    if (wanted[i] === null) {
+      signed.push(0);
+    } else {
+      var proofBytes = hexToBytes(wanted[i]);
+      pushAll(writeVlqBig(BigInt(proofBytes.length)));
+      pushAll(proofBytes);
+    }
+    pushAll(bytes.subarray(extStart, pos));
+  }
+  pushAll(bytes.subarray(pos));
+  var signedHex = bytesToHex(Uint8Array.from(signed));
+  var re = parseErgoTransaction(signedHex);
+  if (!re.valid || re.txId !== tx.txId) return fail("Internal error: the assembled transaction does not re-parse with the same transaction ID — nothing was shown rather than a wrong assembly.");
+  for (var v = 0; v < tx.inputs.length; v++) {
+    if (re.inputs[v].boxId !== tx.inputs[v].boxId) return fail("Internal error: input " + (v + 1) + "'s box changed during assembly — nothing was shown rather than a wrong assembly.");
+    if (re.inputs[v].proofBytes !== wanted[v]) return fail("Internal error: input " + (v + 1) + "'s proof does not read back as the proof that was pasted — nothing was shown rather than a wrong assembly.");
+    var extBefore = tx.inputs[v].extension.map(function (x) { return x.key + ":" + x.rawHex; }).join(",");
+    var extAfter = re.inputs[v].extension.map(function (x) { return x.key + ":" + x.rawHex; }).join(",");
+    if (extBefore !== extAfter) return fail("Internal error: input " + (v + 1) + "'s context extension changed during assembly — nothing was shown rather than a wrong assembly.");
+  }
+  if (re.dataInputs.join(",") !== tx.dataInputs.join(",") || re.tokenIds.join(",") !== tx.tokenIds.join(",")) return fail("Internal error: the data inputs or token list changed during assembly — nothing was shown rather than a wrong assembly.");
+  var cmp = compareTxSigning(cleaned, signedHex);
+  var expectedVerdict = wanted.some(function (p) { return p !== null; }) ? "signing-only" : "identical";
+  if (!cmp.valid || cmp.verdict !== expectedVerdict) return fail("Internal error: tool 40 does not agree that only the proofs changed — nothing was shown rather than a wrong assembly.");
+  var proofs = wanted.map(function (p, idx) {
+    return { index: idx, boxId: tx.inputs[idx].boxId, proofLength: p === null ? 0 : p.length / 2, proofHex: p };
+  });
+  return {
+    valid: true, reason: null,
+    txId: tx.txId,
+    byteLength: tx.byteLength,
+    signedByteLength: signed.length,
+    bytesAdded: signed.length - tx.byteLength,
+    inputCount: tx.inputs.length,
+    outputCount: tx.outputs.length,
+    totalProofBytes: proofs.reduce(function (s, p) { return s + p.proofLength; }, 0),
+    attachedInputs: proofs.filter(function (p) { return p.proofLength > 0; }).map(function (p) { return p.index; }),
+    proofs: proofs,
+    signedHex: signedHex
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs };
 }
 
 if (typeof document !== "undefined") {
@@ -5228,6 +5319,25 @@ if (typeof document !== "undefined") {
       }
       msg += "Unsigned transaction hex: " + res.unsignedHex + " ";
       msg += "Extraction only, over the bytes you pasted: the unsigned form cannot be spent and the removed proofs are gone from this copy — keep the original if you need them; no proof that was present was verified, only removed. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txattach-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txattach-result");
+      var res = attachTxProofs(document.getElementById("txattach-bytes").value, document.getElementById("txattach-proofs").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.attachedInputs.length === 0) {
+        msg = "✓ No proof was attached — every input was left unsigned, so the result is byte-for-byte the transaction itself: " + res.byteLength + " bytes, transaction ID " + res.txId + " (unchanged, as an ID always is by attaching — it is the Blake2b-256 of exactly this unsigned form, re-parsed and verified before being shown). ";
+      } else {
+        msg = "✓ Attached proof(s) to input(s) " + res.attachedInputs.map(function (i) { return (i + 1) + " (" + res.proofs[i].proofLength + " bytes)"; }).join(", ") + " — " + res.totalProofBytes + " proof byte(s) in total: " + res.byteLength + " unsigned bytes → " + res.signedByteLength + " bytes (" + res.bytesAdded + " byte(s) added, including any proof-length VLQ bytes that grew). Transaction ID " + res.txId + " — unchanged, as it must be: the ID is computed over the unsigned form, the assembled bytes re-parsed with this same ID, every proof read back on its own input, every context extension unchanged, and tool 40 agrees the pair differs by signing only. ";
+      }
+      msg += "Assembled transaction hex: " + res.signedHex + " ";
+      msg += "Assembly only, over the bytes you pasted: the proofs were spliced, never verified — a present proof is not a valid one, and only the chain can say whether these proofs spend these boxes. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

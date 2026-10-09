@@ -733,6 +733,33 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   (one of them to the differ's unsigned base vector,
   byte for byte), and a from-scratch 200-byte proof
   strips 201 bytes.
+- **Transaction proof attacher** — the exact inverse of
+  the extractor: takes an unsigned serialized
+  transaction plus one spending proof per input, in
+  input order (a single dash leaves an input
+  unsigned), and splices each proof in as its VLQ
+  length plus bytes, keeping box IDs, context
+  extensions and every remaining byte verbatim.
+  Attaching never changes the transaction ID — the
+  ID is computed over the unsigned form — and the
+  assembly is verified before it is shown: the
+  result must re-parse with the same ID, every
+  pasted proof must read back on its own input,
+  every context extension must be unchanged, and
+  the signing round-trip checker must agree the
+  pair differs by signing only. A transaction that
+  already carries a proof is refused plainly rather
+  than have its proofs silently replaced. The
+  proofs are spliced, never verified — a present
+  proof is not a valid one. Verified against an
+  independent Python oracle: strip-then-attach
+  round-trips reproduce the fleet signed vector, the
+  size section's synthetic, the differ's signed
+  vector and a 200-byte-proof synthetic byte for
+  byte (the 200-byte proof adds 201 bytes, its VLQ
+  length included), a partial attach signs only the
+  first of two inputs, and all-dash lines leave the
+  fleet unsigned vectors byte-for-byte unchanged.
 
 ## Cross-chain integration
 

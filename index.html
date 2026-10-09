@@ -758,6 +758,17 @@
         <button type="submit" class="btn primary">Extract the unsigned form</button>
         <p id="txstrip-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txattach-calc">
+        <h3>46 · Transaction proof attacher (unsigned transaction bytes + proofs → the signed form)</h3>
+        <p>Tool 45 extracts a transaction's unsigned form; this is its exact inverse. An offline signer, a prover service or a second device hands back one spending proof per input — paste the unsigned transaction and one proof per input, in input order (a single dash leaves that input unsigned), and this splices each proof in as its VLQ length plus bytes, keeping the box IDs, the context extensions and every remaining byte verbatim. Attaching a proof never changes the transaction ID, because the ID is computed over the unsigned form (tool 45) — and that is exactly how the result is verified before it is shown: it must re-parse with the same transaction ID, every pasted proof must read back on its own input, every context extension must be unchanged, and tool 40 must agree the pair differs by signing only. A transaction that already carries a proof is refused plainly — replacing proofs silently is how a reviewed transaction stops being the one that was reviewed; strip it with tool 45 first if replacement is really intended. The honesty boundary is stated plainly: the proofs are spliced, never verified — a present proof is not a valid one, and only the chain can say whether these proofs actually spend these boxes. Assembly only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txattach-bytes">Unsigned serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txattach-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction, carrying no proofs)" autocomplete="off"></textarea>
+        <label for="txattach-proofs">One proof per input, in input order — proof hex, or - to leave that input unsigned</label>
+        <textarea id="txattach-proofs" rows="3" spellcheck="false" placeholder="e.g. deadbeef&#10;- (one line per input)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Attach the proofs</button>
+        <p id="txattach-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -803,6 +814,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=45"></script>
+<script src="app.js?v=46"></script>
 </body>
 </html>

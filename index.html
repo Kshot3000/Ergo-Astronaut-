@@ -995,6 +995,15 @@
         <p id="headerdiff-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="headerchain-calc">
+        <h3>65 · Block header chain checker (serialized headers, one per line → does this run of headers stitch together in order?)</h3>
+        <p>Tools 62–64 open, assemble and compare single headers and pairs; this one checks a whole run — the header family's set tool, in the line of the box-set and transaction-set tools. Paste serialized headers, one per line in chain order, and it checks the stitching across every step: does each header's parent ID name the previous header's recomputed ID (the parent/ID link tool 64 checks for one pair), does its height advance by exactly one, and does its timestamp move forward? It reports every step with its exact height and timestamp deltas, the steps where the chain breaks, the linked steps whose height skips — a gap, meaning headers between them are missing from your list or a height disagrees with its link — the steps whose timestamp goes backwards, and any header that appears more than once. Only a run where every step is linked and every height advances by exactly one earns the fully-sequential verdict; linked-with-gaps and broken are reported as exactly what they are. Every header is verified before anything is shown: each is inspected by tool 62, which locates it twice and re-serializes it byte-for-byte, every step is cross-checked against tool 64's differ, and the per-step deltas must sum to the first-to-last totals. The honesty boundary is stated plainly: a sequential run proves only that these headers stitch together in this order — it does not prove any of them sits on the main chain, and no header's proof-of-work hit is verified; those verdicts belong to a full node. Chain checking only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="headerchain-headers">Serialized block headers (hex, one per line, in chain order, solutions included)</label>
+        <textarea id="headerchain-headers" rows="5" spellcheck="false" placeholder="e.g. 02…&#10;02…&#10;02… (each line one full serialized header)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Check the chain</button>
+        <p id="headerchain-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1040,6 +1049,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=64"></script>
+<script src="app.js?v=65"></script>
 </body>
 </html>

@@ -1450,6 +1450,36 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   splicing one header's own ID into the
   other's parent slot.
 
+- **Block header chain checker** — a run of
+  serialized headers (one per line, in chain
+  order) in, a step-by-step verdict out: for
+  every step, whether the next header's
+  parent ID names the previous header's
+  recomputed ID, the exact height and
+  timestamp deltas, and whether the height
+  advances by exactly one. It lists the steps
+  where the chain breaks, the linked steps
+  whose height skips (a gap — headers missing
+  from the list, or a height that disagrees
+  with its link), the steps whose timestamp
+  goes backwards, and any header that appears
+  more than once. Only a run where every step
+  is linked and every height advances by one
+  earns the fully-sequential verdict. Every
+  step is cross-checked against the header
+  differ and the per-step deltas must sum to
+  the first-to-last totals. A sequential run
+  proves only that these headers stitch
+  together in this order — not that any of
+  them sits on the main chain, and no
+  proof-of-work hit is verified. Verified
+  against an independent Python oracle over a
+  fully sequential three-header chain built
+  by re-serializing a real header's fields
+  with each predecessor's own ID, a broken
+  chain, a linked height-gap pair, a reversed
+  pair and a duplicated header.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

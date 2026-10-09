@@ -6936,8 +6936,99 @@ function compareBlockHeaders(aHex, bHex) {
   };
 }
 
+/* Tool 65: block header chain checker — the header family's
+   set tool, in the line of tools 33/44/59-61. Tools 62-64 open,
+   assemble and compare single headers and pairs; this one takes
+   a SEQUENCE of serialized headers, one per line in chain order,
+   and checks the stitching across the whole run: for every step,
+   does the next header's parent ID name the previous header's
+   recomputed ID (the parent/ID link tool 64 checks for one pair),
+   does its height advance by exactly one, and does its timestamp
+   move forward? It reports every step (linked or broken, exact
+   height and timestamp deltas), the steps where the chain breaks,
+   the linked steps whose height skips (a gap — headers between
+   them are missing from the list, or the heights disagree with
+   the link), the steps whose timestamp goes backwards, and any
+   header ID that appears more than once. A fully sequential run
+   (every step linked, every height +1) is the strongest verdict;
+   linked-with-gaps and broken are reported as exactly what they
+   are, never rounded up. Every header is verified before anything
+   is shown: each is inspected by tool 62 (located twice,
+   re-serialized byte-for-byte), every step is cross-checked
+   against tool 64's differ (its parent link and deltas must
+   agree), and the per-step deltas must sum to the first-to-last
+   totals. Honesty boundary: a sequential run proves only that
+   these headers stitch together in this order — it does not
+   prove any of them sits on the main chain, and no header's
+   proof-of-work hit is verified; those verdicts belong to a full
+   node. Verified against an independent Python oracle
+   (oracle-headerchain.py) over a fully sequential three-header
+   chain built by re-serializing a real header's fields with each
+   predecessor's own ID (the differ's successor, extended one more
+   step), a broken chain, a linked height-gap pair, a reversed
+   pair and a duplicated header. */
+function checkHeaderChain(text) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, count: null, entries: null, links: null, allLinked: null, allSequential: null, breaks: null, heightGaps: null, timestampRegressions: null, duplicates: null, firstHeaderId: null, lastHeaderId: null, firstHeight: null, lastHeight: null, totalHeightDelta: null, totalTimestampDeltaMs: null };
+  };
+  if (typeof text !== "string") return fail("Paste the serialized block headers first — one header per line, in chain order, each the full serialized bytes as hex.");
+  var lines = text.split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  if (lines.length === 0) return fail("Paste the serialized block headers first — one header per line, in chain order, each the full serialized bytes as hex.");
+  if (lines.length === 1) return fail("A chain needs at least two headers — paste a second serialized header on the next line so there is a link to check. For a single header, tool 62 inspects it on its own.");
+  var inspected = [];
+  for (var i = 0; i < lines.length; i++) {
+    var r = inspectBlockHeader(lines[i], "");
+    if (!r.valid) return fail("Header " + (i + 1) + " of " + lines.length + " does not inspect: " + r.reason);
+    inspected.push(r);
+  }
+  var entries = inspected.map(function (h, idx) {
+    return { index: idx, headerId: h.headerId, parentId: h.parentId, height: h.height, timestampMs: h.timestampMs, version: h.version };
+  });
+  var links = [], breaks = [], heightGaps = [], timestampRegressions = [];
+  for (var j = 0; j + 1 < inspected.length; j++) {
+    var a = inspected[j], b = inspected[j + 1];
+    var linked = b.parentId === a.headerId;
+    var heightDelta = b.height - a.height;
+    var tsDelta = BigInt(b.timestampMs) - BigInt(a.timestampMs);
+    var sequential = linked && heightDelta === 1;
+    links.push({ index: j, linked: linked, sequential: sequential, heightDelta: heightDelta, timestampDeltaMs: tsDelta.toString() });
+    if (!linked) breaks.push(j);
+    if (linked && heightDelta !== 1) heightGaps.push(j);
+    if (tsDelta < 0n) timestampRegressions.push(j);
+    /* Cross-check the step against tool 64's differ. */
+    var cmp = compareBlockHeaders(lines[j], lines[j + 1]);
+    var expectedLink = a.headerId === b.headerId ? "same" : linked ? "b-follows-a" : (a.parentId === b.headerId ? "a-follows-b" : "none");
+    if (!cmp.valid || cmp.parentLink !== expectedLink || cmp.heightDelta !== heightDelta || cmp.timestampDeltaMs !== tsDelta.toString()) return fail("Internal error: the chain step " + (j + 1) + " disagrees with the header differ — nothing was shown rather than an unverified chain.");
+  }
+  var seen = {}, duplicates = [];
+  entries.forEach(function (e) {
+    if (seen[e.headerId]) seen[e.headerId].push(e.index);
+    else seen[e.headerId] = [e.index];
+  });
+  Object.keys(seen).forEach(function (id) { if (seen[id].length > 1) duplicates.push({ headerId: id, indexes: seen[id] }); });
+  var totalHeightDelta = inspected[inspected.length - 1].height - inspected[0].height;
+  var totalTsDelta = BigInt(inspected[inspected.length - 1].timestampMs) - BigInt(inspected[0].timestampMs);
+  var sumH = 0, sumTs = 0n;
+  links.forEach(function (l) { sumH += l.heightDelta; sumTs += BigInt(l.timestampDeltaMs); });
+  if (sumH !== totalHeightDelta || sumTs !== totalTsDelta) return fail("Internal error: the per-step deltas do not sum to the first-to-last totals — nothing was shown rather than an unverified chain.");
+  var allLinked = breaks.length === 0;
+  var allSequential = links.every(function (l) { return l.sequential; });
+  return {
+    valid: true, reason: null,
+    verdict: allSequential ? "sequential" : allLinked ? "linked-with-gaps" : "broken",
+    count: entries.length,
+    entries: entries, links: links,
+    allLinked: allLinked, allSequential: allSequential,
+    breaks: breaks, heightGaps: heightGaps, timestampRegressions: timestampRegressions,
+    duplicates: duplicates,
+    firstHeaderId: entries[0].headerId, lastHeaderId: entries[entries.length - 1].headerId,
+    firstHeight: entries[0].height, lastHeight: entries[entries.length - 1].height,
+    totalHeightDelta: totalHeightDelta, totalTimestampDeltaMs: totalTsDelta.toString()
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, inspectBlockHeader, buildBlockHeader, compareBlockHeaders };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain };
 }
 
 if (typeof document !== "undefined") {
@@ -8271,6 +8362,26 @@ if (typeof document !== "undefined") {
       else if (res.parentLink === "a-follows-b") msg += "Chain link: the first header's parent ID is the second header's ID — the first follows the second. ";
       else if (res.parentLink === "none") msg += "Chain link: neither header names the other as its parent. ";
       msg += "Both headers were verified before comparison: each was inspected by tool 62, located twice and re-serialized byte-for-byte. Comparison only: a parent link proves only that one header names the other as its parent — it does not prove either sits on the main chain, and neither proof-of-work hit was verified. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("headerchain-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("headerchain-result");
+      var res = checkHeaderChain(document.getElementById("headerchain-headers").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.verdict === "sequential") msg = "✓ These " + res.count + " headers form a fully sequential chain — every header's parent ID names the previous header's ID and every height advances by exactly one, from height " + res.firstHeight + " (header " + res.firstHeaderId.slice(0, 16) + "…) to height " + res.lastHeight + " (header " + res.lastHeaderId.slice(0, 16) + "…). ";
+      else if (res.verdict === "linked-with-gaps") msg = "⚠ These " + res.count + " headers are all parent-linked in order, but NOT fully sequential — the height skips at step(s) " + res.heightGaps.map(function (i) { return (i + 1); }).join(", ") + ", so headers are missing from this list or a height disagrees with its link. ";
+      else msg = "✗ This chain is BROKEN at step(s) " + res.breaks.map(function (i) { return (i + 1); }).join(", ") + " — at each, the next header's parent ID does not name the previous header's ID, so these headers do not stitch together in this order. ";
+      msg += "Per step: " + res.links.map(function (l) { return "step " + (l.index + 1) + " (headers " + (l.index + 1) + " → " + (l.index + 2) + "): " + (l.linked ? "linked" : "BROKEN") + ", height delta " + l.heightDelta + ", timestamp delta " + l.timestampDeltaMs + " ms"; }).join("; ") + ". ";
+      msg += "Heights run " + res.firstHeight + " → " + res.lastHeight + " (total delta " + res.totalHeightDelta + ") over " + res.totalTimestampDeltaMs + " ms. ";
+      if (res.timestampRegressions.length) msg += "⚠ Timestamp(s) go backwards at step(s) " + res.timestampRegressions.map(function (i) { return (i + 1); }).join(", ") + " — a later header claims an earlier time than its predecessor. ";
+      if (res.duplicates.length) msg += "⚠ The same header appears more than once: " + res.duplicates.map(function (d) { return d.headerId.slice(0, 16) + "… at position(s) " + d.indexes.map(function (i) { return (i + 1); }).join(", "); }).join("; ") + ". ";
+      msg += "Every header was verified before the chain was checked: each was inspected by tool 62, located twice and re-serialized byte-for-byte, every step was cross-checked against tool 64's differ, and the per-step deltas sum to the first-to-last totals. Chain checking only: a sequential run proves only that these headers stitch together in this order — it does not prove any of them sits on the main chain, and no proof-of-work hit was verified. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

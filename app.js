@@ -4973,8 +4973,133 @@ function extractTxRegister(txHex, outputStr, registerStr) {
   };
 }
 
+/* ---------- Transaction context-extension extractor ---------- */
+/* A context extension is the small key -> constant map an input
+   carries alongside its proof: the spent box's script reads those
+   values by key when it runs (oracle and dApp contracts pass
+   their parameters this way). Tools 29 and 39 show an input's
+   entries inline and tool 48 returns the whole extension as a
+   side dish to the proof, but until now no tool lifted ONE entry
+   out by its key with its Sigma type, decoded value and raw
+   constant bytes -- the exact form tool 18 decodes on its own.
+   This does that for one chosen key of one chosen input. The
+   entry is verified before it is shown: it is located three
+   times -- once by the transaction parser, once by an
+   independent raw-offset re-walk that must skip every earlier
+   input exactly (box ID, proof, extension constants) and decodes
+   this input's whole extension again, and once by tool 48's
+   extraction of the same input -- and all three must agree on
+   every entry's key, type, value and raw bytes; on top of that
+   the entry's raw constant must decode standalone through
+   tool 18 to the same type and value, and the unsigned form
+   (tool 45) must re-parse to the same transaction ID carrying
+   the same entry, because extensions are kept verbatim in the
+   unsigned form and signing can never change them. A key an
+   input carries twice (a malformed but parseable case tool 39
+   flags) extracts its FIRST entry, and the result says how
+   many times the key occurs. Honesty boundary: an extension
+   value is content, never proof -- extraction reads it from
+   the pasted bytes; it does not prove the spent box's script
+   reads this key, or reads it as this type. Verified against
+   an independent Python oracle (oracle-txext.py) over the
+   fleet vectors, the hub synthetics and a from-scratch
+   four-entry synthetic. */
+function extractTxExtension(txHex, inputStr, keyStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, signed: null, inputIndex: null, inputCount: null, boxId: null, key: null, keyOccurrences: null, type: null, value: null, rawHex: null, text: null, extensionKeys: null, extensionCount: null, byteLength: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  var rawIn = inputStr == null ? "" : String(inputStr).trim();
+  if (!/^\d+$/.test(rawIn)) return fail("Enter the input number as a whole number — 1 is the transaction's first input, 2 its second, and so on. This transaction has " + tx.inputs.length + " input(s).");
+  var target = Number(rawIn) - 1;
+  if (target < 0 || target >= tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input " + rawIn + " to extract an extension entry from.");
+  var rawKey = keyStr == null ? "" : String(keyStr).trim();
+  if (!/^\d+$/.test(rawKey) || Number(rawKey) > 255) return fail("Enter the extension key as a whole number from 0 to 255 — a context extension key is a single byte, written as its number (the keys tool 39 lists for each input).");
+  var wantKey = Number(rawKey);
+  var inp = tx.inputs[target];
+  var keys = inp.extension.map(function (e) { return e.key; });
+  if (inp.extension.length === 0) return fail("Input " + (target + 1) + " of transaction " + tx.txId + " carries no context extension entries — its extension is empty, so there is no key " + wantKey + " to extract. (Tool 39 audits which inputs do carry entries, and tool 48 lifts an input's proof out.)");
+  var entry = null;
+  var occurrences = 0;
+  for (var ei = 0; ei < inp.extension.length; ei++) {
+    if (inp.extension[ei].key === wantKey) { occurrences++; if (!entry) entry = inp.extension[ei]; }
+  }
+  if (!entry) return fail("Input " + (target + 1) + " of transaction " + tx.txId + " carries extension keys " + keys.join(", ") + " — but no key " + wantKey + ". A missing key means the input simply passes nothing under it; nothing was extracted rather than an invented value.");
+  var cleaned = String(txHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  var pos = 0;
+  var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong extension entry."); };
+  var cnt = readVlqBig(bytes, pos);
+  if (!cnt) return walkFail("the input count");
+  pos += cnt.length;
+  var walkedExt = null;
+  for (var i = 0; i < tx.inputs.length; i++) {
+    pos += 32;
+    var pl = readVlqBig(bytes, pos);
+    if (!pl) return walkFail("input " + (i + 1) + "'s proof length");
+    pos += pl.length + Number(pl.value);
+    var ec = readVlqBig(bytes, pos);
+    if (!ec) return walkFail("input " + (i + 1) + "'s context extension count");
+    pos += ec.length;
+    var extHere = [];
+    for (var e = 0; e < Number(ec.value); e++) {
+      var kv = readVlqBig(bytes, pos);
+      if (!kv) return walkFail("input " + (i + 1) + "'s context extension key");
+      pos += kv.length;
+      var cStart = pos;
+      var eType = parseSigmaType(bytes, pos);
+      if (!eType) return walkFail("input " + (i + 1) + "'s context extension value");
+      pos += eType.length;
+      var eData = parseSigmaData(eType.node, bytes, pos);
+      if (!eData) return walkFail("input " + (i + 1) + "'s context extension value");
+      pos += eData.length;
+      extHere.push({ key: Number(kv.value), type: sigmaTypeName(eType.node), value: eData.value, rawHex: bytesToHex(bytes.subarray(cStart, pos)) });
+    }
+    if (i === target) walkedExt = extHere;
+  }
+  var extSame = function (a, b) {
+    return a.length === b.length && a.every(function (x, xi) { return x.key === b[xi].key && x.type === b[xi].type && x.value === b[xi].value && x.rawHex === b[xi].rawHex; });
+  };
+  if (!walkedExt || !extSame(walkedExt, inp.extension)) return fail("Internal error: the re-walked context extension of input " + (target + 1) + " does not match the extension the transaction parser reports — nothing was shown rather than an unverified extraction.");
+  var proofed = extractTxInputProof(cleaned, String(target + 1));
+  if (!proofed.valid || !extSame(proofed.extension, inp.extension)) return fail("Internal error: the input proof extractor's extension for input " + (target + 1) + " does not match the parser's — nothing was shown rather than an unverified extraction.");
+  var solo = decodeSigmaConstant(entry.rawHex);
+  if (!solo.valid || solo.type !== entry.type || solo.value !== entry.value) return fail("Internal error: the entry's raw constant does not decode standalone to the same type and value — nothing was shown rather than an unverified extraction.");
+  var stripped = extractUnsignedTx(cleaned);
+  if (!stripped.valid) return fail("Internal error: the unsigned form could not be extracted for the cross-check — nothing was shown rather than an unverified extraction.");
+  var reParsed = parseErgoTransaction(stripped.unsignedHex);
+  if (!reParsed.valid || reParsed.txId !== tx.txId) return fail("Internal error: the unsigned form does not re-parse to the same transaction ID — nothing was shown rather than an unverified extraction.");
+  if (!extSame(reParsed.inputs[target].extension, inp.extension)) return fail("Internal error: the unsigned form does not carry the same context extension for input " + (target + 1) + " — nothing was shown rather than an unverified extraction.");
+  var text = null;
+  if (entry.type === "Coll[SByte]") {
+    var payload = hexToBytes(entry.value.slice(2));
+    var decoded = utf8Text(payload);
+    var printable = decoded.length > 0;
+    for (var ci = 0; ci < decoded.length; ci++) { var cc = decoded.charCodeAt(ci); if (cc < 0x20 || cc === 0x7f) printable = false; }
+    if (printable && utf8RoundTrips(decoded, Array.from(payload))) text = decoded;
+  }
+  return {
+    valid: true, reason: null,
+    txId: tx.txId,
+    signed: tx.signed,
+    inputIndex: target,
+    inputCount: tx.inputs.length,
+    boxId: inp.boxId,
+    key: wantKey,
+    keyOccurrences: occurrences,
+    type: entry.type,
+    value: entry.value,
+    rawHex: entry.rawHex,
+    text: text,
+    extensionKeys: keys,
+    extensionCount: inp.extension.length,
+    byteLength: tx.byteLength
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension };
 }
 
 if (typeof document !== "undefined") {
@@ -6072,6 +6197,22 @@ if (typeof document !== "undefined") {
       if (res.text !== null) msg += "Those bytes are printable UTF-8 text: \"" + res.text + "\" — the form EIP-4 metadata takes in R4–R6 (tool 27 decodes a minting output's full register set). ";
       msg += "The output itself is box " + res.boxId + " (tool 47 lifts it out whole), and it carries " + res.registerNames.join(", ") + " in total. ";
       msg += "The register was located three times — by the transaction parser, by an independent re-walk that skips every input, data input, listed token ID and earlier output to reach this output's register section, and by the standalone box for this output re-parsed with the box parser — and all three agreed on its type, value and raw bytes byte-for-byte; the unsigned form (tool 45) re-parses to the same transaction ID carrying the same register, because registers are signed over verbatim. Extraction only: a register is content, never proof — this does not prove the output exists on chain as a box or that any script reads the value the way you expect, and nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txext-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txext-result");
+      var res = extractTxExtension(document.getElementById("txext-bytes").value, document.getElementById("txext-input").value, document.getElementById("txext-key").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Context extension key " + res.key + " of input " + (res.inputIndex + 1) + " of " + res.inputCount + " of transaction " + res.txId + " (" + res.byteLength + " bytes) holds a " + res.type + ": " + res.value + " — the raw constant is " + res.rawHex + ", exactly what tool 18 decodes on its own. ";
+      if (res.text !== null) msg += "Those bytes are printable UTF-8 text: \"" + res.text + "\". ";
+      if (res.keyOccurrences > 1) msg += "⚠ This key occurs " + res.keyOccurrences + " times in this input's extension — a malformed case tool 39 flags, since a script reading the key cannot tell the entries apart; the FIRST entry is the one shown. ";
+      msg += "The input spends box " + res.boxId + " (tool 48 lifts its proof out), and its extension carries " + res.extensionCount + (res.extensionCount === 1 ? " entry" : " entries") + " in total, under keys " + res.extensionKeys.join(", ") + ". ";
+      msg += "The entry was located three times — by the transaction parser, by an independent re-walk that skips every earlier input exactly and decodes this input's whole extension again, and by tool 48's extraction of the same input — and all three agreed on every entry's key, type, value and raw bytes; the raw constant also decodes standalone through tool 18 to the same type and value, and the unsigned form (tool 45) re-parses to the same transaction ID carrying the same entry, because extensions are kept verbatim in the unsigned form and signing can never change them. Extraction only: an extension value is content, never proof — this does not prove the spent box's script reads this key or reads it as this type, and nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

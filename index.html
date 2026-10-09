@@ -826,6 +826,19 @@
         <button type="submit" class="btn primary">Extract the register</button>
         <p id="txreg-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txext-calc">
+        <h3>52 · Transaction context-extension extractor (transaction bytes + an input number + a key → that entry's type, value and raw constant)</h3>
+        <p>Tools 47–51 lift out a transaction's output boxes, its inputs' proofs, its data inputs, its listed tokens and a single output register; the one per-item section none of them can lift out on its own is a single entry of a single input's context extension. A context extension is the small key → constant map an input carries alongside its proof — the spent box's script reads those values by key when it runs, which is how oracle and dApp contracts receive their parameters — yet tools 29 and 39 only show the entries inline inside a whole input, and tool 48 returns the whole extension only as a side dish to the proof, so one chosen entry could not be lifted out with its Sigma type, its decoded value and its raw constant bytes, or carried into tool 18 (which decodes exactly one constant) on its own. This tool returns one chosen entry of one chosen input, the keys the input carries in total, and the entry's text when it is a Coll[SByte] holding printable UTF-8. The entry is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every earlier input exactly (box ID, proof, extension constants) and decodes this input's whole extension again, and once by tool 48's extraction of the same input, and all three must agree on every entry's key, type, value and raw bytes byte-for-byte; on top of that, the entry's raw constant must decode standalone through tool 18 to the same type and value, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same entry, because extensions are kept verbatim in the unsigned form and signing can never change them. A key an input carries twice — a malformed but parseable case tool 39 flags — extracts its first entry, and the result says so. The honesty boundary is stated plainly: an extension value is content, never proof — extraction reads it from the bytes you paste, and does not prove the spent box's script reads this key, or reads it as this type. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txext-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txext-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <label for="txext-input">Input number (1 = the transaction's first input)</label>
+        <input id="txext-input" type="text" inputmode="numeric" placeholder="e.g. 1" autocomplete="off">
+        <label for="txext-key">Extension key (a whole number from 0 to 255)</label>
+        <input id="txext-key" type="text" inputmode="numeric" placeholder="e.g. 0" autocomplete="off">
+        <button type="submit" class="btn primary">Extract the extension entry</button>
+        <p id="txext-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -871,6 +884,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=51"></script>
+<script src="app.js?v=52"></script>
 </body>
 </html>

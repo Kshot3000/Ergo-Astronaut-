@@ -915,6 +915,51 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   EIP-4-style R4/R5/R6 byte-collection registers
   and an SLong R7.
 
+- **Transaction context-extension extractor** —
+  takes a serialized transaction plus an input
+  number and an extension key (0–255) and returns
+  that one entry of that one input's context
+  extension: its Sigma type, its decoded value,
+  its raw constant bytes (exactly what the sigma
+  constant inspector takes on its own), the spent
+  box's ID, the keys the input carries in total,
+  and the entry's text when it is a Coll[SByte]
+  holding printable UTF-8. A context extension is
+  the key → constant map an input carries
+  alongside its proof — the spent box's script
+  reads those values by key when it runs — yet
+  the parser and the input auditor only show the
+  entries inline inside a whole input, and the
+  input proof extractor returns the whole
+  extension only alongside the proof. Verified
+  before it is shown: the entry is located three
+  times (the transaction parser, an independent
+  raw-offset re-walk that must skip every earlier
+  input exactly and decodes this input's whole
+  extension again, and the input proof
+  extractor's view of the same input) and all
+  three must agree on every entry's key, type,
+  value and raw bytes byte-for-byte, the raw
+  constant must decode standalone to the same
+  type and value, and the unsigned form must
+  re-parse to the same transaction ID carrying
+  the same entry — extensions are kept verbatim
+  in the unsigned form, so signing can never
+  change them (the signed and unsigned differ
+  vectors extract identically). A key carried
+  twice extracts its first entry and the result
+  says how many times it occurs. Honest boundary:
+  an extension value is content, never proof —
+  extraction reads it from the pasted bytes and
+  does not prove the spent box's script reads
+  this key, or reads it as this type. Verified
+  against an independent Python oracle over the
+  fleet vectors, the hub synthetics and a
+  from-scratch synthetic whose single input
+  carries four entries (an SLong, two
+  Coll[SByte]s — one holding the text "Ergo" —
+  and an SInt at a higher key).
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

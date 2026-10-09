@@ -1393,6 +1393,35 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   a from-scratch mutation whose ID only the
   oracle computes.
 
+- **Block header builder** — the exact inverse
+  of the inspector: header fields in (version,
+  parent ID, the four roots, timestamp in
+  milliseconds, nBits decimal or 0x hex, height,
+  the 3 vote bytes, any extra-fields bytes, and
+  the Autolykos solution values), serialized
+  header bytes and header ID out. Version 1
+  serializes miner key, one-time key, nonce and
+  the length-prefixed distance d (minimal
+  big-endian bytes; 0 as the single byte 0x00);
+  version 2+ serializes only miner key and
+  nonce, so version-1-only values are refused
+  rather than silently dropped, exactly as
+  extra-fields bytes are refused on version 1.
+  The assembled bytes are re-inspected by the
+  inspector and every field must come back
+  identical before anything is shown. Honest
+  boundary: building a header proves nothing
+  about proof-of-work — it is a block only if
+  a node accepts it; this is a serialization
+  tool for study, testing and cross-checking
+  explorer data, not a mining tool. Verified
+  against an independent Python oracle that
+  reproduces the three real mainnet headers
+  and the inspector's mutation from fields
+  alone, plus a version 3 synthetic carrying
+  extra-fields bytes and a version 1 synthetic
+  whose distance is 0.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

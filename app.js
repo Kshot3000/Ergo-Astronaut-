@@ -6724,8 +6724,128 @@ function inspectBlockHeader(headerHex, expectedStr) {
   };
 }
 
+/* Tool 63: block header builder — the exact inverse of tool 62.
+   Tool 62 opens a serialized header; this one assembles one:
+   give it the header fields (the values an explorer JSON or a
+   node API shows for a block) and it serializes them in the
+   reference layout — version byte, parent ID, AD-proofs root,
+   transactions root, the 33-byte state root, the timestamp as a
+   VLQ u64, the extension root, nBits as 4 big-endian bytes (the
+   header's one fixed-width number), the height as a VLQ u32, the
+   3 vote bytes and, on version 2+, the extra-fields length byte
+   plus those bytes — then the Autolykos solution (version 1:
+   miner key, one-time key, nonce, length-prefixed distance d,
+   where d serializes as its minimal big-endian bytes and 0 as
+   the single byte 0x00; version 2+: miner key and nonce only —
+   v2+ fields like the one-time key are refused, not silently
+   dropped, because they are not serialized). The header ID is
+   Blake2b-256 over the assembled bytes, and the difficulty is
+   decoded from nBits by the exact compact-bits algorithm. The
+   build is verified before anything is shown: the assembled
+   bytes are re-inspected by tool 62's parser and every field
+   must come back identical. Honesty boundary: assembling a
+   header proves nothing about proof-of-work — a built header
+   carries whatever solution values were supplied, valid hit or
+   not, and is a block only if a node accepts it; this is a
+   serialization tool for study, testing and cross-checking
+   explorer data, not a mining tool. Verified against an
+   independent Python oracle (oracle-headerbuild.py) that
+   reproduces the three real mainnet headers and the mutation
+   of oracle-header.py from fields alone, plus a version 3
+   synthetic carrying extra-fields bytes and a version 1
+   synthetic whose distance is 0. */
+function buildBlockHeader(fields) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, headerHex: null, headerId: null, version: null, autolykosVersion: null, timestampIso: null, difficulty: null, byteLength: null, withoutPowLength: null, solutionLength: null };
+  };
+  if (!fields || typeof fields !== "object") return fail("Fill in the header fields first — version, the four roots, timestamp, nBits, height, votes and the Autolykos solution values.");
+  var get = function (k) { var v = fields[k]; return v == null ? "" : String(v).trim(); };
+  var hexField = function (k, chars, what) {
+    var v = get(k).replace(/\s+/g, "").toLowerCase();
+    if (!new RegExp("^[0-9a-f]{" + chars + "}$").test(v)) return null;
+    return v;
+  };
+  if (!/^\d+$/.test(get("version"))) return fail("The version must be a whole number — Ergo block versions start at 1 (mainnet headers today are version 4).");
+  var version = Number(get("version"));
+  if (version < 1 || version > 255) return fail("The version must be between 1 and 255 — it serializes as a single byte, and version 0 is not a block version.");
+  var parentId = hexField("parentId", 64, "parent"); if (parentId === null) return fail("The parent ID must be 64 hex characters (32 bytes) — it is the previous header's ID.");
+  var adProofsRoot = hexField("adProofsRoot", 64); if (adProofsRoot === null) return fail("The AD-proofs root must be 64 hex characters (32 bytes).");
+  var transactionsRoot = hexField("transactionsRoot", 64); if (transactionsRoot === null) return fail("The transactions root must be 64 hex characters (32 bytes) — on the wire it precedes the state root.");
+  var stateRoot = hexField("stateRoot", 66); if (stateRoot === null) return fail("The state root must be 66 hex characters (33 bytes) — the AVL tree digest carries one extra byte over a plain 32-byte hash.");
+  if (!/^\d+$/.test(get("timestampMs"))) return fail("The timestamp must be a whole number of milliseconds since the Unix epoch — the value a block explorer shows for the block's time.");
+  var timestampMs = BigInt(get("timestampMs"));
+  if (timestampMs > 0xffffffffffffffffn) return fail("The timestamp does not fit in 64 bits — the reference layout stores it as a u64.");
+  var extensionRoot = hexField("extensionRoot", 64); if (extensionRoot === null) return fail("The extension root must be 64 hex characters (32 bytes).");
+  var nBitsStr = get("nBits");
+  var nBits = null;
+  if (/^0x[0-9a-fA-F]+$/.test(nBitsStr)) nBits = Number(BigInt(nBitsStr));
+  else if (/^\d+$/.test(nBitsStr)) nBits = Number(nBitsStr);
+  if (nBits === null || !Number.isSafeInteger(nBits) || nBits < 0 || nBits > 0xffffffff) return fail("nBits must be a 32-bit number, decimal or 0x-prefixed hex (e.g. 104520992 or 0x063add20) — it serializes as the header's one fixed-width field, 4 big-endian bytes.");
+  if (!/^\d+$/.test(get("height"))) return fail("The height must be a whole number — the block's position in the chain.");
+  var height = BigInt(get("height"));
+  if (height > 0xffffffffn) return fail("The height does not fit in 32 bits — the reference layout stores it as a u32.");
+  var votesHex = hexField("votesHex", 6); if (votesHex === null) return fail("The miner votes must be exactly 6 hex characters (3 bytes).");
+  var unparsedHex = get("unparsedHex").replace(/\s+/g, "").toLowerCase();
+  if (version === 1) {
+    if (unparsedHex !== "") return fail("Version 1 headers carry no extra-fields section — that length byte exists only on version 2 and up. Clear the extra-fields value or raise the version.");
+  } else {
+    if (!/^([0-9a-f]{2})*$/.test(unparsedHex)) return fail("The extra-fields bytes must be even-length hex (or empty — today's headers carry none).");
+    if (unparsedHex.length / 2 > 255) return fail("The extra-fields section is length-prefixed with a single byte, so it can carry at most 255 bytes.");
+  }
+  var minerPk = hexField("minerPk", 66); if (minerPk === null) return fail("The miner public key must be 66 hex characters (33 bytes — a compressed secp256k1 point).");
+  if (minerPk.slice(0, 2) !== "02" && minerPk.slice(0, 2) !== "03") return fail("The miner public key must start with a compressed-point prefix (02 or 03).");
+  var nonce = hexField("nonce", 16); if (nonce === null) return fail("The Autolykos nonce must be 16 hex characters (8 bytes).");
+  var onetimePk = null;
+  var powDistance = null;
+  if (version === 1) {
+    onetimePk = hexField("onetimePk", 66); if (onetimePk === null) return fail("Version 1 (Autolykos v1) solutions carry a one-time public key — 66 hex characters (33 bytes). Supply it, or build a version 2+ header.");
+    if (onetimePk.slice(0, 2) !== "02" && onetimePk.slice(0, 2) !== "03") return fail("The one-time public key must start with a compressed-point prefix (02 or 03).");
+    if (!/^\d+$/.test(get("powDistance"))) return fail("Version 1 (Autolykos v1) solutions carry the distance d as a whole number — supply it, or build a version 2+ header.");
+    powDistance = get("powDistance");
+  } else {
+    if (get("onetimePk") !== "" || get("powDistance") !== "") return fail("Version 2+ solutions serialize only the miner key and the nonce — the one-time key and distance exist in JSON displays but are NOT serialized, so they are refused here rather than silently dropped. Clear them, or build a version 1 header.");
+  }
+  var bytes = [version]
+    .concat(Array.from(hexToBytes(parentId)), Array.from(hexToBytes(adProofsRoot)), Array.from(hexToBytes(transactionsRoot)), Array.from(hexToBytes(stateRoot)))
+    .concat(writeVlqBig(timestampMs))
+    .concat(Array.from(hexToBytes(extensionRoot)))
+    .concat([(nBits >>> 24) & 0xff, (nBits >>> 16) & 0xff, (nBits >>> 8) & 0xff, nBits & 0xff])
+    .concat(writeVlqBig(height))
+    .concat(Array.from(hexToBytes(votesHex)));
+  if (version > 1) bytes = bytes.concat([unparsedHex.length / 2], unparsedHex === "" ? [] : Array.from(hexToBytes(unparsedHex)));
+  var withoutPowLength = bytes.length;
+  bytes = bytes.concat(Array.from(hexToBytes(minerPk)));
+  if (version === 1) {
+    var dv = BigInt(powDistance);
+    var dArr = [];
+    if (dv === 0n) dArr = [0];
+    else { while (dv > 0n) { dArr.unshift(Number(dv & 0xffn)); dv >>= 8n; } }
+    bytes = bytes.concat(Array.from(hexToBytes(onetimePk)), Array.from(hexToBytes(nonce)), [dArr.length], dArr);
+  } else {
+    bytes = bytes.concat(Array.from(hexToBytes(nonce)));
+  }
+  var headerHex = bytesToHex(bytes);
+  /* Verify the build: tool 62's parser must read every field back. */
+  var back = inspectBlockHeader(headerHex, "");
+  var ok = back.valid === true && back.version === version && back.parentId === parentId && back.adProofsRoot === adProofsRoot && back.transactionsRoot === transactionsRoot && back.stateRoot === stateRoot && back.timestampMs === timestampMs.toString() && back.extensionRoot === extensionRoot && back.nBits === nBits && back.height === Number(height) && back.votesHex === votesHex && back.minerPk === minerPk && back.nonce === nonce &&
+    (version === 1 ? (back.onetimePk === onetimePk && back.powDistance === BigInt(powDistance).toString() && back.unparsedHex === null) : (back.unparsedHex === unparsedHex && back.onetimePk === null));
+  if (!ok) return fail("Internal error: the assembled header does not re-inspect to the fields supplied — nothing was shown rather than an unverified build.");
+  return {
+    valid: true, reason: null,
+    headerHex: headerHex,
+    headerId: back.headerId,
+    version: version,
+    autolykosVersion: version === 1 ? 1 : 2,
+    timestampIso: back.timestampIso,
+    difficulty: decodeCompactBits(nBits).toString(),
+    byteLength: bytes.length,
+    withoutPowLength: withoutPowLength,
+    solutionLength: bytes.length - withoutPowLength
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, inspectBlockHeader };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, inspectBlockHeader, buildBlockHeader };
 }
 
 if (typeof document !== "undefined") {
@@ -8004,6 +8124,37 @@ if (typeof document !== "undefined") {
       if (res.autolykosVersion === 1) msg += ", one-time public key " + res.onetimePk + ", distance d = " + res.powDistance;
       msg += ". ";
       msg += "The header was located twice — by the field parser and by an independent offset-only re-walk — and the parsed fields re-serialize byte-for-byte to the bytes you pasted; the ID is Blake2b-256 over the full serialized header, the reference definition. Inspection only: this recomputes the ID and decodes the fields — it does not verify the Autolykos proof-of-work hit against the difficulty target, and an ID is only a hash of these bytes, not proof the block sits on the main chain; that verdict belongs to a full node. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("headerbuild-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("headerbuild-result");
+      var res = buildBlockHeader({
+        version: document.getElementById("hb-version").value,
+        parentId: document.getElementById("hb-parent").value,
+        adProofsRoot: document.getElementById("hb-adproofs").value,
+        transactionsRoot: document.getElementById("hb-txroot").value,
+        stateRoot: document.getElementById("hb-stateroot").value,
+        timestampMs: document.getElementById("hb-timestamp").value,
+        extensionRoot: document.getElementById("hb-extension").value,
+        nBits: document.getElementById("hb-nbits").value,
+        height: document.getElementById("hb-height").value,
+        votesHex: document.getElementById("hb-votes").value,
+        unparsedHex: document.getElementById("hb-unparsed").value,
+        minerPk: document.getElementById("hb-minerpk").value,
+        nonce: document.getElementById("hb-nonce").value,
+        onetimePk: document.getElementById("hb-onetimepk").value,
+        powDistance: document.getElementById("hb-distance").value
+      });
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Built block header " + res.headerId + " — version " + res.version + " (Autolykos v" + res.autolykosVersion + "), " + res.byteLength + " bytes: " + res.withoutPowLength + " bytes before the solution, " + res.solutionLength + " bytes of solution. ";
+      msg += "Timestamp " + res.timestampIso + "; difficulty decoded from nBits: " + res.difficulty + ". ";
+      msg += "Serialized header: " + res.headerHex + " ";
+      msg += "The build was verified before it is shown: the assembled bytes were re-inspected by tool 62's parser and every field came back identical, and tool 62 will open this exact hex. Building only: assembling a header proves nothing about proof-of-work — it carries whatever solution values you supplied, valid hit or not, and it is a block only if a node accepts it. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

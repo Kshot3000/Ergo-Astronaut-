@@ -947,6 +947,43 @@
         <p id="header-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="headerbuild-calc">
+        <h3>63 · Block header builder (header fields → serialized header bytes + header ID)</h3>
+        <p>Tool 62 opens a serialized header; this one assembles one — the exact inverse. Give it the header fields (the values an explorer JSON or a node API shows for a block: version, the parent ID, the AD-proofs, transactions, state and extension roots, the timestamp in milliseconds, nBits, the height, the 3 vote bytes and the Autolykos solution values) and it serializes them in the reference layout — version byte, parent ID, AD-proofs root, transactions root, the 33-byte state root, the timestamp as a VLQ, extension root, nBits as 4 big-endian bytes (the header's one fixed-width number, decimal or 0x hex both accepted), the height as a VLQ, the votes, and on version 2 and up the extra-fields length byte plus those bytes — then the solution: version 1 carries miner key, one-time key, nonce and the length-prefixed distance d (serialized as its minimal big-endian bytes, 0 as the single byte 0x00); version 2 and up carry only miner key and nonce, so version-1-only values are refused rather than silently dropped, exactly as extra-fields bytes are refused on version 1. The tool returns the serialized header, its length split at the solution boundary, the difficulty decoded from nBits, and the header ID — Blake2b-256 over the assembled bytes. The build is verified before anything is shown: the assembled bytes are re-inspected by tool 62's parser and every field must come back identical. The honesty boundary is stated plainly: assembling a header proves nothing about proof-of-work — a built header carries whatever solution values you supplied, valid hit or not, and it is a block only if a node accepts it; this is a serialization tool for study, testing and cross-checking explorer data, not a mining tool. Building only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="hb-version">Block version (1–255; mainnet today is 4)</label>
+        <input id="hb-version" type="text" inputmode="numeric" spellcheck="false" placeholder="e.g. 4" autocomplete="off">
+        <label for="hb-parent">Parent ID (64 hex characters)</label>
+        <input id="hb-parent" type="text" spellcheck="false" placeholder="the previous header's ID" autocomplete="off">
+        <label for="hb-adproofs">AD-proofs root (64 hex characters)</label>
+        <input id="hb-adproofs" type="text" spellcheck="false" autocomplete="off">
+        <label for="hb-txroot">Transactions root (64 hex characters — precedes the state root on the wire)</label>
+        <input id="hb-txroot" type="text" spellcheck="false" autocomplete="off">
+        <label for="hb-stateroot">State root (66 hex characters — 33 bytes, the AVL digest carries one extra byte)</label>
+        <input id="hb-stateroot" type="text" spellcheck="false" autocomplete="off">
+        <label for="hb-timestamp">Timestamp (milliseconds since the Unix epoch)</label>
+        <input id="hb-timestamp" type="text" inputmode="numeric" spellcheck="false" placeholder="e.g. 1791566849748" autocomplete="off">
+        <label for="hb-extension">Extension root (64 hex characters)</label>
+        <input id="hb-extension" type="text" spellcheck="false" autocomplete="off">
+        <label for="hb-nbits">nBits (decimal or 0x hex, 32-bit)</label>
+        <input id="hb-nbits" type="text" spellcheck="false" placeholder="e.g. 104520992 or 0x063add20" autocomplete="off">
+        <label for="hb-height">Height</label>
+        <input id="hb-height" type="text" inputmode="numeric" spellcheck="false" placeholder="e.g. 1890980" autocomplete="off">
+        <label for="hb-votes">Miner votes (6 hex characters — 3 bytes)</label>
+        <input id="hb-votes" type="text" spellcheck="false" placeholder="e.g. 000000" autocomplete="off">
+        <label for="hb-unparsed">Extra-fields bytes (version 2+ only — even hex, empty for today's headers)</label>
+        <input id="hb-unparsed" type="text" spellcheck="false" placeholder="leave blank" autocomplete="off">
+        <label for="hb-minerpk">Miner public key (66 hex characters, starting 02 or 03)</label>
+        <input id="hb-minerpk" type="text" spellcheck="false" autocomplete="off">
+        <label for="hb-nonce">Autolykos nonce (16 hex characters — 8 bytes)</label>
+        <input id="hb-nonce" type="text" spellcheck="false" autocomplete="off">
+        <label for="hb-onetimepk">One-time public key (version 1 only — 66 hex characters)</label>
+        <input id="hb-onetimepk" type="text" spellcheck="false" placeholder="version 2+: leave blank" autocomplete="off">
+        <label for="hb-distance">Distance d (version 1 only — a whole number)</label>
+        <input id="hb-distance" type="text" inputmode="numeric" spellcheck="false" placeholder="version 2+: leave blank" autocomplete="off">
+        <button type="submit" class="btn primary">Build the header</button>
+        <p id="headerbuild-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -992,6 +1029,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=62"></script>
+<script src="app.js?v=63"></script>
 </body>
 </html>

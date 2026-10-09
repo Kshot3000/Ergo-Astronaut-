@@ -813,6 +813,35 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   synthetics, including a 200-byte proof whose length
   VLQ is two bytes.
 
+- **Transaction data-input extractor** — takes a
+  serialized transaction plus a data-input number and
+  returns that data input's box ID. A data input is a
+  box a transaction's scripts read but never spend:
+  it carries no proof, and its ERG and tokens do not
+  enter the balance. The parser and the input auditor
+  show data inputs only as an inline list; this lifts
+  one out with its position, flags the odd case of a
+  data input that is also spent by the same
+  transaction, and returns the full list in order —
+  the lines the transaction builder's data-inputs
+  field takes, one box ID per line. Verified before
+  it is shown: the box ID is located twice (parser
+  and an independent raw-offset re-walk that must
+  skip every input's proof and context extension
+  constants to reach the data-input section at all)
+  and the two must agree byte-for-byte, and the
+  unsigned form must re-parse to the same
+  transaction ID with the same data inputs in the
+  same order — data inputs are signed over verbatim,
+  so signing can never change them (the signed and
+  unsigned differ vectors extract identically).
+  Honest boundary: a data input is a reference, never
+  content — extraction reads the ID from the pasted
+  bytes and does not prove the named box exists on
+  chain, is unspent, or holds what a script expects.
+  Verified against an independent Python oracle over
+  the fleet vectors and the hub synthetics.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

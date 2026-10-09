@@ -791,6 +791,17 @@
         <button type="submit" class="btn primary">Extract the input's proof</button>
         <p id="txinproof-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txdatainput-calc">
+        <h3>49 · Transaction data-input extractor (transaction bytes + a data-input number → that data input's box ID)</h3>
+        <p>Tools 47 and 48 lift out a transaction's outputs and its inputs' proofs; this completes the set with the section in between. A data input is a box a transaction's scripts read but never spent — it carries no proof, and its ERG and tokens do not enter the balance — yet tools 29 and 39 only show the data inputs as an inline list, so a single one could not be lifted out with its position, checked for the odd case of also being spent by the same transaction, or carried into another tool on its own. This tool returns one chosen data input's box ID, flags that also-spent case, and gives the full list in order — the lines tool 30's data-inputs field takes, one box ID per line. The box ID is verified before it is shown: it is located twice, once by the transaction parser and once by an independent re-walk that must skip every input exactly (box ID, proof, context extension constants) to reach the data-input section at all, and the two must agree byte-for-byte on the count and every ID; on top of that, the unsigned form (tool 45) must re-parse to the same transaction ID with the same data inputs in the same order, because data inputs are signed over verbatim and signing can never change them. The honesty boundary is stated plainly: a data input is a reference, never content — extraction reads the ID from the bytes you paste, and does not prove the named box exists on chain, is unspent, or holds what a script expects. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txdatainput-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txdatainput-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <label for="txdatainput-index">Data-input number (1 = the first data input)</label>
+        <input id="txdatainput-index" type="text" inputmode="numeric" placeholder="e.g. 1" autocomplete="off">
+        <button type="submit" class="btn primary">Extract the data input</button>
+        <p id="txdatainput-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -836,6 +847,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=48"></script>
+<script src="app.js?v=49"></script>
 </body>
 </html>

@@ -4573,8 +4573,106 @@ function extractTxInputProof(txHex, indexStr) {
   };
 }
 
+/* ---------- Transaction data-input extractor ---------- */
+/* A data input is a box a transaction's scripts read but never
+   spend: it carries no proof, contributes no ERG or tokens to the
+   balance, and is named in the serialization by box ID alone,
+   in a section of its own after the inputs. Tools 29 and 39
+   report the whole list inline, but until now no tool lifted one
+   data input out with its position, flagged the odd case of a
+   data input that is also spent by the same transaction, or
+   returned the list in the one-box-ID-per-line form tool 30's
+   builder takes. This does all three for one chosen data input.
+   The box ID is verified before it is shown: it is located
+   twice — once by the transaction parser and once by an
+   independent raw-offset re-walk that must first skip every
+   input exactly (box ID, VLQ proof length + proof bytes,
+   context extension constants) to reach the data-input section
+   at all — and the re-walked count and every data input's ID
+   must agree with the parser's byte-for-byte. On top of that,
+   the unsigned form (tool 45) must re-parse to the same
+   transaction ID with the same data inputs in the same order:
+   data inputs are signed over verbatim, so signing can never
+   change them. Honesty boundary: a data input is a reference,
+   never content — extraction reads the ID from the pasted
+   bytes; it does not prove the named box exists on chain, is
+   unspent, or holds what a script expects. Verified against
+   an independent Python oracle (oracle-txdatainput.py) over
+   the fleet vectors and the hub synthetics. */
+function extractTxDataInput(txHex, indexStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, signed: null, dataInputIndex: null, dataInputCount: null, boxId: null, dataInputs: null, dataInputLines: null, alsoSpent: null, byteLength: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  if (tx.dataInputs.length === 0) return fail("This transaction has no data inputs — its scripts read no extra boxes, so there is no data input to extract. (Its " + tx.inputs.length + " ordinary input(s) are the boxes it spends; tool 48 lifts those inputs' proofs.)");
+  var raw = indexStr == null ? "" : String(indexStr).trim();
+  if (!/^\d+$/.test(raw)) return fail("Enter the data-input number as a whole number — 1 is the transaction's first data input, 2 its second, and so on. This transaction has " + tx.dataInputs.length + " data input(s).");
+  var target = Number(raw) - 1;
+  if (target < 0 || target >= tx.dataInputs.length) return fail("This transaction has " + tx.dataInputs.length + " data input(s), numbered 1 to " + tx.dataInputs.length + " — there is no data input " + raw + " to extract from.");
+  var cleaned = String(txHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  var pos = 0;
+  var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong box ID."); };
+  var cnt = readVlqBig(bytes, pos);
+  if (!cnt) return walkFail("the input count");
+  pos += cnt.length;
+  for (var i = 0; i < tx.inputs.length; i++) {
+    if (pos + 32 > bytes.length) return walkFail("input " + (i + 1) + "'s box ID");
+    pos += 32;
+    var pl = readVlqBig(bytes, pos);
+    if (!pl) return walkFail("input " + (i + 1) + "'s proof length");
+    pos += pl.length;
+    var wProofLen = Number(pl.value);
+    if (pos + wProofLen > bytes.length) return walkFail("input " + (i + 1) + "'s proof");
+    pos += wProofLen;
+    var ec = readVlqBig(bytes, pos);
+    if (!ec) return walkFail("input " + (i + 1) + "'s context extension count");
+    pos += ec.length;
+    for (var e = 0; e < Number(ec.value); e++) {
+      var kv = readVlqBig(bytes, pos);
+      if (!kv) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += kv.length;
+      var eType = parseSigmaType(bytes, pos);
+      if (!eType) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += eType.length;
+      var eData = parseSigmaData(eType.node, bytes, pos);
+      if (!eData) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += eData.length;
+    }
+  }
+  var dc = readVlqBig(bytes, pos);
+  if (!dc) return walkFail("the data-input count");
+  pos += dc.length;
+  if (Number(dc.value) !== tx.dataInputs.length) return fail("Internal error: the re-walked data-input count does not match the count the transaction parser reports — nothing was shown rather than an unverified extraction.");
+  var walked = [];
+  for (var d = 0; d < Number(dc.value); d++) {
+    if (pos + 32 > bytes.length) return walkFail("data input " + (d + 1) + "'s box ID");
+    walked.push(bytesToHex(bytes.subarray(pos, pos + 32)));
+    pos += 32;
+  }
+  if (walked.some(function (w, wi) { return w !== tx.dataInputs[wi]; })) return fail("Internal error: the re-walked data inputs do not match the data inputs the transaction parser reports — nothing was shown rather than an unverified extraction.");
+  var stripped = extractUnsignedTx(cleaned);
+  if (!stripped.valid) return fail("Internal error: the unsigned form could not be extracted for the cross-check — nothing was shown rather than an unverified extraction.");
+  var reParsed = parseErgoTransaction(stripped.unsignedHex);
+  if (!reParsed.valid || reParsed.txId !== tx.txId || reParsed.dataInputs.length !== tx.dataInputs.length || reParsed.dataInputs.some(function (rd, ri) { return rd !== tx.dataInputs[ri]; })) return fail("Internal error: the unsigned form does not carry the same data inputs in the same order — nothing was shown rather than an unverified extraction.");
+  var spentIds = tx.inputs.map(function (x) { return x.boxId; });
+  return {
+    valid: true, reason: null,
+    txId: tx.txId,
+    signed: tx.signed,
+    dataInputIndex: target,
+    dataInputCount: tx.dataInputs.length,
+    boxId: tx.dataInputs[target],
+    dataInputs: tx.dataInputs.slice(),
+    dataInputLines: tx.dataInputs.join("\n"),
+    alsoSpent: spentIds.indexOf(tx.dataInputs[target]) !== -1,
+    byteLength: tx.byteLength
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput };
 }
 
 if (typeof document !== "undefined") {
@@ -5625,6 +5723,21 @@ if (typeof document !== "undefined") {
       if (res.extensionCount > 0) msg += "Its context extension carries " + res.extensionCount + " entr" + (res.extensionCount === 1 ? "y" : "ies") + ": " + res.extension.map(function (x) { return "key " + x.key + " = " + x.value + " (" + x.type + ", raw " + x.rawHex + ")"; }).join("; ") + ". ";
       else msg += "Its context extension is empty. ";
       msg += "Transaction " + res.txId + " (" + res.byteLength + " bytes). The proof was located twice — by the transaction parser and by an independent re-walk of the input section — and the two agreed byte-for-byte; re-attaching every input's extracted proof line to the unsigned form (tool 45) through tool 46 reproduces this transaction exactly. Extraction only: a proof is copied, never verified — these bytes alone do not prove the proof satisfies the spent box's script, and nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txdatainput-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txdatainput-result");
+      var res = extractTxDataInput(document.getElementById("txdatainput-bytes").value, document.getElementById("txdatainput-index").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Data input " + (res.dataInputIndex + 1) + " of " + res.dataInputCount + " of transaction " + res.txId + " (" + res.byteLength + " bytes) is box " + res.boxId + " — a box this transaction's scripts read but do not spend: it carries no proof, and its ERG and tokens do not enter the balance. ";
+      if (res.alsoSpent) msg += "Note: this same box is also one of the transaction's ordinary inputs, so it IS spent by this transaction as well as read. ";
+      msg += "The full data-input list, in order: " + res.dataInputs.join(", ") + " — these are the lines tool 30's data-inputs field takes, one box ID per line. ";
+      msg += "The box ID was located twice — by the transaction parser and by an independent re-walk that skips every input's proof and context extension to reach the data-input section — and the two agreed byte-for-byte; the unsigned form (tool 45) re-parses to the same transaction ID with the same data inputs in the same order, because data inputs are signed over verbatim. Extraction only: a data input is a reference, never content — this does not prove the named box exists on chain, is unspent, or holds what a script expects, and nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

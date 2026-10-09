@@ -788,6 +788,31 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   an independent Python oracle over every output of
   the fleet vectors and the hub synthetics.
 
+- **Transaction input proof extractor** — takes a
+  serialized transaction plus an input number and
+  returns that input's spending proof as hex (or the
+  single dash the proof attacher takes as a proof
+  line, when the input is unsigned), together with
+  the box it spends and its context extension
+  constants. The transaction parser reports a proof's
+  length but not the proof itself, and the
+  unsigned-form extractor lists proofs only as a side
+  table — this lifts one proof out on its own, e.g.
+  to carry into the proof attacher or to compare
+  against a wallet's signing output. Verified before
+  it is shown: the proof is located twice (parser and
+  an independent raw-offset re-walk of the input
+  section) and the two must agree byte-for-byte, and
+  re-attaching every input's extracted proof line to
+  the unsigned form must reproduce the pasted
+  transaction exactly. Honest boundary: a proof is
+  copied, never verified — extraction copies bytes,
+  and bytes alone do not prove a proof satisfies the
+  spent box's script. Verified against an independent
+  Python oracle over the fleet vectors and the hub
+  synthetics, including a 200-byte proof whose length
+  VLQ is two bytes.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

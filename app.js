@@ -4476,8 +4476,105 @@ function extractTxOutputBox(txHex, indexStr) {
   };
 }
 
+/* Tool 48: transaction input proof extractor. Takes one serialized
+   transaction plus an input number and returns that input's spending
+   proof as hex (or the dash line tool 46 takes, when the input is
+   unsigned), together with the box it spends and its context
+   extension constants. Tool 29 reports an input's proof length but
+   not the proof itself, and tool 45 reports every input's proof only
+   as a side table of the unsigned form — until now a single proof
+   could not be lifted out on its own, e.g. to carry into tool 46 or
+   to compare against a wallet's signing output. The proof bytes are
+   located twice before anything is shown: once by tool 29's parser
+   and once by an independent raw-offset re-walk of the input
+   section, and the two must agree byte-for-byte, as must the box ID
+   and every context extension entry (key and raw constant bytes).
+   On top of that, the whole transaction must round-trip: tool 45's
+   unsigned form re-attached through tool 46 with every input's
+   extracted proof line must reproduce the pasted bytes exactly.
+   Honesty boundary: a proof is opaque bytes — extraction copies it,
+   it never verifies it. Whether the proof actually satisfies the
+   spent box's script is a question for a prover/verifier, not for a
+   byte walk, and nothing here claims it. Verified against an
+   independent Python oracle (oracle-txinproof.py) over the fleet
+   vectors and the hub synthetics. */
+function extractTxInputProof(txHex, indexStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, signed: null, inputIndex: null, inputCount: null, boxId: null, hasProof: null, proofHex: null, proofLength: null, proofLine: null, extension: null, extensionCount: null, byteLength: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  var raw = indexStr == null ? "" : String(indexStr).trim();
+  if (!/^\d+$/.test(raw)) return fail("Enter the input number as a whole number — 1 is the transaction's first input, 2 its second, and so on. This transaction has " + tx.inputs.length + " input(s).");
+  var target = Number(raw) - 1;
+  if (target < 0 || target >= tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input " + raw + " to extract from.");
+  var cleaned = String(txHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  var pos = 0;
+  var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong proof."); };
+  var cnt = readVlqBig(bytes, pos);
+  if (!cnt) return walkFail("the input count");
+  pos += cnt.length;
+  var walked = null;
+  for (var i = 0; i < tx.inputs.length; i++) {
+    if (pos + 32 > bytes.length) return walkFail("input " + (i + 1) + "'s box ID");
+    var wBoxId = bytesToHex(bytes.subarray(pos, pos + 32));
+    pos += 32;
+    var pl = readVlqBig(bytes, pos);
+    if (!pl) return walkFail("input " + (i + 1) + "'s proof length");
+    pos += pl.length;
+    var wProofLen = Number(pl.value);
+    if (pos + wProofLen > bytes.length) return walkFail("input " + (i + 1) + "'s proof");
+    var wProofHex = wProofLen > 0 ? bytesToHex(bytes.subarray(pos, pos + wProofLen)) : null;
+    pos += wProofLen;
+    var ec = readVlqBig(bytes, pos);
+    if (!ec) return walkFail("input " + (i + 1) + "'s context extension count");
+    pos += ec.length;
+    var wExt = [];
+    for (var e = 0; e < Number(ec.value); e++) {
+      var kv = readVlqBig(bytes, pos);
+      if (!kv) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += kv.length;
+      var cStart = pos;
+      var eType = parseSigmaType(bytes, pos);
+      if (!eType) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += eType.length;
+      var eData = parseSigmaData(eType.node, bytes, pos);
+      if (!eData) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += eData.length;
+      wExt.push({ key: Number(kv.value), rawHex: bytesToHex(bytes.subarray(cStart, pos)) });
+    }
+    if (i === target) walked = { boxId: wBoxId, proofHex: wProofHex, proofLength: wProofLen, extension: wExt };
+  }
+  if (!walked) return walkFail("the chosen input");
+  var inp = tx.inputs[target];
+  if (walked.boxId !== inp.boxId || walked.proofHex !== inp.proofBytes || walked.proofLength !== inp.proofLength) return fail("Internal error: the re-walked proof does not match the proof the transaction parser reports for this input — nothing was shown rather than a wrong extraction.");
+  var extSame = walked.extension.length === inp.extension.length && walked.extension.every(function (we, ei) { return we.key === inp.extension[ei].key && we.rawHex === inp.extension[ei].rawHex; });
+  if (!extSame) return fail("Internal error: the re-walked context extension does not match the parser's for this input — nothing was shown rather than a wrong extraction.");
+  var stripped = extractUnsignedTx(cleaned);
+  if (!stripped.valid) return fail("Internal error: the unsigned form could not be extracted for the round-trip check — nothing was shown rather than an unverified extraction.");
+  var lines = tx.inputs.map(function (x) { return x.proofBytes === null ? "-" : x.proofBytes; }).join("\n");
+  var reattached = attachTxProofs(stripped.unsignedHex, lines);
+  if (!reattached.valid || reattached.signedHex !== cleaned.toLowerCase().replace(/^0x/, "")) return fail("Internal error: re-attaching every extracted proof to the unsigned form does not reproduce this transaction byte-for-byte — nothing was shown rather than an unverified extraction.");
+  return {
+    valid: true, reason: null,
+    txId: tx.txId,
+    signed: tx.signed,
+    inputIndex: target,
+    inputCount: tx.inputs.length,
+    boxId: inp.boxId,
+    hasProof: inp.proofLength > 0,
+    proofHex: inp.proofBytes,
+    proofLength: inp.proofLength,
+    proofLine: inp.proofBytes === null ? "-" : inp.proofBytes,
+    extension: inp.extension,
+    extensionCount: inp.extension.length,
+    byteLength: tx.byteLength
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof };
 }
 
 if (typeof document !== "undefined") {
@@ -5511,6 +5608,23 @@ if (typeof document !== "undefined") {
       var msg = "✓ Output " + (res.outputIndex + 1) + " of " + res.outputCount + " as a standalone box: " + res.byteLength + " bytes (it travels inside the transaction in " + res.embeddedByteLength + " embedded bytes — the standalone form restores each token's full 32-byte ID in place of its list index and appends the creating transaction's ID and the output index). Box ID " + res.boxId + " — the Blake2b-256 of exactly the bytes below, re-parsed through tool 15 with every field matching the embedded output before being shown. Value " + res.valueErg + " ERG (" + res.valueNano + " nanoERG), creation height " + res.creationHeight + ", " + res.tokens.length + " token(s), " + res.registers.length + " register(s), created by transaction " + res.txId + ". ";
       msg += "Standalone box hex: " + res.boxHex + " ";
       msg += "Extraction only, over the bytes you pasted: this is the box the transaction creates if it is the one on chain — a pasted transaction may be unsubmitted, and bytes alone do not prove the box exists or is still unspent. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txinproof-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txinproof-result");
+      var res = extractTxInputProof(document.getElementById("txinproof-bytes").value, document.getElementById("txinproof-index").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = res.hasProof
+        ? "✓ Input " + (res.inputIndex + 1) + " of " + res.inputCount + " spends box " + res.boxId + " and carries a spending proof of " + res.proofLength + " byte(s): " + res.proofHex + " "
+        : "✓ Input " + (res.inputIndex + 1) + " of " + res.inputCount + " spends box " + res.boxId + " and carries no spending proof — this input is unsigned, so its proof line for tool 46 is a single dash (-). ";
+      if (res.extensionCount > 0) msg += "Its context extension carries " + res.extensionCount + " entr" + (res.extensionCount === 1 ? "y" : "ies") + ": " + res.extension.map(function (x) { return "key " + x.key + " = " + x.value + " (" + x.type + ", raw " + x.rawHex + ")"; }).join("; ") + ". ";
+      else msg += "Its context extension is empty. ";
+      msg += "Transaction " + res.txId + " (" + res.byteLength + " bytes). The proof was located twice — by the transaction parser and by an independent re-walk of the input section — and the two agreed byte-for-byte; re-attaching every input's extracted proof line to the unsigned form (tool 45) through tool 46 reproduces this transaction exactly. Extraction only: a proof is copied, never verified — these bytes alone do not prove the proof satisfies the spent box's script, and nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

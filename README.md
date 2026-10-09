@@ -1175,6 +1175,41 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   token indexes are out of distinct-list order
   and which carries one minted token.
 
+- **Transaction data-input-set extractor** — takes a
+  serialized transaction and returns its complete
+  data-input set in order: every box ID the
+  transaction's scripts read without spending, each
+  flagged when the same transaction also spends that
+  box, alongside the raw data-input-section hex
+  exactly as serialized (count byte included) and
+  the set in the transaction builder's
+  one-box-ID-per-line form. Where the data-input
+  extractor lifts one entry, this lifts the set as
+  one record — a script reads its data inputs
+  together, and their order is part of the signed
+  bytes. A transaction carrying no data inputs is
+  refused plainly. Verified before it is shown:
+  the set is located twice (the transaction
+  parser, and an independent raw-offset re-walk
+  that skips every input exactly — box ID, proof
+  and context extension constants — to reach the
+  data-input section at all), every entry must
+  also extract on its own through the data-input
+  extractor with the same ID and also-spent flag,
+  the input auditor must list the same set, and
+  the unsigned form must re-parse to the same
+  transaction ID carrying the same set —
+  signing can never change a data input. Honest
+  boundary: a data-input set is a list of
+  references, never content — extraction reads
+  the IDs from the pasted bytes and does not
+  prove the named boxes exist on chain, are
+  unspent, or hold what a script expects.
+  Verified against an independent Python oracle
+  over the fleet vectors, the differ pair and a
+  from-scratch synthetic whose three-entry set
+  carries the also-spent case in the middle.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

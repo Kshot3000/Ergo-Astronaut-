@@ -1422,6 +1422,34 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   extra-fields bytes and a version 1 synthetic
   whose distance is 0.
 
+- **Block header differ** — two serialized
+  headers in, the field-by-field difference
+  out, in wire order (version, parent ID, the
+  four roots, timestamp, nBits and the
+  difficulty decoded from it, height, votes,
+  extra-fields bytes, and the Autolykos
+  solution fields), plus exact height,
+  timestamp and difficulty deltas and the
+  first differing byte offset. Cross-version
+  pairs are compared honestly: a field one
+  layout does not serialize (extra fields on
+  version 2+, one-time key and distance on
+  version 1) reads as absent on that side.
+  It also checks the chain's own stitching:
+  whether the second header's parent ID names
+  the first header's recomputed ID (it
+  follows it), the reverse, the same header,
+  or no link. A parent link proves only that
+  one header names the other as its parent —
+  not that either sits on the main chain, and
+  no proof-of-work hit is verified. Verified
+  against an independent Python oracle over
+  the identical pair, the inspector's
+  mutation pair, the cross-version v1/v2
+  pair and a synthetic successor built by
+  splicing one header's own ID into the
+  other's parent slot.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

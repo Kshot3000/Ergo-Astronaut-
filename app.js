@@ -6844,8 +6844,100 @@ function buildBlockHeader(fields) {
   };
 }
 
+/* Tool 64: block header differ — the header family's differ, in
+   the line of tools 41/43/44. Tools 62/63 open and assemble one
+   header; this one puts TWO serialized headers side by side and
+   reports exactly which fields changed, in wire order: version,
+   parent ID, AD-proofs root, transactions root, state root,
+   timestamp, extension root, nBits, the difficulty decoded from
+   it, height, votes, extra-fields bytes, and the Autolykos
+   solution fields (miner key, one-time key — version 1 only,
+   nonce, distance — version 1 only). Cross-version pairs are
+   compared honestly: a field one layout does not serialize
+   (extra fields on v2+, one-time key and distance on v1) reads
+   as absent on that side, never as a fabricated value. It also
+   answers the chain question a field list alone cannot: does
+   the second header's parent ID name the first header's ID
+   (B follows A), the reverse, the same header, or no link —
+   the parent/ID link is the chain's own stitching, checked from
+   the recomputed IDs, not from anything supplied. Deltas are
+   exact: height as an integer, timestamp and difficulty as
+   BigInt strings, plus the first byte offset at which the two
+   serializations diverge. Both headers are inspected by tool
+   62 first (which locates each twice and re-serializes it
+   byte-for-byte before anything is shown), and an identical-
+   bytes pair must come back with zero changed fields and equal
+   IDs or nothing is shown. Honesty boundary: a parent link
+   proves only that B names A as its parent — not that either
+   header is on the main chain, and neither header's proof-of-
+   work hit is verified; those verdicts belong to a full node.
+   Verified against an independent Python oracle
+   (oracle-headerdiff.py) over the identical pair, the V2/MUT
+   pair, the cross-version V1/V2 pair and a synthetic successor
+   built by splicing V2's own ID into MUT's parent slot. */
+function compareBlockHeaders(aHex, bHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, headerIdA: null, headerIdB: null, sameHeaderId: null, identicalBytes: null, byteLengthA: null, byteLengthB: null, byteLengthDelta: null, heightA: null, heightB: null, heightDelta: null, timestampDeltaMs: null, difficultyDelta: null, parentLink: null, firstDiffOffset: null, fields: null, changedFields: null, changedCount: null };
+  };
+  var a = inspectBlockHeader(aHex, "");
+  if (!a.valid) return fail("The FIRST header does not inspect: " + a.reason);
+  var b = inspectBlockHeader(bHex, "");
+  if (!b.valid) return fail("The SECOND header does not inspect: " + b.reason);
+  var aBytes = hexToBytes(String(aHex).replace(/\s+/g, ""));
+  var bBytes = hexToBytes(String(bHex).replace(/\s+/g, ""));
+  var identicalBytes = !!(aBytes && bBytes && aBytes.length === bBytes.length && aBytes.every(function (x, i) { return x === bBytes[i]; }));
+  var firstDiffOffset = null;
+  var lim = Math.min(aBytes.length, bBytes.length);
+  for (var i = 0; i < lim; i++) { if (aBytes[i] !== bBytes[i]) { firstDiffOffset = i; break; } }
+  if (firstDiffOffset === null && aBytes.length !== bBytes.length) firstDiffOffset = lim;
+  var raw = [
+    ["version", String(a.version), String(b.version)],
+    ["parentId", a.parentId, b.parentId],
+    ["adProofsRoot", a.adProofsRoot, b.adProofsRoot],
+    ["transactionsRoot", a.transactionsRoot, b.transactionsRoot],
+    ["stateRoot", a.stateRoot, b.stateRoot],
+    ["timestampMs", a.timestampMs, b.timestampMs],
+    ["extensionRoot", a.extensionRoot, b.extensionRoot],
+    ["nBits", String(a.nBits), String(b.nBits)],
+    ["difficulty", a.difficulty, b.difficulty],
+    ["height", String(a.height), String(b.height)],
+    ["votesHex", a.votesHex, b.votesHex],
+    ["unparsedHex", a.unparsedHex, b.unparsedHex],
+    ["minerPk", a.minerPk, b.minerPk],
+    ["onetimePk", a.onetimePk, b.onetimePk],
+    ["nonce", a.nonce, b.nonce],
+    ["powDistance", a.powDistance, b.powDistance]
+  ];
+  var fields = [], changedFields = [];
+  raw.forEach(function (r) {
+    var same = r[1] === r[2];
+    if (!same) changedFields.push(r[0]);
+    fields.push({ name: r[0], valueA: r[1], valueB: r[2], same: same });
+  });
+  if (identicalBytes && (changedFields.length !== 0 || a.headerId !== b.headerId)) return fail("Internal error: identical header bytes produced a non-empty difference — nothing was shown rather than an unverified comparison.");
+  if (!identicalBytes && changedFields.length === 0) return fail("Internal error: differing header bytes produced no field difference — nothing was shown rather than an unverified comparison.");
+  var parentLink;
+  if (a.headerId === b.headerId) parentLink = "same";
+  else if (b.parentId === a.headerId) parentLink = "b-follows-a";
+  else if (a.parentId === b.headerId) parentLink = "a-follows-b";
+  else parentLink = "none";
+  return {
+    valid: true, reason: null,
+    verdict: identicalBytes ? "identical" : "changed",
+    headerIdA: a.headerId, headerIdB: b.headerId, sameHeaderId: a.headerId === b.headerId,
+    identicalBytes: identicalBytes,
+    byteLengthA: a.byteLength, byteLengthB: b.byteLength, byteLengthDelta: b.byteLength - a.byteLength,
+    heightA: a.height, heightB: b.height, heightDelta: b.height - a.height,
+    timestampDeltaMs: (BigInt(b.timestampMs) - BigInt(a.timestampMs)).toString(),
+    difficultyDelta: (BigInt(b.difficulty) - BigInt(a.difficulty)).toString(),
+    parentLink: parentLink,
+    firstDiffOffset: firstDiffOffset,
+    fields: fields, changedFields: changedFields, changedCount: changedFields.length
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, inspectBlockHeader, buildBlockHeader };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, inspectBlockHeader, buildBlockHeader, compareBlockHeaders };
 }
 
 if (typeof document !== "undefined") {
@@ -8155,6 +8247,30 @@ if (typeof document !== "undefined") {
       msg += "Timestamp " + res.timestampIso + "; difficulty decoded from nBits: " + res.difficulty + ". ";
       msg += "Serialized header: " + res.headerHex + " ";
       msg += "The build was verified before it is shown: the assembled bytes were re-inspected by tool 62's parser and every field came back identical, and tool 62 will open this exact hex. Building only: assembling a header proves nothing about proof-of-work — it carries whatever solution values you supplied, valid hit or not, and it is a block only if a node accepts it. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("headerdiff-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("headerdiff-result");
+      var res = compareBlockHeaders(document.getElementById("headerdiff-a").value, document.getElementById("headerdiff-b").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var short = function (v) { return v === null ? "(absent in this version's layout)" : (v.length > 24 ? v.slice(0, 24) + "…" : v); };
+      var msg;
+      if (res.verdict === "identical") {
+        msg = "✓ The two headers are byte-for-byte identical — header " + res.headerIdA + ", height " + res.heightA + ", " + res.byteLengthA + " bytes, zero changed fields. ";
+      } else {
+        msg = "✓ The headers differ in " + res.changedCount + " field(s): " + res.changedFields.join(", ") + ". ";
+        res.fields.forEach(function (f) { if (!f.same) msg += f.name + ": " + short(f.valueA) + " → " + short(f.valueB) + ". "; });
+        msg += "First differing byte at offset " + res.firstDiffOffset + "; height delta " + res.heightDelta + ", timestamp delta " + res.timestampDeltaMs + " ms, difficulty delta " + res.difficultyDelta + ". ";
+      }
+      if (res.parentLink === "b-follows-a") msg += "Chain link: the second header's parent ID is the first header's ID — the second follows the first. ";
+      else if (res.parentLink === "a-follows-b") msg += "Chain link: the first header's parent ID is the second header's ID — the first follows the second. ";
+      else if (res.parentLink === "none") msg += "Chain link: neither header names the other as its parent. ";
+      msg += "Both headers were verified before comparison: each was inspected by tool 62, located twice and re-serialized byte-for-byte. Comparison only: a parent link proves only that one header names the other as its parent — it does not prove either sits on the main chain, and neither proof-of-work hit was verified. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

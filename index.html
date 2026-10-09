@@ -984,6 +984,17 @@
         <p id="headerbuild-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="headerdiff-calc">
+        <h3>64 · Block header differ (serialized header ⇄ serialized header → which fields changed, and does one follow the other?)</h3>
+        <p>Tools 62 and 63 open and assemble one header; this one puts two side by side — the header family's differ, in the line of the box, transaction and box-set differs. Paste two serialized headers and it reports exactly which fields changed, in wire order: version, parent ID, AD-proofs root, transactions root, state root, timestamp, extension root, nBits, the difficulty decoded from it, height, votes, extra-fields bytes, and the Autolykos solution fields. Cross-version pairs are compared honestly: a field one layout does not serialize — extra fields exist only on version 2 and up, the one-time key and distance only on version 1 — reads as absent on that side, never as a fabricated value. It also answers the chain question a field list alone cannot: whether the second header's parent ID names the first header's recomputed ID (the second follows the first), the reverse, the same header, or no link at all — the parent/ID link is the chain's own stitching. Deltas are exact: height as an integer, timestamp and difficulty as exact integers, plus the first byte offset at which the two serializations diverge. Both headers are verified before anything is shown: each is inspected by tool 62, which locates it twice and re-serializes it byte-for-byte, and an identical-bytes pair must come back with zero changed fields and equal IDs. The honesty boundary is stated plainly: a parent link proves only that the second names the first as its parent — it does not prove either header sits on the main chain, and neither header's proof-of-work hit is verified; those verdicts belong to a full node. Comparison only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="headerdiff-a">First serialized block header (hex, solution included)</label>
+        <textarea id="headerdiff-a" rows="3" spellcheck="false" placeholder="e.g. 04… (the full serialized header)" autocomplete="off"></textarea>
+        <label for="headerdiff-b">Second serialized block header (hex, solution included)</label>
+        <textarea id="headerdiff-b" rows="3" spellcheck="false" placeholder="e.g. 04… (the full serialized header)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Compare the headers</button>
+        <p id="headerdiff-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1029,6 +1040,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=63"></script>
+<script src="app.js?v=64"></script>
 </body>
 </html>

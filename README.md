@@ -761,6 +761,33 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   first of two inputs, and all-dash lines leave the
   fleet unsigned vectors byte-for-byte unchanged.
 
+- **Transaction output box extractor** — takes a
+  serialized transaction plus an output number and
+  rebuilds that output as a standalone serialized
+  box. Inside a transaction an output travels in an
+  embedded form — no creating transaction ID, no
+  output index, and each token named by an index
+  into the transaction's distinct-token-ID list —
+  which the box tools cannot read; the standalone
+  form restores each token's full 32-byte ID, keeps
+  the value, ErgoTree, creation height and registers
+  verbatim, and appends the creating transaction's
+  ID and the output index, which is exactly the byte
+  string whose Blake2b-256 is the box ID the
+  transaction parser already reports. Verified
+  before it is shown: the rebuilt bytes must
+  re-parse through the box parser with that same
+  box ID and every field equal to the embedded
+  output. Signing a transaction changes none of its
+  output boxes (the signed and unsigned differ
+  vectors extract identically). Honest boundary: the
+  extracted box is the box the transaction creates
+  if it is the one on chain — a pasted transaction
+  may be unsubmitted, and bytes alone do not prove
+  a box exists or is still unspent. Verified against
+  an independent Python oracle over every output of
+  the fleet vectors and the hub synthetics.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

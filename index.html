@@ -769,6 +769,17 @@
         <button type="submit" class="btn primary">Attach the proofs</button>
         <p id="txattach-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txoutbox-calc">
+        <h3>47 · Transaction output box extractor (transaction bytes + an output number → that output as a standalone box)</h3>
+        <p>Inside a transaction, an output is not yet a box the box tools can read: it travels in an embedded form with no creating transaction ID and no output index, and each of its tokens is named by a small index into the transaction's distinct-token-ID list instead of by its full 32-byte ID. Tool 29 reports such an output's box ID, but not its box bytes — so until now an output could not be pasted into the box parser, the box differ or a box set. This tool rebuilds one chosen output in the standalone serialization: the value, ErgoTree and creation height verbatim, each token's full ID restored from the list alongside its amount, the registers verbatim, then the creating transaction's ID and the output index appended — exactly the byte string whose Blake2b-256 is the box ID. The rebuild is verified before it is shown: the standalone bytes must re-parse through tool 15 with that same box ID, the right transaction ID and index in their tail, and every field — value, tree, height, tokens, registers by raw bytes — equal to the embedded output. The honesty boundary is stated plainly: the extracted box is the box this transaction creates if it is the one on chain — a pasted transaction may never have been submitted, and bytes alone do not prove a box exists or is still unspent. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txoutbox-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txoutbox-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <label for="txoutbox-index">Output number (1 = the first output)</label>
+        <input id="txoutbox-index" type="text" inputmode="numeric" placeholder="e.g. 1" autocomplete="off">
+        <button type="submit" class="btn primary">Extract the output as a box</button>
+        <p id="txoutbox-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -814,6 +825,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=46"></script>
+<script src="app.js?v=47"></script>
 </body>
 </html>

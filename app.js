@@ -4317,8 +4317,167 @@ function attachTxProofs(txHex, proofsText) {
   };
 }
 
+/* ---------- Transaction output box extractor ---------- */
+/* A transaction's outputs travel in an EMBEDDED box form that the
+   box tools cannot read: no creating transaction ID, no output
+   index, and each token named by a VLQ index into the transaction's
+   distinct-token-ID list instead of by its full 32-byte ID. This
+   rebuilds one chosen output in the standalone serialization tool
+   15 parses — head (value, ErgoTree, creation height) verbatim,
+   the token count, per token the full ID restored from the list
+   plus the amount VLQ verbatim, the register section verbatim,
+   then the creating transaction's ID and the output index VLQ —
+   which is exactly the byte string whose Blake2b-256 is the box ID
+   tool 29 already reports for that output. The rebuild is verified
+   before it is shown: the standalone bytes must re-parse through
+   tool 15 with that same box ID, the transaction ID and index in
+   their tail, and every field — value, tree, height, tokens,
+   registers by raw constant bytes — equal to what tool 29 read
+   from the embedded form. Verified against an independent Python
+   oracle (oracle-txoutbox.py) over the fleet vectors and the hub
+   synthetics. Honesty boundary: the extracted box is the box this
+   transaction creates IF the transaction is the one on chain — a
+   pasted transaction may be unsubmitted or from a fork, and bytes
+   alone do not prove a box exists unspent on mainnet. */
+function extractTxOutputBox(txHex, indexStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, outputIndex: null, outputCount: null, boxId: null, boxHex: null, byteLength: null, embeddedByteLength: null, valueNano: null, valueErg: null, ergoTree: null, creationHeight: null, tokens: null, registers: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  var raw = indexStr == null ? "" : String(indexStr).trim();
+  if (!/^\d+$/.test(raw)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
+  var target = Number(raw) - 1;
+  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + raw + " to extract.");
+  var cleaned = String(txHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  var pos = 0;
+  var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong box."); };
+  var cnt = readVlqBig(bytes, pos);
+  if (!cnt) return walkFail("the input count");
+  pos += cnt.length;
+  for (var i = 0; i < tx.inputs.length; i++) {
+    pos += 32;
+    var pl = readVlqBig(bytes, pos);
+    if (!pl) return walkFail("input " + (i + 1) + "'s proof length");
+    pos += pl.length + Number(pl.value);
+    var ec = readVlqBig(bytes, pos);
+    if (!ec) return walkFail("input " + (i + 1) + "'s context extension count");
+    pos += ec.length;
+    for (var e = 0; e < Number(ec.value); e++) {
+      var kv = readVlqBig(bytes, pos);
+      if (!kv) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += kv.length;
+      var eType = parseSigmaType(bytes, pos);
+      if (!eType) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += eType.length;
+      var eData = parseSigmaData(eType.node, bytes, pos);
+      if (!eData) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += eData.length;
+    }
+  }
+  var di = readVlqBig(bytes, pos);
+  if (!di) return walkFail("the data input count");
+  pos += di.length + 32 * Number(di.value);
+  var tk = readVlqBig(bytes, pos);
+  if (!tk) return walkFail("the token ID count");
+  pos += tk.length + 32 * Number(tk.value);
+  var oc = readVlqBig(bytes, pos);
+  if (!oc) return walkFail("the output count");
+  pos += oc.length;
+  var feeBytes = hexToBytes(FEE_CONTRACT_HEX);
+  var boxHex = null, embeddedByteLength = null;
+  for (var o = 0; o < tx.outputs.length; o++) {
+    var outStart = pos;
+    var valVlq = readVlqBig(bytes, pos);
+    if (!valVlq) return walkFail("output " + (o + 1) + "'s value");
+    pos += valVlq.length;
+    var isFee = bytes.length - pos >= feeBytes.length;
+    if (isFee) { for (var f = 0; f < feeBytes.length; f++) { if (bytes[pos + f] !== feeBytes[f]) { isFee = false; break; } } }
+    if (isFee) {
+      pos += feeBytes.length;
+    } else if (bytes.length - pos >= 36 && bytes[pos] === 0 && bytes[pos + 1] === 0x08 && bytes[pos + 2] === 0xcd && (bytes[pos + 3] === 0x02 || bytes[pos + 3] === 0x03)) {
+      pos += 36;
+    } else {
+      var sizeVlq = readVlqBig(bytes, pos + 1);
+      if (!sizeVlq) return walkFail("output " + (o + 1) + "'s ErgoTree size");
+      pos += 1 + sizeVlq.length + Number(sizeVlq.value);
+    }
+    var hVlq = readVlqBig(bytes, pos);
+    if (!hVlq) return walkFail("output " + (o + 1) + "'s creation height");
+    pos += hVlq.length;
+    var headEnd = pos;
+    var tc = readVlqBig(bytes, pos);
+    if (!tc) return walkFail("output " + (o + 1) + "'s token count");
+    var tokCountBytes = bytes.subarray(pos, pos + tc.length);
+    pos += tc.length;
+    var tokenFull = [];
+    for (var t = 0; t < Number(tc.value); t++) {
+      var idxVlq = readVlqBig(bytes, pos);
+      if (!idxVlq) return walkFail("output " + (o + 1) + "'s token index");
+      pos += idxVlq.length;
+      var idBytes = hexToBytes(tx.tokenIds[Number(idxVlq.value)]);
+      var amtStart = pos;
+      var amtVlq = readVlqBig(bytes, pos);
+      if (!amtVlq) return walkFail("output " + (o + 1) + "'s token amount");
+      pos += amtVlq.length;
+      for (var ib = 0; ib < idBytes.length; ib++) tokenFull.push(idBytes[ib]);
+      for (var ab = amtStart; ab < pos; ab++) tokenFull.push(bytes[ab]);
+    }
+    var regStart = pos;
+    var rc = readVlqBig(bytes, pos);
+    if (!rc) return walkFail("output " + (o + 1) + "'s register count");
+    pos += rc.length;
+    for (var rg = 0; rg < Number(rc.value); rg++) {
+      var rType = parseSigmaType(bytes, pos);
+      if (!rType) return walkFail("output " + (o + 1) + "'s register " + (rg + 1));
+      pos += rType.length;
+      var rData = parseSigmaData(rType.node, bytes, pos);
+      if (!rData) return walkFail("output " + (o + 1) + "'s register " + (rg + 1));
+      pos += rData.length;
+    }
+    if (o === target) {
+      var parts = [];
+      var pushAll = function (arr) { for (var k = 0; k < arr.length; k++) parts.push(arr[k]); };
+      pushAll(bytes.subarray(outStart, headEnd));
+      pushAll(tokCountBytes);
+      pushAll(tokenFull);
+      pushAll(bytes.subarray(regStart, pos));
+      pushAll(hexToBytes(tx.txId));
+      pushAll(writeVlqBig(BigInt(o)));
+      boxHex = bytesToHex(Uint8Array.from(parts));
+      embeddedByteLength = pos - outStart;
+    }
+  }
+  var out = tx.outputs[target];
+  var pb = parseErgoBox(boxHex);
+  if (!pb.valid) return fail("Internal error: the rebuilt box does not re-parse through the box parser — nothing was shown rather than a wrong extraction.");
+  if (pb.boxId !== out.boxId) return fail("Internal error: the rebuilt box's ID does not match the box ID the transaction parser reports for this output — nothing was shown rather than a wrong extraction.");
+  if (pb.transactionId !== tx.txId || pb.index !== target) return fail("Internal error: the rebuilt box's tail does not read back as this transaction and output — nothing was shown rather than a wrong extraction.");
+  if (pb.valueNano !== out.valueNano || pb.ergoTree !== out.ergoTree || pb.creationHeight !== out.creationHeight) return fail("Internal error: the rebuilt box's value, tree or height differs from the embedded output — nothing was shown rather than a wrong extraction.");
+  var tokensSame = pb.tokens.length === out.tokens.length && pb.tokens.every(function (tok, ti) { return tok.tokenId === out.tokens[ti].tokenId && tok.amount === out.tokens[ti].amount; });
+  var regsSame = pb.registers.length === out.registers.length && pb.registers.every(function (reg, ri) { return reg.rawHex === out.registers[ri].rawHex; });
+  if (!tokensSame || !regsSame) return fail("Internal error: the rebuilt box's tokens or registers differ from the embedded output — nothing was shown rather than a wrong extraction.");
+  return {
+    valid: true, reason: null,
+    txId: tx.txId,
+    outputIndex: target,
+    outputCount: tx.outputs.length,
+    boxId: pb.boxId,
+    boxHex: boxHex,
+    byteLength: pb.byteLength,
+    embeddedByteLength: embeddedByteLength,
+    valueNano: out.valueNano,
+    valueErg: out.valueErg,
+    ergoTree: out.ergoTree,
+    creationHeight: out.creationHeight,
+    tokens: out.tokens,
+    registers: out.registers
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox };
 }
 
 if (typeof document !== "undefined") {
@@ -5338,6 +5497,20 @@ if (typeof document !== "undefined") {
       }
       msg += "Assembled transaction hex: " + res.signedHex + " ";
       msg += "Assembly only, over the bytes you pasted: the proofs were spliced, never verified — a present proof is not a valid one, and only the chain can say whether these proofs spend these boxes. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txoutbox-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txoutbox-result");
+      var res = extractTxOutputBox(document.getElementById("txoutbox-bytes").value, document.getElementById("txoutbox-index").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Output " + (res.outputIndex + 1) + " of " + res.outputCount + " as a standalone box: " + res.byteLength + " bytes (it travels inside the transaction in " + res.embeddedByteLength + " embedded bytes — the standalone form restores each token's full 32-byte ID in place of its list index and appends the creating transaction's ID and the output index). Box ID " + res.boxId + " — the Blake2b-256 of exactly the bytes below, re-parsed through tool 15 with every field matching the embedded output before being shown. Value " + res.valueErg + " ERG (" + res.valueNano + " nanoERG), creation height " + res.creationHeight + ", " + res.tokens.length + " token(s), " + res.registers.length + " register(s), created by transaction " + res.txId + ". ";
+      msg += "Standalone box hex: " + res.boxHex + " ";
+      msg += "Extraction only, over the bytes you pasted: this is the box the transaction creates if it is the one on chain — a pasted transaction may be unsubmitted, and bytes alone do not prove the box exists or is still unspent. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

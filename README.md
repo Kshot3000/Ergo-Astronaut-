@@ -842,6 +842,41 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   Verified against an independent Python oracle over
   the fleet vectors and the hub synthetics.
 
+- **Transaction token extractor** — takes a
+  serialized transaction plus a token number and
+  returns that entry of the transaction's
+  distinct-token-ID list: the full token ID, the
+  outputs that carry it with their amounts, its
+  exact total across outputs, and whether this
+  transaction mints it (a token whose ID equals the
+  first input's box ID is minted by the transaction
+  — exactly how a new token's ID is defined; every
+  other listed token must have come in with the
+  inputs). Every output names its tokens by index
+  into this list, so the list is what gives every
+  other token figure its meaning, yet the parser
+  and the differ show it only inline. Verified
+  before it is shown: the ID is located twice
+  (parser and an independent raw-offset re-walk that
+  must skip every input's proof and context
+  extension constants and every data input to reach
+  the token section at all) and the two must agree
+  byte-for-byte, the unsigned form must re-parse to
+  the same transaction ID with the same list in the
+  same order — the list is signed over verbatim, so
+  signing can never change it (the signed and
+  unsigned differ vectors extract identically) — and
+  the per-output amounts must sum exactly to the
+  parser's total for the token. Honest boundary: an
+  ID is an identifier, never a token — extraction
+  reads it from the pasted bytes and does not prove
+  the token exists on chain, what its name or
+  decimals are, or that the inputs actually carried
+  a non-minted token. Verified against an
+  independent Python oracle over the fleet vectors
+  and a from-scratch synthetic carrying two tokens
+  split across outputs, one of them minted.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

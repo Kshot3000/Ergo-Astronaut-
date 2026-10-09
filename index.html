@@ -802,6 +802,17 @@
         <button type="submit" class="btn primary">Extract the data input</button>
         <p id="txdatainput-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txtoken-calc">
+        <h3>50 · Transaction token extractor (transaction bytes + a token number → that token's ID, where it is carried, and whether this transaction mints it)</h3>
+        <p>Tools 47–49 lift out a transaction's outputs, its inputs' proofs and its data inputs; this completes the section set with the distinct-token-ID list. Every output names its tokens by a small index into that list, so the list is what gives every other token figure in the transaction its meaning — yet tools 29 and 39 only show it inline, and a single listed token could not be lifted out with its position, the outputs that carry it and their amounts, or its minting flag. A token whose ID equals the transaction's first input's box ID is minted by this transaction — exactly how a new token's ID is defined — and every other listed token must have come in with the inputs. This tool returns one chosen token's ID, its carrying outputs and exact total, that flag, and the full list in order. The token ID is verified before it is shown: it is located twice, once by the transaction parser and once by an independent re-walk that must skip every input exactly (box ID, proof, context extension constants) and every data input to reach the token section at all, and the two must agree byte-for-byte on the count and every ID; on top of that, the unsigned form (tool 45) must re-parse to the same transaction ID with the same token list in the same order, because the list is signed over verbatim, and the chosen token's per-output amounts must sum exactly to the parser's total for it. The honesty boundary is stated plainly: an ID is an identifier, never a token — extraction reads it from the bytes you paste, and does not prove the token exists on chain, what its name or decimals are, or that the inputs actually carried a non-minted token. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txtoken-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txtoken-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <label for="txtoken-index">Token number (1 = the first ID in the distinct-token list)</label>
+        <input id="txtoken-index" type="text" inputmode="numeric" placeholder="e.g. 1" autocomplete="off">
+        <button type="submit" class="btn primary">Extract the token</button>
+        <p id="txtoken-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -847,6 +858,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=49"></script>
+<script src="app.js?v=50"></script>
 </body>
 </html>

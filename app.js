@@ -4671,8 +4671,132 @@ function extractTxDataInput(txHex, indexStr) {
   };
 }
 
+/* ---------- Transaction token extractor ---------- */
+/* Every output of a transaction names its tokens by a small
+   index into the transaction's own distinct-token-ID list, so
+   the list is the one section that gives every other token
+   figure in the transaction its meaning. Tools 29 and 39 report
+   the list inline and the per-token totals, but until now no
+   tool lifted one listed token out with its position, the
+   outputs that carry it and their amounts, and the minting
+   flag: a token whose ID equals the transaction's first
+   input's box ID is minted by this transaction (the Ergo
+   minting rule tools 37 and 38 rely on), and every other listed
+   token must have come in with the inputs. This does that for
+   one chosen token, and returns the full list in order. The
+   token ID is verified before it is shown: it is located twice
+   — once by the transaction parser and once by an independent
+   raw-offset re-walk that must first skip every input exactly
+   (box ID, VLQ proof length + proof bytes, context extension
+   constants) and every data input to reach the token section at
+   all — and the re-walked count and every listed ID must agree
+   with the parser's byte-for-byte. On top of that, the unsigned
+   form (tool 45) must re-parse to the same transaction ID with
+   the same token list in the same order (the list is signed
+   over verbatim, so signing can never change it), and the
+   chosen token's per-output amounts must sum exactly to the
+   parser's independently accumulated total for that token.
+   Honesty boundary: an ID is an identifier, never a token —
+   extraction reads it from the pasted bytes; it does not prove
+   the token exists on chain, what its name or decimals are
+   (tool 27 decodes the minting box's registers for that), or
+   that the inputs actually carried a non-minted token.
+   Verified against an independent Python oracle
+   (oracle-txtoken.py) over the fleet vectors and a from-scratch
+   synthetic. */
+function extractTxToken(txHex, indexStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, signed: null, tokenIndex: null, tokenCount: null, tokenId: null, tokenIds: null, tokenLines: null, outputs: null, totalAmount: null, minted: null, byteLength: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  if (tx.tokenIds.length === 0) return fail("This transaction lists no distinct token IDs — its outputs hold no tokens, so there is no token to extract. (Its outputs carry " + tx.totalOutputErg + " ERG in total; tool 47 lifts an output out as a standalone box.)");
+  var raw = indexStr == null ? "" : String(indexStr).trim();
+  if (!/^\d+$/.test(raw)) return fail("Enter the token number as a whole number — 1 is the first token ID in the transaction's distinct-token list, 2 its second, and so on. This transaction lists " + tx.tokenIds.length + " distinct token ID(s).");
+  var target = Number(raw) - 1;
+  if (target < 0 || target >= tx.tokenIds.length) return fail("This transaction lists " + tx.tokenIds.length + " distinct token ID(s), numbered 1 to " + tx.tokenIds.length + " — there is no token " + raw + " to extract from.");
+  var tokenId = tx.tokenIds[target];
+  var cleaned = String(txHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  var pos = 0;
+  var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong token ID."); };
+  var cnt = readVlqBig(bytes, pos);
+  if (!cnt) return walkFail("the input count");
+  pos += cnt.length;
+  for (var i = 0; i < tx.inputs.length; i++) {
+    if (pos + 32 > bytes.length) return walkFail("input " + (i + 1) + "'s box ID");
+    pos += 32;
+    var pl = readVlqBig(bytes, pos);
+    if (!pl) return walkFail("input " + (i + 1) + "'s proof length");
+    pos += pl.length;
+    var wProofLen = Number(pl.value);
+    if (pos + wProofLen > bytes.length) return walkFail("input " + (i + 1) + "'s proof");
+    pos += wProofLen;
+    var ec = readVlqBig(bytes, pos);
+    if (!ec) return walkFail("input " + (i + 1) + "'s context extension count");
+    pos += ec.length;
+    for (var e = 0; e < Number(ec.value); e++) {
+      var kv = readVlqBig(bytes, pos);
+      if (!kv) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += kv.length;
+      var eType = parseSigmaType(bytes, pos);
+      if (!eType) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += eType.length;
+      var eData = parseSigmaData(eType.node, bytes, pos);
+      if (!eData) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += eData.length;
+    }
+  }
+  var dc = readVlqBig(bytes, pos);
+  if (!dc) return walkFail("the data-input count");
+  pos += dc.length;
+  if (Number(dc.value) !== tx.dataInputs.length) return fail("Internal error: the re-walked data-input count does not match the count the transaction parser reports — nothing was shown rather than an unverified extraction.");
+  if (pos + 32 * tx.dataInputs.length > bytes.length) return walkFail("the data inputs");
+  pos += 32 * tx.dataInputs.length;
+  var tc = readVlqBig(bytes, pos);
+  if (!tc) return walkFail("the distinct token ID count");
+  pos += tc.length;
+  if (Number(tc.value) !== tx.tokenIds.length) return fail("Internal error: the re-walked token count does not match the count the transaction parser reports — nothing was shown rather than an unverified extraction.");
+  var walked = [];
+  for (var d = 0; d < Number(tc.value); d++) {
+    if (pos + 32 > bytes.length) return walkFail("token ID " + (d + 1));
+    walked.push(bytesToHex(bytes.subarray(pos, pos + 32)));
+    pos += 32;
+  }
+  if (walked.some(function (w, wi) { return w !== tx.tokenIds[wi]; })) return fail("Internal error: the re-walked token IDs do not match the token IDs the transaction parser reports — nothing was shown rather than an unverified extraction.");
+  var stripped = extractUnsignedTx(cleaned);
+  if (!stripped.valid) return fail("Internal error: the unsigned form could not be extracted for the cross-check — nothing was shown rather than an unverified extraction.");
+  var reParsed = parseErgoTransaction(stripped.unsignedHex);
+  if (!reParsed.valid || reParsed.txId !== tx.txId || reParsed.tokenIds.length !== tx.tokenIds.length || reParsed.tokenIds.some(function (rt, ri) { return rt !== tx.tokenIds[ri]; })) return fail("Internal error: the unsigned form does not carry the same token list in the same order — nothing was shown rather than an unverified extraction.");
+  var outputs = [];
+  var total = 0n;
+  tx.outputs.forEach(function (o) {
+    o.tokens.forEach(function (tk) {
+      if (tk.tokenId === tokenId) { outputs.push({ index: o.index, amount: tk.amount }); total += BigInt(tk.amount); }
+    });
+  });
+  if (outputs.length === 0) return fail("Internal error: the chosen token is listed but no output carries it — nothing was shown rather than an unverified extraction.");
+  var seenTotal = null;
+  for (var tt = 0; tt < tx.tokenTotals.length; tt++) if (tx.tokenTotals[tt].tokenId === tokenId) seenTotal = tx.tokenTotals[tt];
+  if (!seenTotal || BigInt(seenTotal.amount) !== total) return fail("Internal error: the per-output amounts for the chosen token do not sum to the total the transaction parser accumulated — nothing was shown rather than an unverified extraction.");
+  return {
+    valid: true, reason: null,
+    txId: tx.txId,
+    signed: tx.signed,
+    tokenIndex: target,
+    tokenCount: tx.tokenIds.length,
+    tokenId: tokenId,
+    tokenIds: tx.tokenIds.slice(),
+    tokenLines: tx.tokenIds.join("\n"),
+    outputs: outputs,
+    totalAmount: total.toString(),
+    minted: tx.inputs.length > 0 && tx.inputs[0].boxId === tokenId,
+    byteLength: tx.byteLength
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken };
 }
 
 if (typeof document !== "undefined") {
@@ -5738,6 +5862,23 @@ if (typeof document !== "undefined") {
       if (res.alsoSpent) msg += "Note: this same box is also one of the transaction's ordinary inputs, so it IS spent by this transaction as well as read. ";
       msg += "The full data-input list, in order: " + res.dataInputs.join(", ") + " — these are the lines tool 30's data-inputs field takes, one box ID per line. ";
       msg += "The box ID was located twice — by the transaction parser and by an independent re-walk that skips every input's proof and context extension to reach the data-input section — and the two agreed byte-for-byte; the unsigned form (tool 45) re-parses to the same transaction ID with the same data inputs in the same order, because data inputs are signed over verbatim. Extraction only: a data input is a reference, never content — this does not prove the named box exists on chain, is unspent, or holds what a script expects, and nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txtoken-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txtoken-result");
+      var res = extractTxToken(document.getElementById("txtoken-bytes").value, document.getElementById("txtoken-index").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Token " + (res.tokenIndex + 1) + " of " + res.tokenCount + " of transaction " + res.txId + " (" + res.byteLength + " bytes) is token " + res.tokenId + " — carried by output(s) " + res.outputs.map(function (u) { return "#" + (u.index + 1) + " (" + u.amount + " raw)"; }).join(", ") + ", " + res.totalAmount + " raw in total across those outputs. Token amounts are the raw on-chain integers — tool 6 converts them to display form once you know the token's decimals. ";
+      msg += res.minted
+        ? "This token is MINTED by this transaction: its ID is the transaction's first input's box ID, which is exactly how a new token's ID is defined — tool 37 plans such a mint and tool 27 decodes the minting output's EIP-4 registers. "
+        : "This token is not minted here — its ID is not the first input's box ID, so it must have come in with the inputs; these bytes alone do not show the input boxes, so they cannot prove it did. ";
+      msg += "The full distinct-token list, in order: " + res.tokenIds.join(", ") + " — every output names its tokens by their number in this list, which is why the list's order is part of what the transaction signs over. ";
+      msg += "The token ID was located twice — by the transaction parser and by an independent re-walk that skips every input's proof and context extension and every data input to reach the token section — and the two agreed byte-for-byte; the unsigned form (tool 45) re-parses to the same transaction ID with the same token list in the same order, and the per-output amounts above sum exactly to the parser's total for this token. Extraction only: an ID is an identifier, never a token — this does not prove the token exists on chain or what its name or decimals are, and nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

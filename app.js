@@ -5098,8 +5098,184 @@ function extractTxExtension(txHex, inputStr, keyStr) {
   };
 }
 
+/* ---------- Transaction ErgoTree extractor ---------- */
+/* Every output of a transaction is guarded by an ErgoTree -- the
+   script that decides who can spend it -- yet tools 29/38/47 show
+   it only inline inside a whole output or a whole standalone box,
+   and tool 10 inspects a tree only when it is pasted on its own.
+   This lifts ONE chosen output's tree out on its own, in the exact
+   form tool 10 takes, with its header analysis (version, size
+   flag, constant segregation, declared size, proposition length)
+   and, for the chosen network, the addresses the tree corresponds
+   to: the P2PK address when the proposition is the standard
+   ProveDlog form, the P2SH address tool 10 derives (never for a
+   constant-segregated tree, whose reference hash is taken over
+   the proposition with its constants substituted back in -- not
+   reconstructible from raw tree bytes, so none is derived rather
+   than risk a wrong one), and the P2S address that carries the
+   tree verbatim. An ErgoTree carries no network of its own, so
+   the network is an explicit input and only the addresses depend
+   on it -- the tree bytes never do. The tree is verified before
+   it is shown: it is located three times -- once by the
+   transaction parser, once by an independent raw-offset re-walk
+   that must skip every input (proof + extension constants), data
+   input, listed token ID and earlier output exactly and delimits
+   this output's tree the same three ways the parser does (fee
+   contract, plain P2PK shortcut, header + VLQ size), and once by
+   tool 47's standalone box for this output re-parsed with the
+   box parser -- and all three must agree byte-for-byte; the
+   extracted tree must also analyse through tool 10 with agreeing
+   header fields and addresses, its P2S form must build through
+   tool 13, and the unsigned form (tool 45) must re-parse to the
+   same transaction ID carrying the same tree, because signing
+   can never change an output. Honesty boundary: an ErgoTree is
+   the guard, never the proof -- extraction reads it from the
+   pasted bytes; it does not prove the output exists on chain as
+   a box, and an address derived here is the address the tree
+   corresponds to, not evidence anyone controls its key or can
+   satisfy its script. Verified against an independent Python
+   oracle (oracle-txtree.py) over the fleet vectors, the hub
+   synthetics, the signed/unsigned differ pair and a from-scratch
+   synthetic carrying a size-flagged tree. */
+function extractTxTree(txHex, outputStr, networkStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, signed: null, outputIndex: null, outputCount: null, boxId: null, valueNano: null, valueErg: null, treeHex: null, treeByteLength: null, header: null, version: null, sizeFlag: null, segregated: null, declaredSize: null, propositionLength: null, isP2PK: null, publicKey: null, p2pkAddress: null, p2shAddress: null, p2sAddress: null, network: null, byteLength: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  var rawOut = outputStr == null ? "" : String(outputStr).trim();
+  if (!/^\d+$/.test(rawOut)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
+  var target = Number(rawOut) - 1;
+  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + rawOut + " to extract an ErgoTree from.");
+  var out = tx.outputs[target];
+  var treeHex = out.ergoTree;
+  var info = analyzeErgoTree(treeHex, networkStr);
+  if (!info.valid) return fail(info.reason);
+  var cleaned = String(txHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  var pos = 0;
+  var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong ErgoTree."); };
+  var skipConstant = function (what) {
+    var t = parseSigmaType(bytes, pos);
+    if (!t) return false;
+    pos += t.length;
+    var d = parseSigmaData(t.node, bytes, pos);
+    if (!d) return false;
+    pos += d.length;
+    return true;
+  };
+  var cnt = readVlqBig(bytes, pos);
+  if (!cnt) return walkFail("the input count");
+  pos += cnt.length;
+  for (var i = 0; i < tx.inputs.length; i++) {
+    pos += 32;
+    var pl = readVlqBig(bytes, pos);
+    if (!pl) return walkFail("input " + (i + 1) + "'s proof length");
+    pos += pl.length + Number(pl.value);
+    var ec = readVlqBig(bytes, pos);
+    if (!ec) return walkFail("input " + (i + 1) + "'s context extension count");
+    pos += ec.length;
+    for (var e = 0; e < Number(ec.value); e++) {
+      var kv = readVlqBig(bytes, pos);
+      if (!kv) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += kv.length;
+      if (!skipConstant("input " + (i + 1) + "'s context extension")) return walkFail("input " + (i + 1) + "'s context extension");
+    }
+  }
+  var di = readVlqBig(bytes, pos);
+  if (!di) return walkFail("the data input count");
+  pos += di.length + 32 * Number(di.value);
+  var tk = readVlqBig(bytes, pos);
+  if (!tk) return walkFail("the token ID count");
+  pos += tk.length + 32 * Number(tk.value);
+  var oc = readVlqBig(bytes, pos);
+  if (!oc) return walkFail("the output count");
+  pos += oc.length;
+  var feeBytes = hexToBytes(FEE_CONTRACT_HEX);
+  var walkedTree = null;
+  for (var o = 0; o <= target; o++) {
+    var valVlq = readVlqBig(bytes, pos);
+    if (!valVlq) return walkFail("output " + (o + 1) + "'s value");
+    pos += valVlq.length;
+    var tStart = pos;
+    var isFee = bytes.length - pos >= feeBytes.length;
+    if (isFee) { for (var f = 0; f < feeBytes.length; f++) { if (bytes[pos + f] !== feeBytes[f]) { isFee = false; break; } } }
+    if (isFee) {
+      pos += feeBytes.length;
+    } else if (bytes.length - pos >= 36 && bytes[pos] === 0 && bytes[pos + 1] === 0x08 && bytes[pos + 2] === 0xcd && (bytes[pos + 3] === 0x02 || bytes[pos + 3] === 0x03)) {
+      pos += 36;
+    } else {
+      var sizeVlq = readVlqBig(bytes, pos + 1);
+      if (!sizeVlq) return walkFail("output " + (o + 1) + "'s ErgoTree size");
+      pos += 1 + sizeVlq.length + Number(sizeVlq.value);
+    }
+    if (o === target) walkedTree = bytesToHex(bytes.subarray(tStart, pos));
+    var hVlq = readVlqBig(bytes, pos);
+    if (!hVlq) return walkFail("output " + (o + 1) + "'s creation height");
+    pos += hVlq.length;
+    var tc = readVlqBig(bytes, pos);
+    if (!tc) return walkFail("output " + (o + 1) + "'s token count");
+    pos += tc.length;
+    for (var t2 = 0; t2 < Number(tc.value); t2++) {
+      var idxVlq = readVlqBig(bytes, pos);
+      if (!idxVlq) return walkFail("output " + (o + 1) + "'s token index");
+      pos += idxVlq.length;
+      var amtVlq = readVlqBig(bytes, pos);
+      if (!amtVlq) return walkFail("output " + (o + 1) + "'s token amount");
+      pos += amtVlq.length;
+    }
+    var rc = readVlqBig(bytes, pos);
+    if (!rc) return walkFail("output " + (o + 1) + "'s register count");
+    pos += rc.length;
+    for (var r2 = 0; r2 < Number(rc.value); r2++) {
+      if (!skipConstant("output " + (o + 1) + "'s register")) return walkFail("output " + (o + 1) + "'s register");
+    }
+  }
+  if (walkedTree !== treeHex) return fail("Internal error: the re-walked ErgoTree of output " + (target + 1) + " does not match the tree the transaction parser reports — nothing was shown rather than an unverified extraction.");
+  var boxed = extractTxOutputBox(cleaned, String(target + 1));
+  if (!boxed.valid) return fail("Internal error: the output could not be lifted out as a standalone box for the cross-check — nothing was shown rather than an unverified extraction.");
+  var reparsedBox = parseErgoBox(boxed.boxHex);
+  if (!reparsedBox.valid || reparsedBox.ergoTree !== treeHex) return fail("Internal error: the standalone box for output " + (target + 1) + " does not re-parse with the same ErgoTree — nothing was shown rather than an unverified extraction.");
+  var p2s = buildP2SAddress(treeHex, networkStr);
+  if (!p2s.valid || p2s.ergoTree !== treeHex) return fail("Internal error: the extracted tree does not build its P2S address through tool 13 — nothing was shown rather than an unverified extraction.");
+  var stripped = extractUnsignedTx(cleaned);
+  if (!stripped.valid) return fail("Internal error: the unsigned form could not be extracted for the cross-check — nothing was shown rather than an unverified extraction.");
+  var reParsed = parseErgoTransaction(stripped.unsignedHex);
+  if (!reParsed.valid || reParsed.txId !== tx.txId || reParsed.outputs[target].ergoTree !== treeHex) return fail("Internal error: the unsigned form does not re-parse to the same transaction ID carrying the same ErgoTree for output " + (target + 1) + " — nothing was shown rather than an unverified extraction.");
+  var treeBytes = hexToBytes(treeHex);
+  var propLen = treeBytes.length - 1;
+  if (info.sizeFlag) propLen -= readVlqSize(treeBytes, 1).length;
+  if (!info.segregated && info.propositionLength !== propLen) return fail("Internal error: the tree inspector's proposition length does not match the extracted tree — nothing was shown rather than an unverified extraction.");
+  if (info.header !== treeBytes[0]) return fail("Internal error: the tree inspector's header does not match the extracted tree's first byte — nothing was shown rather than an unverified extraction.");
+  return {
+    valid: true, reason: null,
+    txId: tx.txId,
+    signed: tx.signed,
+    outputIndex: target,
+    outputCount: tx.outputs.length,
+    boxId: boxed.boxId,
+    valueNano: out.valueNano,
+    valueErg: out.valueErg,
+    treeHex: treeHex,
+    treeByteLength: treeBytes.length,
+    header: info.header,
+    version: info.version,
+    sizeFlag: info.sizeFlag,
+    segregated: info.segregated,
+    declaredSize: info.declaredSize,
+    propositionLength: propLen,
+    isP2PK: info.isP2PK,
+    publicKey: info.publicKey,
+    p2pkAddress: info.address,
+    p2shAddress: info.p2shAddress,
+    p2sAddress: p2s.address,
+    network: info.network,
+    byteLength: tx.byteLength
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree };
 }
 
 if (typeof document !== "undefined") {
@@ -6213,6 +6389,23 @@ if (typeof document !== "undefined") {
       if (res.keyOccurrences > 1) msg += "⚠ This key occurs " + res.keyOccurrences + " times in this input's extension — a malformed case tool 39 flags, since a script reading the key cannot tell the entries apart; the FIRST entry is the one shown. ";
       msg += "The input spends box " + res.boxId + " (tool 48 lifts its proof out), and its extension carries " + res.extensionCount + (res.extensionCount === 1 ? " entry" : " entries") + " in total, under keys " + res.extensionKeys.join(", ") + ". ";
       msg += "The entry was located three times — by the transaction parser, by an independent re-walk that skips every earlier input exactly and decodes this input's whole extension again, and by tool 48's extraction of the same input — and all three agreed on every entry's key, type, value and raw bytes; the raw constant also decodes standalone through tool 18 to the same type and value, and the unsigned form (tool 45) re-parses to the same transaction ID carrying the same entry, because extensions are kept verbatim in the unsigned form and signing can never change them. Extraction only: an extension value is content, never proof — this does not prove the spent box's script reads this key or reads it as this type, and nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txtree-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txtree-result");
+      var res = extractTxTree(document.getElementById("txtree-bytes").value, document.getElementById("txtree-output").value, document.getElementById("txtree-network").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Output " + (res.outputIndex + 1) + " of " + res.outputCount + " of transaction " + res.txId + " (" + res.byteLength + " bytes) holds " + res.valueErg + " ERG (" + res.valueNano + " nanoERG) in box " + res.boxId + ", guarded by this " + res.treeByteLength + "-byte ErgoTree: " + res.treeHex + " — exactly what tool 10 inspects on its own. ";
+      msg += "Header 0x" + res.header.toString(16).padStart(2, "0") + " (version " + res.version + (res.sizeFlag ? ", size field present, declared proposition size " + res.declaredSize + " bytes" : ", no size field") + (res.segregated ? ", constant-segregated" : "") + "); the proposition is " + res.propositionLength + " bytes. ";
+      if (res.isP2PK) msg += "It is the standard P2PK proposition for public key " + res.publicKey + ", so on " + res.network + " this output pays to the P2PK address " + res.p2pkAddress + ". ";
+      if (res.p2shAddress !== null) msg += "The " + res.network + " P2SH address for this script is " + res.p2shAddress + ", and the P2S address carrying the tree verbatim is " + res.p2sAddress + ". ";
+      else msg += "No P2SH address is derived: a constant-segregated tree's reference hash is taken over the proposition with its constants substituted back in, which raw tree bytes cannot reconstruct — tool 10 declines it for the same reason. The " + res.network + " P2S address carrying the tree verbatim is " + res.p2sAddress + ". ";
+      msg += "The tree was located three times — by the transaction parser, by an independent re-walk that skips every input, data input, listed token ID and earlier output and delimits this output's tree the same three ways, and by the standalone box for this output (tool 47) re-parsed with the box parser — and all three agreed byte-for-byte; the unsigned form (tool 45) re-parses to the same transaction ID carrying the same tree, because signing can never change an output. Extraction only: an ErgoTree is the guard, never the proof — this does not prove the output exists on chain as a box or that anyone can satisfy this script, and nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

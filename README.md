@@ -960,6 +960,55 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   Coll[SByte]s — one holding the text "Ergo" —
   and an SInt at a higher key).
 
+- **Transaction ErgoTree extractor** — takes a
+  serialized transaction plus an output number
+  and a network and returns that one output's
+  ErgoTree on its own, in the exact form the
+  ErgoTree inspector takes: the tree hex and
+  byte length, its header analysis (version,
+  size flag, constant segregation, declared
+  size, proposition length), the output's box
+  ID and value, and the addresses the tree
+  corresponds to on the chosen network (an
+  ErgoTree carries no network of its own, so
+  only the addresses depend on the choice) —
+  the P2PK address when the proposition is the
+  standard ProveDlog form, the P2SH address
+  the inspector derives, and the P2S address
+  carrying the tree verbatim. A
+  constant-segregated tree gets no P2SH
+  address: its reference hash is taken over
+  the proposition with its constants
+  substituted back in, which raw tree bytes
+  cannot reconstruct. Verified before it is
+  shown: the tree is located three times (the
+  transaction parser, an independent
+  raw-offset re-walk that must skip every
+  input, data input, listed token ID and
+  earlier output exactly and delimits this
+  output's tree the same three ways — fee
+  contract, plain P2PK shortcut, header + VLQ
+  size — and the standalone-box extractor's
+  output re-parsed with the box parser) and
+  all three must agree byte-for-byte, the
+  tree must analyse through the ErgoTree
+  inspector with agreeing header fields, its
+  P2S form must build through the P2S builder,
+  and the unsigned form must re-parse to the
+  same transaction ID carrying the same tree —
+  signing can never change an output (the
+  signed and unsigned differ vectors extract
+  identically). Honest boundary: an ErgoTree
+  is the guard, never the proof — extraction
+  reads it from the pasted bytes and does not
+  prove the output exists on chain as a box or
+  that anyone can satisfy the script. Verified
+  against an independent Python oracle over
+  the fleet vectors, the hub synthetics, the
+  differ pair and a from-scratch synthetic
+  carrying a size-flagged tree alongside a
+  plain P2PK output.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

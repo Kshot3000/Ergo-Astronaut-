@@ -839,6 +839,21 @@
         <button type="submit" class="btn primary">Extract the extension entry</button>
         <p id="txext-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txtree-calc">
+        <h3>53 · Transaction ErgoTree extractor (transaction bytes + an output number + a network → that output's guarding script, its header analysis and its pay-to addresses)</h3>
+        <p>Tools 47–52 lift out a transaction's output boxes, its inputs' proofs, its data inputs, its listed tokens, a single output register and a single extension entry; the one per-item section none of them can lift out on its own is a single output's ErgoTree — the script that guards that output and decides who can spend it. Tools 29 and 38 show the tree only inline inside a whole output, tool 47 only inside a whole standalone box, and tool 10 inspects a tree only when it is pasted on its own, so one chosen output's tree could not be lifted out in the exact form tool 10 takes, with its header analysis (version, size flag, constant segregation, declared size, proposition length) and the addresses it corresponds to. This tool returns one chosen output's tree, its box ID and value, and — for the network you pick, because an ErgoTree carries no network of its own and only the addresses depend on it — the P2PK address when the proposition is the standard ProveDlog form, the P2SH address tool 10 derives, and the P2S address that carries the tree verbatim. A constant-segregated tree gets no P2SH address: its reference hash is taken over the proposition with its constants substituted back in, which raw tree bytes cannot reconstruct, so none is derived rather than risk a wrong one. The tree is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every input (proof and extension constants), data input, listed token ID and earlier output exactly and delimits this output's tree the same three ways the parser does (the miner fee contract, the plain P2PK shortcut, header + VLQ size), and once by tool 47's standalone box for this output re-parsed with the box parser, and all three must agree byte-for-byte; the extracted tree must also analyse through tool 10 with agreeing header fields, its P2S form must build through tool 13, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same tree, because signing can never change an output. The honesty boundary is stated plainly: an ErgoTree is the guard, never the proof — extraction reads it from the bytes you paste, and does not prove the output exists on chain as a box or that anyone can satisfy this script. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txtree-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txtree-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <label for="txtree-output">Output number (1 = the transaction's first output)</label>
+        <input id="txtree-output" type="text" inputmode="numeric" placeholder="e.g. 1" autocomplete="off">
+        <label for="txtree-network">Network (for the derived addresses — the tree itself carries no network)</label>
+        <select id="txtree-network">
+          <option selected>Mainnet</option><option>Testnet</option>
+        </select>
+        <button type="submit" class="btn primary">Extract the ErgoTree</button>
+        <p id="txtree-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -884,6 +899,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=52"></script>
+<script src="app.js?v=53"></script>
 </body>
 </html>

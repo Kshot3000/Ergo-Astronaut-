@@ -889,6 +889,17 @@
         <button type="submit" class="btn primary">Extract the extension set</button>
         <p id="txextset-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txtokset-calc">
+        <h3>57 · Transaction output token-set extractor (transaction bytes + an output number → that output's complete token set, in order)</h3>
+        <p>Tool 54 lifts one token entry out of one output, expanded from its index into the transaction's distinct-token list — but an output's tokens are usually a set: a payment output carries several assets that move together, and a minting output's set is the issuance itself. Tools 29 and 47 show a token set only inline inside a whole transaction or a whole standalone box, and tool 50 answers at the level of the whole transaction's distinct-token list, so one chosen output's complete set could not be lifted out on its own. This tool returns every token the output carries, in order, each expanded to its full 32-byte token ID with its position inside the output, its index in the distinct-token list, its exact raw amount and whether this transaction mints it (its ID equals the transaction's first input's box ID), alongside the output's box ID, ERG value and creation height, and the raw token-section hex exactly as serialized inside the output, token-count byte included — the section names tokens by index, so the hex is the compact form, not the expanded IDs. An output carrying no tokens is refused plainly rather than shown an empty set as if it were a result. The set is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every input (proof and context extension constants), data input and earlier output exactly, re-reads the distinct-token list itself and expands this output's token indexes through that re-read list, and once by tool 47's standalone box for the same output re-parsed with the box parser, and all three must agree on every token's ID and amount in order; every token must also extract on its own through tool 54, tool 50's view of each token must place the same amount in this output with the same minted flag, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same set, because signing can never change an output. The honesty boundary is stated plainly: a token set is content, never proof — extraction reads it from the bytes you paste, and does not prove the output exists on chain as a box or that the tokens are genuine instances of the assets their IDs name. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txtokset-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txtokset-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <label for="txtokset-output">Output number (1 = the transaction's first output)</label>
+        <input id="txtokset-output" type="text" inputmode="numeric" placeholder="e.g. 1" autocomplete="off">
+        <button type="submit" class="btn primary">Extract the token set</button>
+        <p id="txtokset-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -934,6 +945,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=56"></script>
+<script src="app.js?v=57"></script>
 </body>
 </html>

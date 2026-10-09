@@ -1127,6 +1127,54 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   synthetic with two extension-carrying
   inputs.
 
+- **Transaction output token-set extractor** — takes a
+  serialized transaction plus an output number
+  and returns that output's complete token set
+  in order: every token it carries, each
+  expanded to its full 32-byte token ID with
+  its position inside the output, its index in
+  the transaction's distinct-token list, its
+  exact raw amount and whether this transaction
+  mints it (its ID equals the first input's box
+  ID), alongside the output's box ID, ERG value
+  and creation height, and the raw token-section
+  hex exactly as serialized inside the output
+  (token-count byte included — the section
+  names tokens by index, so the hex is the
+  compact form, not the expanded IDs). Where
+  the output token extractor lifts one entry,
+  this lifts the set as one record — a payment
+  output's assets move together, and a minting
+  output's set is the issuance itself. An
+  output carrying no tokens is refused plainly.
+  Verified before it is shown: the set is
+  located three times (the transaction parser,
+  an independent raw-offset re-walk that skips
+  every input, data input and earlier output,
+  re-reads the distinct-token list itself and
+  expands this output's indexes through that
+  re-read list, and the standalone-box
+  extractor's output re-parsed with the box
+  parser), every token must also extract on
+  its own through the output token extractor,
+  the transaction-level token extractor's view
+  of each token must place the same amount in
+  this output with the same minted flag, and
+  the unsigned form must re-parse to the same
+  transaction ID carrying the same set —
+  signing can never change an output. Honest
+  boundary: a token set is content, never
+  proof — extraction reads it from the pasted
+  bytes and does not prove the output exists
+  on chain as a box or that the tokens are
+  genuine instances of the assets their IDs
+  name. Verified against an independent Python
+  oracle over the fleet vectors, the differ
+  pair and a from-scratch synthetic with two
+  multi-token outputs whose first output's
+  token indexes are out of distinct-list order
+  and which carries one minted token.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

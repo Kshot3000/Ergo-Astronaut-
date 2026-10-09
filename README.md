@@ -1310,6 +1310,51 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   output, a fee-contract output and a
   two-register output.
 
+- **Transaction distinct-token-set extractor** —
+  takes a serialized transaction and returns its
+  complete distinct-token list in order: every
+  token ID the transaction names, each with its
+  minted flag (a token whose ID equals the first
+  input's box ID is minted by this transaction),
+  the total raw amount of it the outputs carry,
+  and every output that carries it with that
+  output's amount, alongside the minted-token
+  count, the total token entries across all
+  outputs, the raw distinct-token-section hex
+  exactly as serialized (count byte included)
+  and the token IDs one per line. Where the
+  token extractor lifts one listed token, this
+  lifts the set as one record — the distinct
+  list is written once between the data inputs
+  and the outputs, every output's compact token
+  entries reference it by index, and its order
+  is part of the signed bytes. A transaction
+  listing no distinct token IDs is refused
+  plainly. Verified before it is shown: the set
+  is located twice (the transaction parser, and
+  an independent raw-offset re-walk that must
+  skip every input and data input exactly to
+  reach the token section, capturing the section
+  hex from that walk), every listed token must
+  also extract on its own through the token
+  extractor with the same total and minted flag,
+  the output auditor must carry the same
+  per-token totals and minted set, and the
+  unsigned form must re-parse to the same
+  transaction ID carrying the same list in the
+  same order. Honest boundary: a token ID is an
+  identifier, never a token — extraction reads
+  the list from the pasted bytes and does not
+  prove a listed token exists on chain, what
+  its name or decimals are, or that the inputs
+  actually carried a non-minted token in.
+  Verified against an independent Python oracle
+  over the fleet vectors, a fee-contract
+  transaction, multi-token synthetics and a
+  from-scratch synthetic whose three-token list
+  has one token carried by two different
+  outputs.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

@@ -927,6 +927,15 @@
         <p id="txoutset-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="txdtokset-calc">
+        <h3>61 · Transaction distinct-token-set extractor (transaction bytes → that transaction's complete distinct-token list, in order)</h3>
+        <p>Tool 50 lifts one listed token, tool 54 one token of one output and tool 57 one output's token set — but a transaction names its tokens as a set first: the distinct-token list, written once between the data inputs and the outputs, which every output's compact token entries then reference by index. The list's order is itself part of the signed bytes, and it is the transaction's own table of contents for everything token it moves or mints. Tools 29 and 50 show it only inline inside a whole transaction or alongside one chosen token, so the complete set could not be lifted out as one record with each token's footprint across the whole transaction aggregated. This tool returns every distinct token in list order, each with its full token ID, its minted flag (a token whose ID equals the transaction's first input's box ID is minted by this transaction), the total raw amount of it the outputs carry, and every output that carries it with that output's amount, alongside the minted-token count, the total token entries across all outputs, the raw distinct-token-section hex exactly as serialized (count byte included) and the token IDs one per line. A transaction listing no distinct token IDs is refused plainly rather than shown an empty set as if it were a result. The set is verified before it is shown: it is located twice, once by the transaction parser and once by an independent re-walk that must skip every input exactly (box ID, proof, context extension constants) and every data input to reach the token section at all, capturing the section hex from that walk, and the two must agree on the count and every listed ID byte-for-byte; every listed token must also extract on its own through tool 50 with the same ID, total amount, minted flag and carrying outputs, the parser's independently accumulated per-token totals must match the sums over the outputs, tool 38's output audit must carry the same per-token totals and the same minted set, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same list in the same order, because the list is signed over verbatim and signing can never change it. The honesty boundary is stated plainly: a token ID is an identifier, never a token — extraction reads the list from the bytes you paste, and does not prove a listed token exists on chain, what its name or decimals are, or that the inputs actually carried a non-minted token in. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txdtokset-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txdtokset-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Extract the distinct-token set</button>
+        <p id="txdtokset-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -972,6 +981,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=60"></script>
+<script src="app.js?v=61"></script>
 </body>
 </html>

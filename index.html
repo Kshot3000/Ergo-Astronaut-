@@ -867,6 +867,17 @@
         <button type="submit" class="btn primary">Extract the output token</button>
         <p id="txouttoken-result" role="status" aria-live="polite"></p>
       </form>
+
+      <form class="tool" id="txregset-calc">
+        <h3>55 · Transaction output register-set extractor (transaction bytes + an output number → that output's complete register set, in order)</h3>
+        <p>Tool 51 lifts one register out of one output, which is the right grain for checking a single value — but a box's data is usually a set: a minting output's EIP-4 name, description and decimals (R4, R5 and R6) only mean anything together, and an oracle box's registers are one record. Tools 29 and 47 show a register set only inline inside a whole transaction or a whole standalone box, so one chosen output's complete set could not be lifted out on its own. This tool returns every register the output carries, in order from R4, each with its Sigma type, its decoded value and its raw constant bytes (exactly what tool 18 decodes on its own), plus the register's text when it is a Coll[SByte] holding printable UTF-8 — the EIP-4 case — alongside the output's box ID, ERG value and creation height, and the raw register-section hex exactly as serialized, register-count byte included, so the whole set can be carried or compared as one string. An output carrying no registers is refused plainly rather than shown an empty set as if it were a result. The set is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every input (proof and context extension constants), data input, listed token ID and earlier output exactly to reach this output's register section at all, and once by tool 47's standalone box for the same output re-parsed with the box parser, and all three must agree on every register's name, type, value and raw bytes; every register must also extract on its own through tool 51, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same set, because registers are signed over verbatim and signing can never change them. The honesty boundary is stated plainly: a register set is content, never proof — extraction reads it from the bytes you paste, and does not prove the output exists on chain as a box, that bytes shown as text were meant as text, or that any script will read the values the way you expect. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txregset-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txregset-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <label for="txregset-output">Output number (1 = the transaction's first output)</label>
+        <input id="txregset-output" type="text" inputmode="numeric" placeholder="e.g. 1" autocomplete="off">
+        <button type="submit" class="btn primary">Extract the register set</button>
+        <p id="txregset-result" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </section>
 
@@ -912,6 +923,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=54"></script>
+<script src="app.js?v=55"></script>
 </body>
 </html>

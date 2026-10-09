@@ -5411,8 +5411,191 @@ function extractTxOutToken(txHex, outputStr, tokenStr) {
   };
 }
 
+/* ---------- Transaction output register-set extractor ---------- */
+/* Tool 51 lifts ONE register out of ONE output, which is the
+   right grain for checking a single value -- but a box's data is
+   usually a set: a minting output's EIP-4 name, description and
+   decimals only mean anything together, and an oracle box's
+   registers are one record. Until now the whole set in order
+   could only be read inline inside tool 29's whole-transaction
+   report or tool 47's whole standalone box. This returns one
+   chosen output's complete register set as its own list: every
+   register R4-R9 the output carries, in order, each with its
+   Sigma type, decoded value, raw constant bytes (tool 18's
+   input) and -- for a Coll[SByte] holding printable UTF-8, the
+   EIP-4 case -- its text, alongside the output's box ID, ERG
+   value and creation height, and the raw register-section hex
+   exactly as serialized (the register count byte included), so
+   the whole set can be carried or compared as one string. An
+   output carrying no registers is refused plainly rather than
+   shown an empty set as if it were a result. The set is
+   verified before it is shown: it is located three times --
+   once by the transaction parser, once by an independent
+   re-walk that must skip every input (proof and context
+   extension constants), data input, listed token ID and
+   earlier output exactly to reach this output's register
+   section at all, and once by tool 47's standalone box for the
+   same output re-parsed with the box parser -- and all three
+   must agree on every register's name, type, value and raw
+   bytes; every register must also extract on its own through
+   tool 51 with the same type, value and raw bytes, and the
+   unsigned form (tool 45) must re-parse to the same transaction
+   ID carrying the same set, because registers are signed over
+   verbatim and signing can never change them. Honesty boundary:
+   a register set is content, never proof -- extraction reads it
+   from the bytes you paste, and does not prove the output
+   exists on chain as a box, that bytes shown as text were meant
+   as text, or that any script will read the values the way you
+   expect. Verified against an independent Python oracle
+   (oracle-txregset.py) over the fleet vectors, the hub
+   synthetics and a from-scratch synthetic with two
+   register-carrying outputs. */
+function extractTxOutputRegisters(txHex, outputStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, txId: null, signed: null, outputIndex: null, outputCount: null, boxId: null, valueNano: null, valueErg: null, creationHeight: null, registerCount: null, registerNames: null, registers: null, registerSectionHex: null, byteLength: null };
+  };
+  var tx = parseErgoTransaction(txHex);
+  if (!tx.valid) return fail(tx.reason);
+  var rawOut = outputStr == null ? "" : String(outputStr).trim();
+  if (!/^\d+$/.test(rawOut)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
+  var target = Number(rawOut) - 1;
+  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + rawOut + " to extract a register set from.");
+  var out = tx.outputs[target];
+  if (out.registers.length === 0) return fail("Output " + (target + 1) + " of transaction " + tx.txId + " carries no non-mandatory registers — its register section is empty, so there is no register set to extract. (Tool 38 audits what this output does carry, and tool 47 lifts the whole output out as a standalone box.)");
+  var regText = function (reg) {
+    if (reg.type !== "Coll[SByte]") return null;
+    var payload = hexToBytes(reg.value.slice(2));
+    var decoded = utf8Text(payload);
+    var printable = decoded.length > 0;
+    for (var ci = 0; ci < decoded.length; ci++) { var cc = decoded.charCodeAt(ci); if (cc < 0x20 || cc === 0x7f) printable = false; }
+    if (printable && utf8RoundTrips(decoded, Array.from(payload))) return decoded;
+    return null;
+  };
+  var sameSet = function (a, b) {
+    return a.length === b.length && a.every(function (r, i) { return r.name === b[i].name && r.type === b[i].type && r.value === b[i].value && r.rawHex === b[i].rawHex; });
+  };
+  var cleaned = String(txHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  var pos = 0;
+  var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong register set."); };
+  var skipConstant = function () {
+    var t = parseSigmaType(bytes, pos);
+    if (!t) return false;
+    pos += t.length;
+    var d = parseSigmaData(t.node, bytes, pos);
+    if (!d) return false;
+    pos += d.length;
+    return true;
+  };
+  var cnt = readVlqBig(bytes, pos);
+  if (!cnt) return walkFail("the input count");
+  pos += cnt.length;
+  for (var i = 0; i < tx.inputs.length; i++) {
+    pos += 32;
+    var pl = readVlqBig(bytes, pos);
+    if (!pl) return walkFail("input " + (i + 1) + "'s proof length");
+    pos += pl.length + Number(pl.value);
+    var ec = readVlqBig(bytes, pos);
+    if (!ec) return walkFail("input " + (i + 1) + "'s context extension count");
+    pos += ec.length;
+    for (var e = 0; e < Number(ec.value); e++) {
+      var kv = readVlqBig(bytes, pos);
+      if (!kv) return walkFail("input " + (i + 1) + "'s context extension");
+      pos += kv.length;
+      if (!skipConstant()) return walkFail("input " + (i + 1) + "'s context extension");
+    }
+  }
+  var di = readVlqBig(bytes, pos);
+  if (!di) return walkFail("the data input count");
+  pos += di.length + 32 * Number(di.value);
+  var tk = readVlqBig(bytes, pos);
+  if (!tk) return walkFail("the token ID count");
+  pos += tk.length + 32 * Number(tk.value);
+  var oc = readVlqBig(bytes, pos);
+  if (!oc) return walkFail("the output count");
+  pos += oc.length;
+  var feeBytes = hexToBytes(FEE_CONTRACT_HEX);
+  var walkedRegs = null;
+  var walkedSection = null;
+  for (var o = 0; o <= target; o++) {
+    var valVlq = readVlqBig(bytes, pos);
+    if (!valVlq) return walkFail("output " + (o + 1) + "'s value");
+    pos += valVlq.length;
+    var isFee = bytes.length - pos >= feeBytes.length;
+    if (isFee) { for (var f = 0; f < feeBytes.length; f++) { if (bytes[pos + f] !== feeBytes[f]) { isFee = false; break; } } }
+    if (isFee) {
+      pos += feeBytes.length;
+    } else if (bytes.length - pos >= 36 && bytes[pos] === 0 && bytes[pos + 1] === 0x08 && bytes[pos + 2] === 0xcd && (bytes[pos + 3] === 0x02 || bytes[pos + 3] === 0x03)) {
+      pos += 36;
+    } else {
+      var sizeVlq = readVlqBig(bytes, pos + 1);
+      if (!sizeVlq) return walkFail("output " + (o + 1) + "'s ErgoTree size");
+      pos += 1 + sizeVlq.length + Number(sizeVlq.value);
+    }
+    var hVlq = readVlqBig(bytes, pos);
+    if (!hVlq) return walkFail("output " + (o + 1) + "'s creation height");
+    pos += hVlq.length;
+    var tc = readVlqBig(bytes, pos);
+    if (!tc) return walkFail("output " + (o + 1) + "'s token count");
+    pos += tc.length;
+    for (var t2 = 0; t2 < Number(tc.value); t2++) {
+      var idxVlq = readVlqBig(bytes, pos);
+      if (!idxVlq) return walkFail("output " + (o + 1) + "'s token index");
+      pos += idxVlq.length;
+      var amtVlq = readVlqBig(bytes, pos);
+      if (!amtVlq) return walkFail("output " + (o + 1) + "'s token amount");
+      pos += amtVlq.length;
+    }
+    var sectionStart = pos;
+    var rc = readVlqBig(bytes, pos);
+    if (!rc) return walkFail("output " + (o + 1) + "'s register count");
+    pos += rc.length;
+    var regsHere = [];
+    for (var r2 = 0; r2 < Number(rc.value); r2++) {
+      var rStart = pos;
+      var rType = parseSigmaType(bytes, pos);
+      if (!rType) return walkFail("output " + (o + 1) + "'s register R" + (4 + r2));
+      pos += rType.length;
+      var rData = parseSigmaData(rType.node, bytes, pos);
+      if (!rData) return walkFail("output " + (o + 1) + "'s register R" + (4 + r2));
+      pos += rData.length;
+      regsHere.push({ name: "R" + (4 + r2), type: sigmaTypeName(rType.node), value: rData.value, rawHex: bytesToHex(bytes.subarray(rStart, pos)) });
+    }
+    if (o === target) { walkedRegs = regsHere; walkedSection = bytesToHex(bytes.subarray(sectionStart, pos)); }
+  }
+  if (!walkedRegs || !sameSet(walkedRegs, out.registers)) return fail("Internal error: the re-walked register set of output " + (target + 1) + " does not match the register set the transaction parser reports — nothing was shown rather than an unverified extraction.");
+  var boxed = extractTxOutputBox(cleaned, String(target + 1));
+  if (!boxed.valid) return fail("Internal error: the output could not be lifted out as a standalone box for the cross-check — nothing was shown rather than an unverified extraction.");
+  var reparsedBox = parseErgoBox(boxed.boxHex);
+  if (!reparsedBox.valid || reparsedBox.boxId !== out.boxId || !sameSet(reparsedBox.registers, out.registers)) return fail("Internal error: the standalone box for output " + (target + 1) + " does not re-parse carrying the same register set — nothing was shown rather than an unverified extraction.");
+  for (var si = 0; si < out.registers.length; si++) {
+    var solo = extractTxRegister(cleaned, String(target + 1), out.registers[si].name);
+    if (!solo.valid || solo.type !== out.registers[si].type || solo.value !== out.registers[si].value || solo.rawHex !== out.registers[si].rawHex) return fail("Internal error: register " + out.registers[si].name + " of output " + (target + 1) + " does not extract on its own through tool 51 with the same type, value and raw bytes — nothing was shown rather than an unverified extraction.");
+  }
+  var stripped = extractUnsignedTx(cleaned);
+  if (!stripped.valid) return fail("Internal error: the unsigned form could not be extracted for the cross-check — nothing was shown rather than an unverified extraction.");
+  var reParsed = parseErgoTransaction(stripped.unsignedHex);
+  if (!reParsed.valid || reParsed.txId !== tx.txId || !sameSet(reParsed.outputs[target].registers, out.registers)) return fail("Internal error: the unsigned form does not re-parse to the same transaction ID carrying the same register set for output " + (target + 1) + " — nothing was shown rather than an unverified extraction.");
+  return {
+    valid: true, reason: null,
+    txId: tx.txId,
+    signed: tx.signed,
+    outputIndex: target,
+    outputCount: tx.outputs.length,
+    boxId: out.boxId,
+    valueNano: out.valueNano,
+    valueErg: out.valueErg,
+    creationHeight: out.creationHeight,
+    registerCount: out.registers.length,
+    registerNames: out.registers.map(function (r) { return r.name; }),
+    registers: out.registers.map(function (r) { return { name: r.name, type: r.type, value: r.value, rawHex: r.rawHex, text: regText(r) }; }),
+    registerSectionHex: walkedSection,
+    byteLength: tx.byteLength
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters };
 }
 
 if (typeof document !== "undefined") {
@@ -6559,6 +6742,21 @@ if (typeof document !== "undefined") {
       if (res.minted) msg += "This token is minted by this transaction: its ID is the transaction's first input's box ID. ";
       if (res.tokenCount > 1) msg += "The output's full token list, in order: " + res.outputTokens.map(function (t) { return (t.position + 1) + ". " + t.amount + " raw of " + t.tokenId; }).join("; ") + ". ";
       msg += "Token amounts are the raw on-chain integers — tool 6 converts them to display form once you know the token's decimals. The token was located three times — by the transaction parser, by an independent re-walk that expands this output's token index through the distinct-token list, and by the standalone box for this output (tool 47) re-parsed with the box parser — and tool 50's view of the same token places the same amount in this output; the unsigned form (tool 45) re-parses to the same transaction ID carrying the same token, because signing can never change an output. Extraction only: a token entry is copied from the bytes you paste, never verified against the chain — this does not prove the output exists on chain as a box, and nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txregset-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txregset-result");
+      var res = extractTxOutputRegisters(document.getElementById("txregset-bytes").value, document.getElementById("txregset-output").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Output " + (res.outputIndex + 1) + " of " + res.outputCount + " of transaction " + res.txId + " (" + res.byteLength + " bytes) — box " + res.boxId + ", holding " + res.valueErg + " ERG (" + res.valueNano + " nanoERG), created at height " + res.creationHeight + " — carries " + res.registerCount + " register(s), " + res.registerNames.join(", ") + ", in order: ";
+      msg += res.registers.map(function (r) { return r.name + " = " + r.type + " " + r.value + " (raw constant " + r.rawHex + ")" + (r.text !== null ? " — text: “" + r.text + "”" : ""); }).join("; ") + ". ";
+      msg += "The register section exactly as serialized (register-count byte included) is " + res.registerSectionHex + " — each register's raw constant is exactly what tool 18 decodes on its own, and tool 51 lifts any one of them out individually. ";
+      msg += "The set was located three times — by the transaction parser, by an independent re-walk that skips every input, data input, listed token ID and earlier output, and by the standalone box for this output (tool 47) re-parsed with the box parser — and all three agreed on every register; the unsigned form (tool 45) re-parses to the same transaction ID carrying the same set, because signing can never change an output. Extraction only: a register set is content, never proof — this does not prove the output exists on chain as a box, that bytes shown as text were meant as text, or that any script will read the values the way you expect, and nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

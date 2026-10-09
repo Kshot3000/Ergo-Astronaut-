@@ -1045,6 +1045,47 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   tokens split across two outputs, the second
   of them minted.
 
+- **Transaction output register-set extractor** — takes a
+  serialized transaction plus an output number
+  and returns that output's complete register
+  set in order: every register R4–R9 it
+  carries, each with its Sigma type, decoded
+  value, raw constant bytes and — for a
+  Coll[SByte] holding printable UTF-8, the
+  EIP-4 case — its text, alongside the
+  output's box ID, ERG value and creation
+  height, and the raw register-section hex
+  exactly as serialized (register-count byte
+  included). Where the register extractor
+  lifts one register, this lifts the set as
+  one record — a minting output's EIP-4 name,
+  description and decimals only mean anything
+  together. An output carrying no registers is
+  refused plainly. Verified before it is
+  shown: the set is located three times (the
+  transaction parser, an independent
+  raw-offset re-walk that skips every input,
+  data input, listed token ID and earlier
+  output, and the standalone-box extractor's
+  output re-parsed with the box parser), every
+  register must also extract on its own
+  through the register extractor, and the
+  unsigned form must re-parse to the same
+  transaction ID carrying the same set —
+  signing can never change an output. Honest
+  boundary: a register set is content, never
+  proof — extraction reads it from the pasted
+  bytes and does not prove the output exists
+  on chain as a box, that bytes shown as text
+  were meant as text, or that any script will
+  read the values the way you expect.
+  Verified against an independent Python
+  oracle over the fleet vectors, the differ
+  pair and a from-scratch synthetic with two
+  register-carrying outputs, the second
+  holding a negative SLong and a text
+  register.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

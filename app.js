@@ -7027,8 +7027,89 @@ function checkHeaderChain(text) {
   };
 }
 
+/* Tool 66: block header PoW extractor — the header family's
+   strip tool, in the line of tool 45 (the transaction unsigned-
+   form extractor). Tools 62-65 open, assemble, compare and chain
+   whole headers; this one splits ONE serialized header into its
+   two halves: the header WITHOUT proof-of-work (every field up
+   to the Autolykos solution — the bytes a miner iterates over,
+   and the first half of the header ID's pre-image) and the
+   Autolykos solution alone (version 2+: miner public key and
+   nonce, 41 bytes; version 1: miner key, one-time key, nonce and
+   the length-prefixed distance d), each half as its own hex
+   record, alongside every solution field. Neither half is shown
+   anywhere else on the hub: tool 62 reports the two lengths but
+   never the bytes. The split is verified before anything is
+   shown: the header is inspected by tool 62, the solution bytes
+   are re-parsed ALONE from the split offset (their own walk must
+   end exactly at the last byte and reproduce every solution
+   field), the two halves must concatenate back to the pasted
+   bytes exactly, tool 63 must rebuild the identical header from
+   tool 62's fields with the identical split, and the without-PoW
+   half alone must NOT inspect as a header — it is a prefix, not
+   a header. Honesty boundary: the without-PoW bytes alone have
+   no header ID — the ID is Blake2b-256 over BOTH halves together
+   — and splitting a header does not verify its proof-of-work
+   hit; that verdict belongs to a full node. Verified against an
+   independent Python oracle (oracle-headerpow.py) over the three
+   real mainnet headers and the mutation of oracle-header.py,
+   plus the version 3 extra-fields synthetic and the version 1
+   zero-distance synthetic of oracle-headerbuild.py. */
+function extractHeaderPow(headerHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, headerId: null, version: null, autolykosVersion: null, height: null, byteLength: null, withoutPowLength: null, solutionLength: null, withoutPowHex: null, solutionHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null };
+  };
+  var h = inspectBlockHeader(headerHex, "");
+  if (!h.valid) return fail("That header does not inspect: " + h.reason);
+  var cleaned = String(headerHex).replace(/\s+/g, "");
+  var bytes = hexToBytes(cleaned);
+  if (!bytes || bytes.length !== h.byteLength) return fail("Internal error: the header bytes do not line up with the inspection — nothing was shown rather than an unverified split.");
+  var withoutPowHex = bytesToHex(bytes.subarray(0, h.withoutPowLength));
+  var solutionHex = bytesToHex(bytes.subarray(h.withoutPowLength));
+  var sol = bytes.subarray(h.withoutPowLength);
+  /* Re-parse the solution bytes ALONE, from the split offset. */
+  var sp = 0;
+  var sTake = function (n) { if (sp + n > sol.length) return null; var s = sol.subarray(sp, sp + n); sp += n; return s; };
+  var sMiner = sTake(33);
+  if (!sMiner || bytesToHex(sMiner) !== h.minerPk) return fail("Internal error: the solution-only walk does not reproduce the miner public key — nothing was shown rather than an unverified split.");
+  var sOnetime = null, sDistance = null;
+  if (h.version === 1) {
+    sOnetime = sTake(33);
+    if (!sOnetime || bytesToHex(sOnetime) !== h.onetimePk) return fail("Internal error: the solution-only walk does not reproduce the one-time public key — nothing was shown rather than an unverified split.");
+  }
+  var sNonce = sTake(8);
+  if (!sNonce || bytesToHex(sNonce) !== h.nonce) return fail("Internal error: the solution-only walk does not reproduce the nonce — nothing was shown rather than an unverified split.");
+  if (h.version === 1) {
+    var dl = sTake(1);
+    if (!dl) return fail("Internal error: the solution-only walk runs out at the distance length — nothing was shown rather than an unverified split.");
+    var dBytes = sTake(dl[0]);
+    if (!dBytes) return fail("Internal error: the solution-only walk runs out inside the distance — nothing was shown rather than an unverified split.");
+    var dv = 0n;
+    for (var di = 0; di < dBytes.length; di++) dv = (dv << 8n) | BigInt(dBytes[di]);
+    sDistance = dv.toString();
+    if (sDistance !== h.powDistance) return fail("Internal error: the solution-only walk does not reproduce the distance — nothing was shown rather than an unverified split.");
+  }
+  if (sp !== sol.length) return fail("Internal error: the solution-only walk does not end exactly at the last byte — nothing was shown rather than an unverified split.");
+  if (withoutPowHex + solutionHex !== bytesToHex(bytes)) return fail("Internal error: the two halves do not concatenate back to the pasted header — nothing was shown rather than an unverified split.");
+  /* Tool 63 must rebuild the identical header, with the identical split. */
+  var rebuilt = buildBlockHeader({
+    version: String(h.version), parentId: h.parentId, adProofsRoot: h.adProofsRoot, transactionsRoot: h.transactionsRoot, stateRoot: h.stateRoot, timestampMs: h.timestampMs, extensionRoot: h.extensionRoot, nBits: String(h.nBits), height: String(h.height), votesHex: h.votesHex, unparsedHex: h.unparsedHex === null ? "" : h.unparsedHex, minerPk: h.minerPk, nonce: h.nonce, onetimePk: h.onetimePk === null ? "" : h.onetimePk, powDistance: h.powDistance === null ? "" : h.powDistance
+  });
+  if (!rebuilt.valid || rebuilt.headerHex !== bytesToHex(bytes) || rebuilt.withoutPowLength !== h.withoutPowLength || rebuilt.solutionLength !== h.solutionLength) return fail("Internal error: the header builder does not reproduce this header with the same split — nothing was shown rather than an unverified split.");
+  /* The without-PoW half alone is a prefix, never a header. */
+  if (inspectBlockHeader(withoutPowHex, "").valid) return fail("Internal error: the without-PoW half inspects as a complete header on its own — nothing was shown rather than an unverified split.");
+  return {
+    valid: true, reason: null,
+    headerId: h.headerId,
+    version: h.version, autolykosVersion: h.autolykosVersion, height: h.height,
+    byteLength: h.byteLength, withoutPowLength: h.withoutPowLength, solutionLength: h.solutionLength,
+    withoutPowHex: withoutPowHex, solutionHex: solutionHex,
+    minerPk: h.minerPk, onetimePk: h.onetimePk, nonce: h.nonce, powDistance: h.powDistance
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow };
 }
 
 if (typeof document !== "undefined") {
@@ -8382,6 +8463,23 @@ if (typeof document !== "undefined") {
       if (res.timestampRegressions.length) msg += "⚠ Timestamp(s) go backwards at step(s) " + res.timestampRegressions.map(function (i) { return (i + 1); }).join(", ") + " — a later header claims an earlier time than its predecessor. ";
       if (res.duplicates.length) msg += "⚠ The same header appears more than once: " + res.duplicates.map(function (d) { return d.headerId.slice(0, 16) + "… at position(s) " + d.indexes.map(function (i) { return (i + 1); }).join(", "); }).join("; ") + ". ";
       msg += "Every header was verified before the chain was checked: each was inspected by tool 62, located twice and re-serialized byte-for-byte, every step was cross-checked against tool 64's differ, and the per-step deltas sum to the first-to-last totals. Chain checking only: a sequential run proves only that these headers stitch together in this order — it does not prove any of them sits on the main chain, and no proof-of-work hit was verified. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("headerpow-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("headerpow-result");
+      var res = extractHeaderPow(document.getElementById("headerpow-bytes").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Block header " + res.headerId + " (version " + res.version + ", height " + res.height + ") splits at byte " + res.withoutPowLength + " of " + res.byteLength + ": ";
+      msg += "the header without proof-of-work is " + res.withoutPowLength + " bytes — " + res.withoutPowHex + " — and the Autolykos v" + res.autolykosVersion + " solution is " + res.solutionLength + " bytes — " + res.solutionHex + ". ";
+      msg += "Solution fields: miner public key " + res.minerPk + ", nonce " + res.nonce;
+      if (res.autolykosVersion === 1) msg += ", one-time public key " + res.onetimePk + ", distance d = " + res.powDistance;
+      msg += ". ";
+      msg += "The split was verified before it is shown: the header was inspected by tool 62, the solution bytes were re-parsed on their own from the split offset and reproduced every solution field ending exactly at the last byte, the two halves concatenate back to the header you pasted, tool 63 rebuilds the identical header with the identical split, and the without-PoW half alone does not inspect as a header — it is a prefix, not a header. Splitting only: the without-PoW bytes alone have no header ID — the ID is Blake2b-256 over both halves together — and no proof-of-work hit was verified. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

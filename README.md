@@ -1480,6 +1480,31 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   chain, a linked height-gap pair, a reversed
   pair and a duplicated header.
 
+- **Block header PoW extractor** — one
+  serialized header in, its two halves out:
+  the header without proof-of-work (every
+  field up to the Autolykos solution — the
+  bytes a miner iterates over, and the first
+  half of the header ID's pre-image) and the
+  Autolykos solution alone (version 2+: miner
+  key and nonce, 41 bytes; version 1: miner
+  key, one-time key, nonce and the
+  length-prefixed distance d), each as its
+  own hex record with every solution field.
+  The solution bytes are re-parsed on their
+  own from the split offset, the halves must
+  concatenate back to the pasted header, the
+  header builder must reproduce the identical
+  split, and the without-PoW half alone must
+  not inspect as a header. The without-PoW
+  bytes alone have no header ID — the ID is
+  Blake2b-256 over both halves together — and
+  no proof-of-work hit is verified. Verified
+  against an independent Python oracle over
+  the three real mainnet headers, a mutation,
+  a version 3 extra-fields synthetic and a
+  version 1 zero-distance synthetic.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

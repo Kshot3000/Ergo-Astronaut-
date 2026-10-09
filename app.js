@@ -7262,8 +7262,207 @@ function attachHeaderPow(withoutPowHex, solutionHex) {
   };
 }
 
+/* Tool 68: block header PoW verifier — the verdict tools 62–67
+   all deferred to a full node, computed locally and exactly.
+   Every earlier header tool states the same honesty boundary
+   ("no proof-of-work hit was verified; that verdict belongs to
+   a full node"); this tool removes it for the one question it
+   can answer completely offline: does THIS header's Autolykos
+   solution actually satisfy the difficulty its own nBits
+   declares? The computation is the reference one
+   (ergoplatform/ergo AutolykosPowScheme, read from source, not
+   from memory): the message is Blake2b-256 of the
+   header-without-PoW bytes tool 66 splits off; the target is
+   b = q / decodeCompactBits(nBits) with q the secp256k1 group
+   order; the table size N is 2^26, grown by 5% (integer
+   step/100*105) every 50*1024 blocks starting at height
+   600*1024, capped at height 4198400 (calcN). On version 2+:
+   prei8 is the last 8 bytes of Blake2b-256(msg || nonce) as an
+   integer, i = prei8 mod N as 4 big-endian bytes, f =
+   Blake2b-256(i || heightBytes || M) with its first byte
+   dropped, the 32 indexes come from genIndexes(f || msg ||
+   nonce) — Blake2b-256 of the seed, extended by its own first
+   3 bytes, index j the 4 bytes starting at byte j, mod N — each
+   element is Blake2b-256(index || heightBytes || M) with its
+   first byte dropped as an integer, and the hit is
+   Blake2b-256 of the 32-byte big-endian sum, read as an
+   integer; the solution is valid iff hit < b. M is the
+   8192-byte constant: the 8-byte big-endian encodings of
+   0..1023 concatenated. On version 1 the check is the
+   non-outsourceability equation instead: the distance d the
+   solution carries must itself be below b, the miner key pk
+   and one-time key w must be real secp256k1 points, and
+   w^f == g^d * pk must hold, where f is the sum over the same
+   32 indexes (seeded by msg || nonce) of hashModQ(index || M
+   || pk || msg || w), mod q — hashModQ being Blake2b-256
+   re-hashed until the value falls below the largest multiple
+   of q under 2^256, then taken mod q. Verified before anything
+   is shown: the header is inspected by tool 62 and split by
+   tool 66, the difficulty used is re-derived from nBits by
+   the same decoder tool 62 uses and must match, and on version
+   1 both points are decompressed and re-checked against the
+   curve equation (a 02/03 prefix alone, which is all tool 62
+   demands, does not make a point). Verified against an
+   independent Python oracle (oracle-headerpowcheck.py,
+   implementing the same reference definition from scratch with
+   hashlib and pure-Python EC math): the three real mainnet
+   headers validate — the version 4 tip through the grown
+   table N = 227,251,815, the version 1 header through the EC
+   equation — and a timestamp mutation, a flipped nonce byte,
+   both tool-67 cross-joins, and the never-mined builder
+   synthetics all reject. The boundary that remains is stated
+   plainly: a valid hit proves this header's solution meets its
+   declared difficulty — it does not prove the header sits on
+   the main chain or that its parent, timestamps and votes are
+   acceptable; chain selection still belongs to a full node. */
+var AUTOLYKOS_M_BYTES = null;
+function autolykosM() {
+  if (AUTOLYKOS_M_BYTES) return AUTOLYKOS_M_BYTES;
+  var m = new Uint8Array(8192);
+  for (var i = 0; i < 1024; i++) { var v = i; for (var j = 7; j >= 0; j--) { m[i * 8 + j] = v & 0xff; v = v >> 8; } }
+  AUTOLYKOS_M_BYTES = m;
+  return m;
+}
+function bigIntFromBytesBE(bytes) {
+  var v = 0n;
+  for (var i = 0; i < bytes.length; i++) v = (v << 8n) | BigInt(bytes[i]);
+  return v;
+}
+function bigIntToBytesBE(v, len) {
+  var out = new Uint8Array(len);
+  var x = v;
+  for (var i = len - 1; i >= 0; i--) { out[i] = Number(x & 0xffn); x = x >> 8n; }
+  return out;
+}
+function concatBytesList(list) {
+  var total = 0;
+  list.forEach(function (b) { total += b.length; });
+  var out = new Uint8Array(total);
+  var o = 0;
+  list.forEach(function (b) { out.set(b, o); o += b.length; });
+  return out;
+}
+function autolykosTableSize(version, height) {
+  var base = 67108864; /* 2^26 */
+  if (version === 1 || height < 600 * 1024) return base;
+  var h = Math.min(height, 4198400);
+  var iters = Math.floor((h - 600 * 1024) / (50 * 1024)) + 1;
+  var n = base;
+  for (var i = 0; i < iters; i++) n = Math.floor(n / 100) * 105;
+  return n;
+}
+function autolykosGenIndexes(seedBytes, tableSize) {
+  var hash = blake2b256(seedBytes);
+  var ext = new Uint8Array(35);
+  ext.set(hash, 0);
+  ext.set(hash.subarray(0, 3), 32);
+  var out = [];
+  for (var j = 0; j < 32; j++) {
+    var v = ((ext[j] << 24) | (ext[j + 1] << 16) | (ext[j + 2] << 8) | ext[j + 3]) >>> 0;
+    out.push(v % tableSize);
+  }
+  return out;
+}
+function autolykosHashModQ(bytes) {
+  var validRange = ((1n << 256n) / SECP_N) * SECP_N;
+  var hashed = blake2b256(bytes);
+  var bi = bigIntFromBytesBE(hashed);
+  while (bi >= validRange) { hashed = blake2b256(hashed); bi = bigIntFromBytesBE(hashed); }
+  return bi % SECP_N;
+}
+function secpDecompressPoint(compBytes) {
+  if (!compBytes || compBytes.length !== 33 || (compBytes[0] !== 2 && compBytes[0] !== 3)) return null;
+  var x = bigIntFromBytesBE(compBytes.subarray(1));
+  if (x >= SECP_P) return null;
+  var rhs = secpMod(x * x * x + 7n);
+  var y = secpPowMod(rhs, (SECP_P + 1n) / 4n);
+  if (secpMod(y * y) !== rhs) return null;
+  if (((y & 1n) === 1n) !== (compBytes[0] === 3)) y = SECP_P - y;
+  return [x, y, 1n];
+}
+function secpMulScalar(pt, e) {
+  var result = null;
+  var addend = pt;
+  var k = e;
+  while (k > 0n) {
+    if ((k & 1n) === 1n) result = secpAdd(result, addend);
+    addend = secpDouble(addend);
+    k = k >> 1n;
+  }
+  return result;
+}
+function secpPointsEqual(p1, p2) {
+  if (p1 === null || p2 === null) return p1 === p2;
+  var z1z1 = secpMod(p1[2] * p1[2]), z2z2 = secpMod(p2[2] * p2[2]);
+  if (secpMod(p1[0] * z2z2) !== secpMod(p2[0] * z1z1)) return false;
+  return secpMod(p1[1] * p2[2] * z2z2) === secpMod(p2[1] * p1[2] * z1z1);
+}
+function verifyHeaderPow(headerHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, headerId: null, version: null, autolykosVersion: null, height: null, nBits: null, difficulty: null, tableSize: null, target: null, hit: null, powDistance: null, f: null, distanceBelowTarget: null, pointsOnCurve: null, equationHolds: null, powValid: null };
+  };
+  var h = inspectBlockHeader(headerHex, "");
+  if (!h.valid) return fail("That header does not inspect: " + h.reason);
+  var split = extractHeaderPow(headerHex);
+  if (!split.valid) return fail("Internal error: tool 66 does not split this header (" + split.reason + ") — nothing was shown rather than an unverified verdict.");
+  var difficulty = decodeCompactBits(h.nBits);
+  if (difficulty <= 0n || difficulty.toString() !== h.difficulty) return fail("Internal error: the difficulty re-derived from nBits does not match tool 62's — nothing was shown rather than an unverified verdict.");
+  var target = SECP_N / difficulty;
+  var tableSize = autolykosTableSize(h.version, h.height);
+  var withoutPowBytes = hexToBytes(split.withoutPowHex);
+  var msg = blake2b256(withoutPowBytes);
+  var nonceBytes = hexToBytes(h.nonce);
+  var out = {
+    valid: true, reason: null,
+    headerId: h.headerId, version: h.version, autolykosVersion: h.autolykosVersion, height: h.height,
+    nBits: h.nBits, difficulty: difficulty.toString(), tableSize: tableSize, target: target.toString(),
+    hit: null, powDistance: null, f: null, distanceBelowTarget: null, pointsOnCurve: null, equationHolds: null, powValid: null
+  };
+  var M = autolykosM();
+  if (h.version === 1) {
+    var d = BigInt(h.powDistance);
+    out.powDistance = d.toString();
+    out.distanceBelowTarget = d < target;
+    var pkBytes = hexToBytes(h.minerPk);
+    var wBytes = hexToBytes(h.onetimePk);
+    var pkPt = secpDecompressPoint(pkBytes);
+    var wPt = secpDecompressPoint(wBytes);
+    out.pointsOnCurve = pkPt !== null && wPt !== null;
+    out.equationHolds = false;
+    if (out.pointsOnCurve) {
+      var seed1 = concatBytesList([msg, nonceBytes]);
+      var idxs1 = autolykosGenIndexes(seed1, tableSize);
+      var fSum = 0n;
+      idxs1.forEach(function (idx) {
+        fSum = (fSum + autolykosHashModQ(concatBytesList([bigIntToBytesBE(BigInt(idx), 4), M, pkBytes, msg, wBytes]))) % SECP_N;
+      });
+      out.f = fSum.toString();
+      var left = secpMulScalar(wPt, fSum);
+      var right = secpAdd(secpMulScalar(SECP_G, d % SECP_N), pkPt);
+      out.equationHolds = secpPointsEqual(left, right);
+    }
+    out.powValid = out.distanceBelowTarget && out.pointsOnCurve && out.equationHolds;
+    return out;
+  }
+  var heightBytes = bigIntToBytesBE(BigInt(h.height), 4);
+  var pre = blake2b256(concatBytesList([msg, nonceBytes]));
+  var prei8 = bigIntFromBytesBE(pre.subarray(24));
+  var iBytes = bigIntToBytesBE(prei8 % BigInt(tableSize), 4);
+  var fBytes = blake2b256(concatBytesList([iBytes, heightBytes, M])).subarray(1);
+  var seed = concatBytesList([fBytes, msg, nonceBytes]);
+  var idxs = autolykosGenIndexes(seed, tableSize);
+  var sum = 0n;
+  idxs.forEach(function (idx) {
+    sum += bigIntFromBytesBE(blake2b256(concatBytesList([bigIntToBytesBE(BigInt(idx), 4), heightBytes, M])).subarray(1));
+  });
+  var hit = bigIntFromBytesBE(blake2b256(bigIntToBytesBE(sum, 32)));
+  out.hit = hit.toString();
+  out.powValid = hit < target;
+  return out;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, autolykosTableSize };
 }
 
 if (typeof document !== "undefined") {
@@ -8650,6 +8849,26 @@ if (typeof document !== "undefined") {
       if (res.autolykosVersion === 1) msg += ", one-time public key " + res.onetimePk + ", distance d = " + res.powDistance;
       msg += ". ";
       msg += "The join was verified before it is shown: the two halves were parsed separately first — the without-PoW field walk ends exactly at its last byte and its fields re-serialize to the bytes pasted, and the solution walk, read against the prefix's version, ends exactly at its last byte — then tool 62 inspects the joined bytes with every field matching the separate parses, tool 66 splits them back into exactly the halves you supplied, and tool 63 rebuilds the identical header. Joining only: joining proves only that these bytes reassemble — no proof-of-work hit was verified, and a joined header is a block only if a node accepts it. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("headerpowcheck-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("headerpowcheck-result");
+      var res = verifyHeaderPow(document.getElementById("headerpowcheck-bytes").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "";
+      if (res.autolykosVersion === 1) {
+        msg = (res.powValid ? "✓ VALID proof-of-work: " : "✗ NOT valid proof-of-work: ");
+        msg += "block header " + res.headerId + " (version 1, height " + res.height + ", Autolykos v1) — the distance its solution carries is d = " + res.powDistance + " against a target of " + res.target + " (difficulty " + res.difficulty + " from nBits " + res.nBits + ", table size N = " + res.tableSize + "): d is " + (res.distanceBelowTarget ? "below" : "NOT below") + " the target; its miner and one-time keys are " + (res.pointsOnCurve ? "real secp256k1 points" : "NOT both real secp256k1 points") + "; and the non-outsourceability equation w^f == g^d · pk with f = " + res.f + " " + (res.equationHolds ? "holds" : "does NOT hold") + ". ";
+      } else {
+        msg = (res.powValid ? "✓ VALID proof-of-work: " : "✗ NOT valid proof-of-work: ");
+        msg += "block header " + res.headerId + " (version " + res.version + ", height " + res.height + ", Autolykos v2) — its solution's hit is " + res.hit + " against a target of " + res.target + " (difficulty " + res.difficulty + " from nBits " + res.nBits + ", table size N = " + res.tableSize + " at this height): the hit is " + (res.powValid ? "below" : "NOT below") + " the target. ";
+      }
+      msg += "The verdict was computed exactly as a node computes it, before it is shown: the header was inspected by tool 62 and split by tool 66, the difficulty was re-derived from nBits, and the full Autolykos computation (message hash, table indexes, element sum, final hit — or, on version 1, the curve equation) ran locally on the bytes pasted. A valid verdict proves only that this header's solution meets its declared difficulty — not that the header sits on the main chain; chain selection still belongs to a full node. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

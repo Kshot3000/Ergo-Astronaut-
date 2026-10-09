@@ -1531,6 +1531,32 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   extractor splits rejoined to their exact
   headers, plus two cross-joins whose IDs
   only the oracle computes.
+- **Block header PoW verifier** — the
+  verdict every earlier header tool
+  deferred to a full node, computed locally
+  and exactly from the reference Autolykos
+  definition: a serialized header in, and
+  out comes whether its solution actually
+  meets the difficulty its own nBits
+  declares. On version 2+ it recomputes the
+  message hash, the height's table size
+  (2^26, grown 5% every 51,200 blocks from
+  height 614,400), the 32 table indexes,
+  the element sum and the final hit,
+  against the target q / difficulty. On
+  version 1 it checks the
+  non-outsourceability equation instead:
+  the carried distance below the target,
+  both keys real secp256k1 points, and
+  w^f == g^d · pk. A valid verdict proves
+  the solution meets the declared
+  difficulty — not that the header sits on
+  the main chain. Verified against an
+  independent Python oracle: the three
+  real mainnet headers validate, and a
+  timestamp mutation, a flipped nonce, both
+  attacher cross-joins and the never-mined
+  synthetics all reject.
 
 ## Cross-chain integration
 

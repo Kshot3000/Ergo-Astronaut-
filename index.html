@@ -1024,6 +1024,15 @@
         <p id="headerjoin-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="headerpowcheck-calc">
+        <h3>68 · Block header PoW verifier (serialized header → does its Autolykos solution actually meet its declared difficulty?)</h3>
+        <p>Every earlier header tool ends at the same boundary — "no proof-of-work hit was verified; that verdict belongs to a full node". This tool computes that verdict locally, exactly as a node does, from the reference Autolykos definition. Paste a serialized header and it recomputes the whole puzzle: the message (Blake2b-256 of the without-PoW bytes tool 66 splits off), the target b = q / difficulty (q the secp256k1 group order, the difficulty decoded from the header's own nBits), and the table size N for the header's height — 2^26 below height 614,400, then grown 5% every 51,200 blocks. On version 2 and up it derives the 32 table indexes, sums the 32 elements and hashes the sum into the solution's hit: valid exactly when hit &lt; target. On version 1 it checks the non-outsourceability equation instead — the carried distance d below the target, both keys real curve points, and w^f == g^d · pk. Nothing is trusted on the way in: the header is inspected by tool 62 and split by tool 66 first, the difficulty is re-derived from nBits, and on version 1 both keys are decompressed and checked against the curve equation, because a 02/03 prefix alone does not make a point. The boundary that remains is stated plainly: a valid verdict proves this header's solution meets its declared difficulty — it does not prove the header sits on the main chain; chain selection still belongs to a full node. Verifying only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="headerpowcheck-bytes">Serialized block header (hex, as tool 62 takes it)</label>
+        <textarea id="headerpowcheck-bytes" rows="3" spellcheck="false" placeholder="e.g. 04069e46… (the full serialized header, solution included)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Verify the proof-of-work</button>
+        <p id="headerpowcheck-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1069,6 +1078,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=67"></script>
+<script src="app.js?v=68"></script>
 </body>
 </html>

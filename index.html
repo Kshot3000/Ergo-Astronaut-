@@ -918,6 +918,15 @@
         <p id="txinset-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="txoutset-calc">
+        <h3>60 · Transaction output-set extractor (transaction bytes → that transaction's complete output set, in order)</h3>
+        <p>Tools 47, 54, 55 and 57 lift one output as a standalone box, one token of one output, one output's register set and one output's token set — but a transaction creates its outputs as a set: the boxes it brings into existence, in an order that is itself part of the signed bytes (each box's ID embeds its output index), holding the transaction's whole value, its change, its fee output and any tokens it mints (a minted token's ID is the first input's box ID). Tools 29 and 38 show the set only inline inside a whole transaction or a whole output audit, so the complete set could not be lifted out as one record. This tool returns every output in order, each with its box ID, value, ErgoTree, creation height, its complete token list (expanded token ID, amount, distinct-list index and minted flag per token), its complete register list, a fee-contract flag, its own raw serialized slice in the transaction's compact token-index form and its standalone box bytes from tool 47, alongside the total output value, the total token and register entries, the minted-token count, the fee-output count, the raw output-section hex exactly as serialized (count byte included — the section is the transaction's suffix, so it can be checked against the pasted bytes directly), the created box IDs one per line and the standalone boxes one per line for tool 15 or a box-set tool. The set is verified before it is shown: it is located twice, once by the transaction parser and once by an independent re-walk that must skip every input, data input and distinct token ID exactly to reach the output section at all, expanding each output's token indexes through the re-walked distinct list, and the two must agree on every output's value, tree, height, tokens and registers byte-for-byte; every output must also extract on its own through tool 47 as a standalone box that re-parses with the same box ID and fields, every token-carrying output's token set must extract through tool 57, every register-carrying output's register set must extract through tool 55, tool 38's output audit must list the same outputs with the same total and the same fee outputs, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same output set, because outputs are signed over verbatim and signing can never change them. The honesty boundary is stated plainly: an output set is what the pasted bytes would create if the transaction were accepted — extraction does not prove the transaction is valid, will be accepted, or that the created boxes exist on chain yet. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txoutset-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
+        <textarea id="txoutset-bytes" rows="3" spellcheck="false" placeholder="e.g. 02ce2d7c… (the full serialized transaction)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Extract the output set</button>
+        <p id="txoutset-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -963,6 +972,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=59"></script>
+<script src="app.js?v=60"></script>
 </body>
 </html>

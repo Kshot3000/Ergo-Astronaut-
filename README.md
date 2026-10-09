@@ -1256,6 +1256,60 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
   signed+extension, unsigned+extension and
   signed+extensionless inputs.
 
+- **Transaction output-set extractor** — takes a
+  serialized transaction and returns its complete
+  output set in order: every box the transaction
+  creates, each with its box ID, value, ErgoTree,
+  creation height, its complete token list
+  (expanded token ID, amount, distinct-list index
+  and minted flag per token), its complete
+  register list, a fee-contract flag, its own raw
+  serialized slice in the transaction's compact
+  token-index form and its standalone box bytes,
+  alongside the total output value, the total
+  token and register entries, the minted-token
+  count, the fee-output count, the raw
+  output-section hex exactly as serialized (count
+  byte included — the section is the
+  transaction's suffix) and the created box IDs
+  one per line. Where the box, token and register
+  extractors lift one output or one part of one
+  output, this lifts the set as one record — a
+  transaction creates its outputs together, their
+  order is part of the signed bytes (each box ID
+  embeds its output index), and the set holds the
+  transaction's whole value, its change, its fee
+  output and any tokens it mints. Verified before
+  it is shown: the set is located twice (the
+  transaction parser, and an independent
+  raw-offset re-walk that must skip every input,
+  data input and distinct token ID exactly to
+  reach the output section, expanding token
+  indexes through the re-walked distinct list),
+  every output must also extract on its own
+  through the output box extractor, every
+  token-carrying output's token set must extract
+  through the output token-set extractor, every
+  register-carrying output's register set must
+  extract through the output register-set
+  extractor, the output auditor must list the
+  same outputs with the same total and fee
+  outputs, and the unsigned form must re-parse
+  to the same transaction ID carrying the same
+  output set. Honest boundary: an output set is
+  what the pasted bytes would create if the
+  transaction were accepted — extraction reads
+  it from the pasted bytes and does not prove
+  the transaction is valid, will be accepted, or
+  that the created boxes exist on chain yet.
+  Verified against an independent Python oracle
+  over the fleet vectors, a fee-contract
+  transaction, a multi-token synthetic and a
+  from-scratch synthetic whose three outputs
+  combine a minted multi-token register-carrying
+  output, a fee-contract output and a
+  two-register output.
+
 ## Cross-chain integration
 
 **Live today (ecosystem):** Ergo ⇄ Cardano runs through

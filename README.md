@@ -1844,6 +1844,48 @@ headers) — with 79 tools on one page it beats scrolling.
   overlapping, identical, disjoint,
   single-transaction and shared-input
   conflicted merges.
+- **Transaction set intersection** — keeps
+  only what two sets of serialized
+  transactions (one transaction per line
+  in each) both hold: the common
+  transactions keyed by transaction ID and
+  sorted by transaction ID, so the common
+  order is a property of the set, never of
+  paste order, and the common bytes come
+  back in that order ready to paste into
+  the transaction set summarizer or
+  differ. Identity is the transaction ID,
+  so a signed form on one side and the
+  unsigned form on the other are the same
+  common transaction (the first set's
+  bytes are handed back). The common total
+  output value, byte total and per-token
+  totals are exact sums over the common
+  transactions only, taken from the
+  transaction set summarizer itself run
+  over the common bytes, so the two tools
+  can never disagree — and the summarizer's
+  shared-input judgement comes with them:
+  a box spent by more than one common
+  transaction is reported, because
+  agreement about a conflict is still a
+  conflict. Two sets that share nothing
+  are reported plainly as disjoint, with
+  zero totals — an answer, not an error.
+  A single transaction is a valid side;
+  duplicates inside one side (including
+  signed/unsigned twins) are refused. It
+  fetches nothing, proves neither set is
+  confirmed or broadcastable, and
+  agreement between two pasted sets proves
+  neither is the chain's real state.
+  Verified against an independent Python
+  oracle over a one-transaction overlap,
+  identical sides in different orders, a
+  disjoint pair, a subset whose common
+  pair spends the same two boxes, and
+  token totals aggregating across two
+  common transactions.
 
 ## Cross-chain integration
 

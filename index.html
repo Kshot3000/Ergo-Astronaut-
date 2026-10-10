@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>82 tools and counting — find the one you need:</p>
+    <p>83 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -1211,6 +1211,17 @@
         <p id="txmerge-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="txintersect-calc" data-family="transactions">
+        <h3>83 · Transaction set intersection (two sets of serialized transactions, one per line → what both sets hold)</h3>
+        <p>Tool 80 unions two sets of transactions; this keeps only what both sets hold — the overlap that matters when two sources disagree: which transactions do two nodes' mempools agree on, which of a block's transactions do two explorers both report? Paste both sets, one serialized transaction per line in each, and the common transactions come back: sorted by transaction ID, with their bytes handed back in that order, ready to paste into tools 78 or 79. Sorting by transaction ID makes the common order a property of the set, never of paste order. Identity is the transaction ID, so if the two sides carry different forms of one transaction — signed on one side, unsigned on the other — it is common, and the first set's bytes are the ones handed back. The common total output value, byte total and per-token totals are exact sums over the common transactions only, and they are tool 78's own totals for the common bytes — the common set is re-summarized by tool 78 itself before anything is shown, so the two tools can never disagree. The common set keeps tool 78's other judgement too: a box spent by more than one common transaction is a shared input inside the common set — agreement between two sets about two transactions that spend the same box is agreement about a conflict, and it is reported, never hidden. Data inputs are only read, not spent, so they never count. Two sets that share nothing are reported plainly as disjoint, with zero totals — an answer, not an error. Each side is a set in its own right, so a single transaction is a valid side; a transaction pasted twice inside one side — including its signed and unsigned forms, which share one ID — is refused, not counted twice. The honesty boundary is stated plainly: this intersects the bytes you pasted — it fetches nothing, proves neither set is confirmed or broadcastable, and agreement between two pasted sets proves neither is the chain's real state. Intersection only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txintersect-a">First set — serialized transactions, one per line (hex, as tool 29 takes them)</label>
+        <textarea id="txintersect-a" rows="5" spellcheck="false" placeholder="e.g. one full serialized transaction per line, signed or unsigned" autocomplete="off"></textarea>
+        <label for="txintersect-b">Second set — serialized transactions, one per line (hex, as tool 29 takes them)</label>
+        <textarea id="txintersect-b" rows="5" spellcheck="false" placeholder="e.g. one full serialized transaction per line, signed or unsigned" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Intersect the sets</button>
+        <p id="txintersect-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1256,6 +1267,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=83"></script>
+<script src="app.js?v=84"></script>
 </body>
 </html>

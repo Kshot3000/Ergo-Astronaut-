@@ -7025,6 +7025,125 @@ function mergeTxSets(aText, bText) {
   };
 }
 
+/* Tool 83: transaction set intersection — two sets of transactions
+   → what both sets hold. Tool 80 unions two transaction sets;
+   this one keeps only what BOTH hold — the overlap that matters
+   when two sources disagree (which transactions do two nodes'
+   mempools agree on? which of a block's transactions do two
+   explorers both report?): paste both sets and the common
+   transactions come back, sorted by transaction ID like tool
+   80's union, with their bytes handed back in that order so the
+   common set can be pasted straight into tools 78 or 79. Sorting
+   by transaction ID makes the common order a property of the
+   SET, never of paste order. Identity is the transaction ID, so
+   if the two sides carry different forms of one transaction
+   (signed on one side, unsigned on the other — same ID), it is
+   common, and the FIRST set's bytes are the ones handed back.
+   The totals are exact sums over the COMMON transactions only —
+   each common transaction counted once however it was pasted —
+   and they are tool 78's own totals for the common bytes: when
+   two or more transactions are common, the common hex is
+   summarized by tool 78 itself before anything is shown and
+   this tool must agree with it (including its shared-input
+   list), so the two tools can never disagree; a single common
+   transaction's totals are re-derived from its own parse. The
+   common set also keeps tool 78's set-level judgement: a box
+   spent by more than one COMMON transaction is a shared input
+   inside the common set — agreement between two sets about two
+   transactions that spend the same box is agreement about a
+   conflict, reported, never hidden. Data inputs are read, not
+   spent, so they never count. The verdict is "disjoint" when
+   nothing is common (a valid answer, reported with zero totals,
+   never refused), "identical-sets" when the common set is each
+   side exactly, "subset-first" / "subset-second" when the
+   common set is one whole side but not the other, and "overlap"
+   otherwise. Each side is a set in its own right, so a single
+   transaction is a valid side, and a transaction pasted twice
+   inside one side — including its signed and unsigned forms,
+   which share one ID — is refused, not counted twice. The
+   accounting must close before anything is shown (common +
+   only-in-first = first count, common + only-in-second =
+   second count). The honesty boundary: this intersects the
+   bytes you pasted — it fetches nothing, proves neither set is
+   confirmed or broadcastable, and agreement between two pasted
+   sets proves neither is the chain's real state. Verified
+   BEFORE coding against an independent Python oracle
+   (oracle-txintersect.py, exec'ing oracle-txset.py's member
+   walker): a one-transaction overlap, identical sides pasted
+   in different orders, a disjoint pair, a subset whose common
+   pair spends the same two boxes, and token totals
+   aggregating across two common transactions. */
+function intersectTxSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, txCountA: null, txCountB: null, commonCount: null, onlyACount: null, onlyBCount: null, commonIds: null, commonHex: null, totalOutputNano: null, totalOutputErg: null, totalBytes: null, sharedInputs: null, tokenTotals: null, distinctTokens: null };
+  };
+  var a = parseTxSetSideFull(aText, "FIRST");
+  if (!a.valid) return fail("The FIRST set is refused: " + a.reason);
+  var b = parseTxSetSideFull(bText, "SECOND");
+  if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
+  var inB = {};
+  b.entries.forEach(function (e) { inB[e.txId] = true; });
+  var byId = {};
+  a.entries.forEach(function (e) { byId[e.txId] = e; });
+  var commonIds = a.entries.map(function (e) { return e.txId; }).filter(function (id) { return !!inB[id]; }).sort();
+  var onlyACount = a.entries.length - commonIds.length;
+  var onlyBCount = b.entries.length - commonIds.length;
+  if (commonIds.length + onlyACount !== a.entries.length || commonIds.length + onlyBCount !== b.entries.length) return fail("Internal error: the intersection accounting does not close — nothing was shown rather than an unverified intersection.");
+  var common = commonIds.map(function (id) { return byId[id]; });
+  var commonHex = common.map(function (e) { return e.txHex; }).join("\n");
+  var totalOutputNano = "0", totalOutputErg = "0", totalBytes = 0, sharedInputs = [], tokenTotals = [], distinctTokens = 0;
+  if (common.length) {
+    var inMap = {};
+    common.forEach(function (e) { e.inputBoxIds.forEach(function (box) { if (!inMap[box]) inMap[box] = []; inMap[box].push(e.txId); }); });
+    sharedInputs = Object.keys(inMap).filter(function (k) { return inMap[k].length > 1; }).map(function (k) { return { boxId: k, txIds: inMap[k].slice().sort() }; }).sort(function (x, y) { return x.boxId < y.boxId ? -1 : 1; });
+    var tokMap = {};
+    var nanoSum = 0n;
+    for (var ci = 0; ci < common.length; ci++) {
+      var tx = parseErgoTransaction(common[ci].txHex);
+      if (!tx.valid || tx.txId !== common[ci].txId) return fail("Internal error: a common transaction does not re-parse as itself — nothing was shown rather than an unverified intersection.");
+      nanoSum += BigInt(tx.totalOutputNano);
+      tx.tokenTotals.forEach(function (t) {
+        if (!tokMap[t.tokenId]) tokMap[t.tokenId] = { tokenId: t.tokenId, amount: 0n, txCount: 0 };
+        tokMap[t.tokenId].amount += BigInt(t.amount);
+        tokMap[t.tokenId].txCount++;
+      });
+    }
+    tokenTotals = Object.keys(tokMap).map(function (k) { return { tokenId: k, amount: tokMap[k].amount.toString(), txCount: tokMap[k].txCount }; }).sort(function (x, y) { return x.tokenId < y.tokenId ? -1 : 1; });
+    distinctTokens = tokenTotals.length;
+    totalBytes = common.reduce(function (s, e) { return s + e.byteLength; }, 0);
+    var entrySum = common.reduce(function (s, e) { return s + BigInt(e.totalOutputNano); }, 0n);
+    if (nanoSum !== entrySum) return fail("Internal error: the common transactions' output values do not re-sum from their own parses — nothing was shown rather than an unverified intersection.");
+    totalOutputNano = nanoSum.toString();
+    totalOutputErg = nanoToErg(totalOutputNano);
+    if (common.length >= 2) {
+      var s = summarizeTxSet(commonHex);
+      if (!s.valid || s.txCount !== common.length) return fail("Internal error: the common set does not re-summarize as itself — nothing was shown rather than an unverified intersection.");
+      if (s.totalOutputNano !== totalOutputNano || s.totalBytes !== totalBytes) return fail("Internal error: tool 78's totals for the common set disagree with this intersection — nothing was shown rather than an unverified intersection.");
+      var sToks = s.tokenTotals.map(function (t) { return t.tokenId + ":" + t.amount; }).join(",");
+      var myToks = tokenTotals.map(function (t) { return t.tokenId + ":" + t.amount; }).join(",");
+      if (sToks !== myToks) return fail("Internal error: tool 78's token totals for the common set disagree with this intersection — nothing was shown rather than an unverified intersection.");
+      var sShared = s.sharedInputs.map(function (sh) { return { boxId: sh.boxId, txIds: sh.txIndexes.map(function (ix) { return commonIds[ix]; }).sort() }; }).sort(function (x, y) { return x.boxId < y.boxId ? -1 : 1; });
+      if (JSON.stringify(sShared) !== JSON.stringify(sharedInputs)) return fail("Internal error: tool 78's shared-input list for the common set disagrees with this intersection — nothing was shown rather than an unverified intersection.");
+    }
+  }
+  var verdict;
+  if (commonIds.length === 0) verdict = "disjoint";
+  else if (commonIds.length === a.entries.length && commonIds.length === b.entries.length) verdict = "identical-sets";
+  else if (commonIds.length === a.entries.length) verdict = "subset-first";
+  else if (commonIds.length === b.entries.length) verdict = "subset-second";
+  else verdict = "overlap";
+  return {
+    valid: true, reason: null,
+    verdict: verdict,
+    txCountA: a.entries.length, txCountB: b.entries.length,
+    commonCount: commonIds.length, onlyACount: onlyACount, onlyBCount: onlyBCount,
+    commonIds: commonIds, commonHex: commonHex,
+    totalOutputNano: totalOutputNano, totalOutputErg: totalOutputErg, totalBytes: totalBytes,
+    sharedInputs: sharedInputs,
+    tokenTotals: tokenTotals, distinctTokens: distinctTokens
+  };
+}
+
 /* Tool 62: block header inspector. Every other tool on this hub
    works below the header — boxes, transactions, trees. This one
    opens the header itself: the ~220 bytes that head every Ergo
@@ -8935,7 +9054,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -9762,6 +9881,45 @@ if (typeof document !== "undefined") {
         res.sharedInputs.forEach(function (c) { msg += "⚠ Box " + c.boxId + " is spent by " + c.txIds.map(short).join(", ") + " — a box can be spent only once, so at most one of those transactions can ever confirm; all are kept, because which one should win is not a question bytes alone answer. "; });
       }
       msg += "Merged transactions, in transaction-ID order, ready to paste into tools 78 or 79: " + res.mergedHex + " Merge only, over the bytes you pasted: it fetches nothing, proves the merged set is confirmed or broadcastable nowhere. Merged locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txintersect-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txintersect-result");
+      var res = intersectTxSets(document.getElementById("txintersect-a").value, document.getElementById("txintersect-b").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not intersect those sets. Nothing was intersected.";
+        return;
+      }
+      var short = function (id) { return id.slice(0, 16) + "…"; };
+      var msg;
+      if (res.verdict === "disjoint") {
+        msg = "✓ The two sets share no transaction at all — " + res.txCountA + " transaction(s) in the first set, " + res.txCountB + " in the second, and not one transaction ID appears in both, so the common set is empty and its total output value is exactly 0 nanoERG. Disjoint is an answer, not an error: two sets of serialized transactions either share a transaction ID or they do not. Intersection only, over the bytes you pasted: it fetches nothing, proves neither set is confirmed or broadcastable. Intersected locally; nothing was fetched, signed or sent.";
+        out.textContent = msg;
+        return;
+      }
+      msg = "Of " + res.txCountA + " transaction(s) in the first set and " + res.txCountB + " in the second, " + res.commonCount + " transaction(s) are in both (" + res.onlyACount + " only in the first, " + res.onlyBCount + " only in the second). The common transactions' total output value is exactly " + res.totalOutputNano + " nanoERG (" + res.totalOutputErg + " ERG; outputs only — a fee needs the input boxes' values, which the serialized bytes do not carry) in " + res.totalBytes + " bytes in total. ";
+      if (res.verdict === "identical-sets") {
+        msg = "✓ " + msg + "The two sets are identical — every transaction is common, however the lines were ordered. ";
+      } else if (res.verdict === "subset-first") {
+        msg = "✓ " + msg + "The first set is wholly inside the second — the common set is the first set exactly. ";
+      } else if (res.verdict === "subset-second") {
+        msg = "✓ " + msg + "The second set is wholly inside the first — the common set is the second set exactly. ";
+      } else {
+        msg = "✓ " + msg;
+      }
+      if (res.sharedInputs.length) {
+        res.sharedInputs.forEach(function (c) { msg += "⚠ Box " + c.boxId + " is spent by " + c.txIds.map(short).join(", ") + " inside the common set — both sets agree on two transactions that spend the same box, so at most one of them can ever confirm; agreement about a conflict is still a conflict. "; });
+      } else {
+        msg += "No box is spent by more than one common transaction. ";
+      }
+      if (res.tokenTotals.length) {
+        msg += "Tokens across the common transactions: " + res.tokenTotals.map(function (t) { return t.amount + " raw of " + t.tokenId + " (in " + t.txCount + " transaction(s))"; }).join("; ") + " — raw on-chain integers; tool 6 converts them once you know each token's decimals. ";
+      } else {
+        msg += "No tokens in any common transaction. ";
+      }
+      msg += "Common transactions, in transaction-ID order, ready to paste into tools 78 or 79: " + res.commonHex + " Intersection only, over the bytes you pasted: it fetches nothing, proves neither set is confirmed or broadcastable, and agreement between two pasted sets proves neither is the chain's real state. Intersected locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

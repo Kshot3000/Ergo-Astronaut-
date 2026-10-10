@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 88 tools on one page it beats scrolling.
+headers) — with 89 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -825,6 +825,42 @@ headers) — with 88 tools on one page it beats scrolling.
   removes nothing, one token aggregating across two
   remainder boxes, and the swapped pair returning
   the other side's box.
+- **Transaction set difference** — the asymmetric remainder:
+  the transactions the first of two sets of serialized
+  transactions (one transaction per line in each) holds
+  that the second does not — what is left of a set after
+  another set is taken away, which the symmetric difference
+  cannot hand back on its own because it returns both sides
+  combined. The remainder transactions are keyed by
+  transaction ID and sorted by transaction ID, and their
+  bytes — always the first set's bytes, the remainder's
+  owning side — come back in that order ready to paste
+  into the transaction set summarizer or differ. The
+  remainder total output value, byte total and per-token
+  totals are exact sums over the remainder transactions
+  only, taken from the transaction set summarizer itself
+  run over the remainder bytes, so the two tools can never
+  disagree — and the summarizer's shared-input judgement
+  comes with them: a box spent by more than one remainder
+  transaction is reported, because what is left after a
+  subtraction can still spend the same box twice. A second
+  set that covers the first is reported plainly as
+  emptying it, with zero totals — an answer, not an
+  error; a disjoint second set removes nothing. A single
+  transaction is a valid side; an unparseable line or a
+  duplicated transaction inside one side (including
+  signed/unsigned twins) refuses the whole subtraction
+  with the side and line named. It fetches nothing, proves
+  neither set is confirmed or broadcastable, and a
+  remainder between two pasted sets proves neither is the
+  chain's real state. Verified against an independent
+  Python oracle over a partial remainder whose remaining
+  pair shares inputs, a first set wholly covered by the
+  second, identical sides, a disjoint pair that removes
+  nothing, a remaining pair spending the same two boxes,
+  token totals aggregating across two remaining
+  transactions, and the swapped pair returning the other
+  side's transaction.
 - **Unsigned-form extractor** — takes one serialized
   transaction and returns the unsigned form its
   transaction ID is computed over: every input's

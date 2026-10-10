@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>88 tools and counting — find the one you need:</p>
+    <p>89 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -1277,6 +1277,17 @@
         <p id="txxor-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="txminus-calc" data-family="transactions">
+        <h3>89 · Transaction set difference (first set of serialized transactions minus the second → what remains)</h3>
+        <p>Tools 80, 83 and 86 union, intersect and symmetric-difference two sets of transactions; this is the asymmetric operation none of them hands back — what is left of one set after another set is taken away: a mempool snapshot minus the transactions a block already confirmed, a batch minus the transactions another source already accounted for. Tool 86 splits its difference into only-in-the-first and only-in-the-second but hands the two sides back combined, so the first side's remainder cannot be pasted onward alone; here the remainder comes back by itself. Paste both sets, one serialized transaction per line in each, and the remainder transactions come back: sorted by transaction ID, with the first set's bytes handed back in that order, ready to paste into tools 78 or 79. Sorting by transaction ID makes the remainder order a property of the set, never of paste order. Identity is the transaction ID, so a signed form on one side and the unsigned form on the other are the same transaction — removed, not remaining. Direction matters: the first set minus the second is a different question from the reverse, and every report says so. The remainder total output value, byte total and per-token totals are exact sums over the remainder transactions only, and they are tool 78's own totals for the remainder bytes — the remainder set is re-summarized by tool 78 itself before anything is shown, so the two tools can never disagree. The remainder set keeps tool 78's other judgement too: a box spent by more than one remainder transaction is a shared input inside the remainder set — what is left after the subtraction can still spend the same box twice, so at most one of them can ever confirm. Data inputs are only read, not spent, so they never count. A second set that covers the first is reported plainly as emptying it, with zero totals — an answer, not an error. Each side is a set in its own right, so a single transaction is a valid side; a transaction pasted twice inside one side — including its signed and unsigned forms, which share one ID — is refused, not counted twice. The honesty boundary is stated plainly: this subtracts the bytes you pasted — it fetches nothing, proves neither set is confirmed or broadcastable, and a remainder between two pasted sets proves neither is the chain's real state. Subtraction only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txminus-a">First set — serialized transactions, one per line (hex, as tool 29 takes them)</label>
+        <textarea id="txminus-a" rows="5" spellcheck="false" placeholder="e.g. one full serialized transaction per line, signed or unsigned" autocomplete="off"></textarea>
+        <label for="txminus-b">Second set — the transactions to take away (hex, one per line)</label>
+        <textarea id="txminus-b" rows="5" spellcheck="false" placeholder="e.g. one full serialized transaction per line, signed or unsigned" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Subtract the second set</button>
+        <p id="txminus-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1322,6 +1333,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=89"></script>
+<script src="app.js?v=90"></script>
 </body>
 </html>

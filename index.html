@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>78 tools and counting — find the one you need:</p>
+    <p>79 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -1167,6 +1167,17 @@
         <p id="txset-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="txsetdiff-calc" data-family="transactions">
+        <h3>79 · Transaction set differ (two sets of serialized transactions, one per line → how the sets differ)</h3>
+        <p>Tool 78 summarizes one set of transactions; tools 44 and 76 diff sets of boxes and headers — this is the transaction family's set comparison. Paste two sets, one serialized transaction per line in each — two nodes' mempools, one block's transactions copied from two explorers, a batch before and after an edit — and it compares them by transaction ID: what is in both (the common transactions), what is only in the first, and what is only in the second, each one-sided entry carrying its exact total output value and byte length. The totals are exact: each side's total output value in BigInt with the signed delta between them (outputs only — a fee needs the input boxes' values, which the serialized bytes do not carry), and each side's total bytes with its signed delta. The verdict no single-set tool can give is the <strong>conflicting input</strong>: a box spent in both sets, but by different transactions — the two sets disagree about how that box is spent, and since a box can be spent only once, at most one side's spend of it can ever confirm. A box spent by the very same transaction on both sides is agreement, not conflict, and data inputs are only read, never spent, so they can never conflict. A single transaction is a valid side (tool 78's two-transaction minimum is a summarizer rule, not a set rule), and a transaction pasted twice inside one side — including its signed and unsigned forms, which share one ID — is refused rather than counted twice. Every transaction is parsed by tool 29 first, and each one's output value is re-summed from its own outputs before it counts. The comparison covers only the bytes you paste — it does not say either set is confirmed or broadcastable, and which set is the right one is not a question bytes alone answer. Compared locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txsetdiff-a">First set — serialized transactions, one per line (hex, as tool 29 takes them)</label>
+        <textarea id="txsetdiff-a" rows="5" spellcheck="false" placeholder="e.g. one full serialized transaction per line, signed or unsigned" autocomplete="off"></textarea>
+        <label for="txsetdiff-b">Second set — serialized transactions, one per line (hex, as tool 29 takes them)</label>
+        <textarea id="txsetdiff-b" rows="5" spellcheck="false" placeholder="e.g. one full serialized transaction per line, signed or unsigned" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Compare the sets</button>
+        <p id="txsetdiff-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1212,6 +1223,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=79"></script>
+<script src="app.js?v=80"></script>
 </body>
 </html>

@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 78 tools on one page it beats scrolling.
+headers) — with 79 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1757,6 +1757,25 @@ headers) — with 78 tools on one page it beats scrolling.
   three real/fleet transactions, an
   output-variant pair over identical
   inputs, and a two-mint set.
+- **Transaction set differ** — two sets
+  of serialized transactions compared
+  by transaction ID: common, only-in-
+  first and only-in-second (each with
+  its exact output value and size),
+  each side's exact total output value
+  and total bytes with signed deltas,
+  and the conflicting-input verdict —
+  a box spent in both sets by
+  different transactions, where at
+  most one side's spend can ever
+  confirm. A single transaction is a
+  valid side; duplicates inside one
+  side (including signed/unsigned
+  twins) are refused. Verified against
+  an independent Python oracle over
+  identical, reordered, conflicting,
+  subset, pure-conflict, disjoint and
+  partially-conflicting set pairs.
 
 ## Cross-chain integration
 

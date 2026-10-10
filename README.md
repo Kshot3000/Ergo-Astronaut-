@@ -716,6 +716,28 @@ headers) — with 79 tools on one page it beats scrolling.
   plus a from-scratch token-amount variant: identical,
   reordered, one box swapped, a token total changed and
   a strict subset.
+- **Box set merger** — combines two sets of serialized
+  boxes (one box per line in each) into their union:
+  boxes are keyed by box ID and sorted by box ID, so
+  the merged order is a property of the set, never of
+  paste order, and the merged bytes come back in that
+  order ready to paste into the box set summarizer or
+  differ. A box both sets carried is counted once —
+  a duplicate removed, never a double count — and the
+  merged ERG total, byte total, combined size minimum
+  and per-token totals are exact sums over the union,
+  taken from the box set summarizer itself run over
+  the merged bytes, so the two tools can never
+  disagree. A single box is a valid side; an
+  unparseable line or a duplicated box inside one
+  side refuses the whole merge with the side and line
+  named. It fetches nothing and is not a live wallet
+  balance. Verified against an independent Python
+  oracle over fleet-sdk's published box vectors plus
+  a from-scratch token-amount variant: overlapping,
+  identical sides in different orders, disjoint,
+  identical single boxes collapsing, and one token
+  aggregating across the two sides.
 - **Unsigned-form extractor** — takes one serialized
   transaction and returns the unsigned form its
   transaction ID is computed over: every input's

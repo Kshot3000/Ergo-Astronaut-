@@ -4134,6 +4134,89 @@ function compareBoxSets(aText, bText) {
   };
 }
 
+/* ---------- Box set merger (two sets of boxes -> their union) ---------- */
+/* Tool 44 compares two box sets; this one COMBINES them, which is
+   the other half of working with box collections from two sources
+   (a wallet's boxes gathered from two explorers, a UTXO snapshot
+   assembled in two parts): paste both sets and the merged set
+   comes back — the union by box ID, sorted by box ID, with boxes
+   both sets carried counted once and the merged bytes handed back
+   in that sorted order so the result can be pasted straight into
+   tools 33 or 44. Sorting by box ID makes the merged order a
+   property of the SET, never of paste order — boxes carry no
+   height-like natural order inside a set, so the ID order is the
+   one deterministic order every merger of the same two sets must
+   produce. A shared box is a duplicate removed, never a double
+   count: the merged ERG total, byte total, size-minimum total and
+   per-token totals are the exact sums over the UNION, each box
+   counted once however many sets carried it — and they are tool
+   33's own totals for the merged bytes, because the merged hex is
+   summarized by tool 33 itself before anything is shown, so this
+   tool can never disagree with the summarizer. The verdict is
+   "single-box" when the union collapses to one box,
+   "identical-sets" when the union is each side exactly, and
+   "merged" otherwise. Each side is a set in its own right, so a
+   single box is a valid side, and tool 33's strictness carries
+   over: an unparseable line, or the same box listed twice inside
+   one side, refuses the whole merge with the side and line named.
+   The accounting must close before anything is shown (merged +
+   duplicates removed = first count + second count, and duplicates
+   removed must equal the shared count). The honesty boundary:
+   this merges the bytes you pasted — it fetches nothing, is not
+   a live wallet balance, and proves the merged set is the
+   wallet's real UTXO set nowhere. Verified BEFORE coding against
+   an independent Python oracle (oracle-boxmerge.py, exec'ing
+   oracle-boxsetdiff.py's from-scratch box reader/writer): an
+   overlapping merge, identical sides pasted in different orders,
+   a disjoint merge, identical single boxes collapsing, and a
+   token carried by different boxes on the two sides aggregating
+   into one merged total. */
+function mergeBoxSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, boxCountA: null, boxCountB: null, mergedCount: null, sharedCount: null, duplicatesRemoved: null, mergedIds: null, mergedHex: null, totalNano: null, totalErg: null, totalBytes: null, minTotalNano: null, minTotalErg: null, allMeetMinimum: null, belowMinimum: null, tokenTotals: null, distinctTokens: null };
+  };
+  var a = summarizeBoxSet(aText, "");
+  if (!a.valid) return fail("The FIRST set is refused: " + a.reason);
+  var b = summarizeBoxSet(bText, "");
+  if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
+  var hexOf = function (text) {
+    var map = {};
+    String(text).split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
+      var parsed = parseErgoBox(line);
+      if (parsed.valid) map[parsed.boxId] = line.replace(/\s+/g, "").toLowerCase();
+    });
+    return map;
+  };
+  var hexA = hexOf(aText), hexB = hexOf(bText);
+  var inB = {};
+  b.boxes.forEach(function (x) { inB[x.boxId] = true; });
+  var sharedCount = a.boxes.filter(function (x) { return !!inB[x.boxId]; }).length;
+  var byId = {};
+  a.boxes.forEach(function (x) { byId[x.boxId] = hexA[x.boxId]; });
+  b.boxes.forEach(function (x) { byId[x.boxId] = hexB[x.boxId]; });
+  var mergedIds = Object.keys(byId).sort();
+  var duplicatesRemoved = a.boxCount + b.boxCount - mergedIds.length;
+  if (duplicatesRemoved !== sharedCount || mergedIds.length + duplicatesRemoved !== a.boxCount + b.boxCount) return fail("Internal error: the merge accounting does not close — nothing was shown rather than an unverified merge.");
+  var mergedHex = mergedIds.map(function (id) { return byId[id]; }).join("\n");
+  var s = summarizeBoxSet(mergedHex, "");
+  if (!s.valid || s.boxCount !== mergedIds.length) return fail("Internal error: the merged set does not re-summarize as itself — nothing was shown rather than an unverified merge.");
+  var verdict;
+  if (mergedIds.length === 1) verdict = "single-box";
+  else if (mergedIds.length === a.boxCount && mergedIds.length === b.boxCount) verdict = "identical-sets";
+  else verdict = "merged";
+  return {
+    valid: true, reason: null,
+    verdict: verdict,
+    boxCountA: a.boxCount, boxCountB: b.boxCount,
+    mergedCount: mergedIds.length, sharedCount: sharedCount, duplicatesRemoved: duplicatesRemoved,
+    mergedIds: mergedIds, mergedHex: mergedHex,
+    totalNano: s.totalNano, totalErg: s.totalErg, totalBytes: s.totalBytes,
+    minTotalNano: s.minTotalNano, minTotalErg: s.minTotalErg,
+    allMeetMinimum: s.allMeetMinimum, belowMinimum: s.belowMinimum,
+    tokenTotals: s.tokenTotals, distinctTokens: s.distinctTokens
+  };
+}
+
 /* ---------- Unsigned-form extractor ----------
    Tool 29 reports a transaction's ID, and tool 42 reports the
    unsigned size, but neither shows the unsigned bytes themselves —
@@ -8765,7 +8848,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -10086,6 +10169,31 @@ if (typeof document !== "undefined") {
         msg += "A box whose contents changed at all is a different box, so it appears above as one removed plus one added — tool 41 diffs two single boxes field by field. ";
       }
       msg += "Comparison only, over the bytes you pasted: it fetches nothing and is not a live wallet balance, and which set is the right one is not a question bytes alone answer. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("boxmerge-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("boxmerge-result");
+      var res = mergeBoxSets(document.getElementById("boxmerge-a").value, document.getElementById("boxmerge-b").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not merge those sets. Nothing was merged.";
+        return;
+      }
+      var msg = "Merged " + res.boxCountA + " + " + res.boxCountB + " box(es) into " + res.mergedCount + " — " + res.sharedCount + " box(es) were in both sets and are counted once (" + res.duplicatesRemoved + " duplicate(s) removed). The merged set holds exactly " + res.totalNano + " nanoERG (" + res.totalErg + " ERG) in " + res.totalBytes + " bytes in total, against a combined size minimum of " + res.minTotalNano + " nanoERG (" + res.minTotalErg + " ERG) — " + (res.allMeetMinimum ? "every merged box meets its own size minimum." : "below minimum: " + res.belowMinimum.map(function (x) { return "box " + x.boxId + " is " + x.shortfallNano + " nanoERG short of its " + x.minNano + " minimum"; }).join("; ") + ".") + " ";
+      if (res.verdict === "single-box") {
+        msg = "✓ " + msg + "The two sets collapse to that one box. ";
+      } else if (res.verdict === "identical-sets") {
+        msg = "✓ " + msg + "The two sets are identical — the union is each side exactly, however the lines were ordered. ";
+      } else {
+        msg = "✓ " + msg;
+      }
+      if (res.tokenTotals.length) {
+        msg += "Tokens across the merged set: " + res.tokenTotals.map(function (t) { return t.amount + " raw of " + t.tokenId + " (in " + t.boxCount + " box(es))"; }).join("; ") + " — raw on-chain integers; tool 6 converts them once you know each token's decimals. ";
+      } else {
+        msg += "No tokens in any merged box. ";
+      }
+      msg += "Merged boxes, in box-ID order, ready to paste into tools 33 or 44: " + res.mergedHex + " Merge only, over the bytes you pasted: it fetches nothing and is not a live wallet balance. Merged locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

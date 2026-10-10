@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>68 tools and counting — find the one you need:</p>
+    <p>69 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -1049,6 +1049,19 @@
         <p id="headerpowcheck-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="nbits-calc" data-family="codecs">
+        <h3>69 · nBits ⇄ difficulty codec (the compact number every block header carries)</h3>
+        <p>Every header the tools above inspect carries its difficulty as a 32-bit <strong>nBits</strong> — a compact float-like spelling: the top byte is a size (how many bytes the difficulty takes), the low 23 bits a mantissa, and the bit between them a sign, so the difficulty is mantissa × 256<sup>size−3</sup>, negated if the sign bit is set. Tools 62 and 68 decode it silently on the way through; this tool is that codec on its own, in both directions, ported from the reference node's DifficultySerializer. Decode takes an nBits in decimal or 0x-hex and gives the exact difficulty, the size and mantissa it came from, and the target b = q / difficulty (q the secp256k1 group order) that tool 68 compares a header's Autolykos hit against. Encode takes a difficulty and gives its nBits — and is honest about the format's limit: only the top three bytes survive, so a difficulty with anything in its lower bytes comes back smaller, and the tool says by how much rather than pretending the round trip is exact. A compact value whose sign bit is set decodes negative, and a zero mantissa decodes to zero — neither is a difficulty a node would accept in a header, and the tool flags both instead of dressing them up. Exact BigInt maths, verified against an independent Python port of the same reference code before it shipped here. Converting only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="nbits-input">Input (an nBits as decimal or 0x-hex to decode, or a difficulty to encode)</label>
+        <textarea id="nbits-input" rows="3" spellcheck="false" placeholder="e.g. 104520992 in decode mode, or 64721399054336 in encode mode" autocomplete="off"></textarea>
+        <label for="nbits-direction">Direction</label>
+        <select id="nbits-direction">
+          <option value="decode" selected>Decode: nBits → difficulty</option><option value="encode">Encode: difficulty → nBits</option>
+        </select>
+        <button type="submit" class="btn primary">Convert it</button>
+        <p id="nbits-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1094,6 +1107,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=69"></script>
+<script src="app.js?v=70"></script>
 </body>
 </html>

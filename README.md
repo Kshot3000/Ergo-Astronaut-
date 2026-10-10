@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 68 tools on one page it beats scrolling.
+headers) — with 69 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1562,6 +1562,26 @@ headers) — with 68 tools on one page it beats scrolling.
   timestamp mutation, a flipped nonce, both
   attacher cross-joins and the never-mined
   synthetics all reject.
+- **nBits ⇄ difficulty codec** — the
+  compact difficulty spelling every block
+  header carries, as a codec on its own:
+  an nBits (decimal or 0x-hex) decodes to
+  its exact difficulty with the size,
+  mantissa and sign bit it came from, plus
+  the target b = q / difficulty that the
+  PoW verifier checks a solution's hit
+  against; a difficulty encodes back to
+  its nBits, with the loss stated plainly
+  when the top-three-bytes form drops
+  lower bytes. Sign-bit and zero-mantissa
+  spellings decode faithfully and are
+  flagged as no difficulty a node would
+  accept. Ported from the reference node's
+  DifficultySerializer and verified
+  against an independent Python port of
+  the same code: the three real headers
+  round-trip and 2,000 random difficulties
+  satisfy the encode fixed point.
 
 ## Cross-chain integration
 

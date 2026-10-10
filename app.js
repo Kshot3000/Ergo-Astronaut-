@@ -6588,6 +6588,106 @@ function decodeCompactBits(nBits) {
   return negative ? -v : v;
 }
 
+/* ---------- nBits <-> difficulty codec (tool 69) ---------- */
+/* decodeCompactBits above has been inside the header tools since
+   tool 62; this is the codec standing on its own, both directions,
+   ported from the reference DifficultySerializer (ergoplatform/
+   ergo): decode goes through the same MPI form the Scala builds
+   (a 4-byte length + the size byte's worth of mantissa bytes, top
+   bit of the first byte the sign), and encode mirrors
+   encodeCompactBits exactly, including the Java BigInteger
+   toByteArray length it starts from (two's complement, so a
+   value whose top bit is set carries a leading zero sign byte)
+   and the rule that a mantissa landing on the 0x00800000 sign
+   bit is shifted down a byte while the size grows by one.
+   Encoding keeps only the top three bytes, so it is LOSSY for
+   difficulties with anything in the lower bytes: the analyser
+   reports the value the encoding actually decodes back to and
+   how much was dropped, never pretending the round trip is
+   exact. The target shown is b = q / difficulty in integer
+   division (q the secp256k1 group order, SECP_N) — the bound
+   tool 68 compares a header's Autolykos hit against. Verified
+   against an independent Python port of the same Scala
+   (oracle-nbits.py) before coding: the three real headers of
+   tools 62/68 round-trip (the tip header's 104520992 encodes
+   straight back from its difficulty 64721399054336), 2,000
+   random difficulties satisfy encode(decode(encode(d))) ==
+   encode(d), and the sign-bump / truncation edges match. */
+function encodeCompactBits(difficulty) {
+  var value = BigInt(difficulty);
+  if (value < 0n) return null;
+  var bitLen = value === 0n ? 0 : value.toString(2).length;
+  var size = value === 0n ? 1 : Math.ceil((bitLen + 1) / 8);
+  var result;
+  if (size <= 3) {
+    result = Number(value << BigInt(8 * (3 - size)));
+  } else {
+    result = Number(value >> BigInt(8 * (size - 3)));
+  }
+  if ((result & 0x00800000) !== 0) {
+    result >>= 8;
+    size += 1;
+  }
+  result |= size << 24;
+  return result >>> 0;
+}
+
+function analyzeCompactBits(inputStr, directionStr) {
+  var direction = (directionStr == null ? "" : String(directionStr)).trim().toLowerCase();
+  if (direction !== "encode" && direction !== "decode") return null;
+  var input = inputStr == null ? "" : String(inputStr).trim();
+  if (direction === "decode") {
+    var n = null;
+    if (/^0[xX][0-9a-fA-F]{1,8}$/.test(input)) {
+      n = parseInt(input.slice(2), 16);
+    } else if (/^[0-9]+$/.test(input)) {
+      var asBig = BigInt(input);
+      if (asBig > 4294967295n) return null;
+      n = Number(asBig);
+    } else {
+      return null;
+    }
+    var difficulty = decodeCompactBits(n);
+    var target = difficulty > 0n ? SECP_N / difficulty : null;
+    return {
+      direction: direction,
+      nBits: String(n),
+      nBitsHex: "0x" + n.toString(16).padStart(8, "0"),
+      size: (n >>> 24) & 0xff,
+      mantissa: String(n & 0x7fffff),
+      mantissaHex: "0x" + (n & 0x7fffff).toString(16),
+      signBit: (n & 0x800000) !== 0,
+      difficulty: difficulty.toString(),
+      negative: difficulty < 0n,
+      target: target === null ? null : target.toString(),
+      targetHex: target === null ? null : target.toString(16).padStart(64, "0"),
+      usable: difficulty > 0n
+    };
+  }
+  if (!/^[0-9]+$/.test(input)) return null;
+  var diff = BigInt(input);
+  if (diff >= (1n << 256n)) return null;
+  var encoded = encodeCompactBits(diff);
+  var back = decodeCompactBits(encoded);
+  var encTarget = diff > 0n ? SECP_N / diff : null;
+  return {
+    direction: direction,
+    difficulty: diff.toString(),
+    nBits: String(encoded),
+    nBitsHex: "0x" + encoded.toString(16).padStart(8, "0"),
+    size: (encoded >>> 24) & 0xff,
+    mantissa: String(encoded & 0x7fffff),
+    mantissaHex: "0x" + (encoded & 0x7fffff).toString(16),
+    signBit: (encoded & 0x800000) !== 0,
+    decodedBack: back.toString(),
+    exact: back === diff,
+    lost: (diff - back).toString(),
+    target: encTarget === null ? null : encTarget.toString(),
+    targetHex: encTarget === null ? null : encTarget.toString(16).padStart(64, "0"),
+    usable: diff > 0n
+  };
+}
+
 function inspectBlockHeader(headerHex, expectedStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, headerId: null, idMatches: null, expectedId: null, version: null, autolykosVersion: null, parentId: null, adProofsRoot: null, transactionsRoot: null, stateRoot: null, extensionRoot: null, timestampMs: null, timestampIso: null, nBits: null, nBitsHex: null, difficulty: null, height: null, votesHex: null, votes: null, unparsedHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null, byteLength: null, withoutPowLength: null, solutionLength: null };
@@ -7472,7 +7572,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -7987,6 +8087,40 @@ if (typeof document !== "undefined") {
         out.textContent = msg;
       } else {
         out.textContent = "✓ That VLQ hex is unsigned " + res.unsigned + ", which un-zig-zags to " + res.value + " at " + res.width + "-bit width — and re-encoding that value reproduces those exact bytes, so the spelling is canonical for this width, the way a box parser must read " + kind + ". Decoded locally; nothing was fetched, signed or sent.";
+      }
+    });
+
+    document.getElementById("nbits-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("nbits-result");
+      var res = analyzeCompactBits(document.getElementById("nbits-input").value, document.getElementById("nbits-direction").value);
+      if (!res) {
+        out.textContent = "I could not convert that: decode needs an nBits as a decimal from 0 to 4294967295 or as 0x-hex of at most 8 digits, and encode needs a difficulty as a whole non-negative number below 2^256 in plain decimal. Nothing was converted.";
+        return;
+      }
+      if (res.direction === "decode") {
+        var dmsg = "✓ nBits " + res.nBits + " (" + res.nBitsHex + ") breaks down as size " + res.size + ", mantissa " + res.mantissa + " (" + res.mantissaHex + ")" + (res.signBit ? ", sign bit SET" : ", sign bit clear") + " — and decodes to difficulty " + res.difficulty + ". ";
+        if (!res.usable) {
+          dmsg += res.negative ? "That difficulty is negative: the sign bit makes this a signed spelling, not a difficulty any node would accept in a header, and no target exists for it. " : "That difficulty is zero — a zero mantissa carries no difficulty at all, and no target exists for it. ";
+        } else {
+          dmsg += "The target a miner's Autolykos hit must fall below at this difficulty is b = q / difficulty = " + res.target + " (0x" + res.targetHex + ") — the bound tool 68 checks a header's solution against. ";
+        }
+        dmsg += "Decoded locally; nothing was fetched, signed or sent.";
+        out.textContent = dmsg;
+      } else {
+        var emsg = "✓ Difficulty " + res.difficulty + " encodes to nBits " + res.nBits + " (" + res.nBitsHex + ") — size " + res.size + ", mantissa " + res.mantissa + " (" + res.mantissaHex + "). ";
+        if (res.exact) {
+          emsg += "The encoding is exact for this value: decoding that nBits gives the same difficulty back. ";
+        } else {
+          emsg += "The compact form keeps only the top three bytes, so this encoding is LOSSY: it decodes back to " + res.decodedBack + ", dropping " + res.lost + " — a node reading that nBits would work to the smaller difficulty. ";
+        }
+        if (!res.usable) {
+          emsg += "Zero is not a difficulty a node would accept in a header, and no target exists for it. ";
+        } else {
+          emsg += "Its target is b = q / difficulty = " + res.target + " (0x" + res.targetHex + "). ";
+        }
+        emsg += "Computed locally; nothing was fetched, signed or sent.";
+        out.textContent = emsg;
       }
     });
 

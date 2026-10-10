@@ -6756,6 +6756,105 @@ function compareTxSets(aText, bText) {
   };
 }
 
+/* Tool 80: transaction set merger — two sets of transactions →
+   their union, and whether that union can confirm together.
+   Tool 79 compares two transaction sets; this one COMBINES them,
+   which is the other half of working with transaction collections
+   from two sources (two nodes' mempools, a block's transactions
+   from two explorers, a batch assembled in two parts): paste both
+   sets and the merged set comes back — the union by transaction
+   ID, sorted by transaction ID, with transactions both sets
+   carried counted once and the merged bytes handed back in that
+   sorted order so the result can be pasted straight into tools
+   78 or 79. A shared transaction is a duplicate removed, never a
+   double count: the merged total output value and total bytes are
+   the exact sums over the UNION, each transaction counted once
+   however many sets carried it. The merger also judges the union
+   as a set that would have to confirm together, which a differ
+   never asks: a SHARED INPUT inside the merged set — a box spent
+   by more than one merged transaction — means at most one of
+   those transactions can ever confirm, reported with the box and
+   the transactions spending it. Data inputs are read, not spent,
+   so they never make a merged set conflicted. The verdict is
+   "conflict-free" only when no merged box is spent twice,
+   "single-transaction" when the union collapses to one, and
+   "conflicted" otherwise. Each side is a set in its own right, so
+   a single transaction is a valid side, and a transaction pasted
+   twice inside one side — including its signed and unsigned
+   forms, which share one ID — is refused, not merged twice.
+   Verified before anything is shown: every transaction on both
+   sides is parsed by tool 29 and its output value re-summed from
+   its own outputs, and the accounting must close (merged +
+   duplicates removed = first count + second count, and duplicates
+   removed must equal the shared count). The honesty boundary:
+   this merges the bytes you pasted — it fetches nothing, proves
+   the merged set is confirmed or broadcastable nowhere, and when
+   the merged set is conflicted every transaction is kept and
+   flagged, because which one should win is not a question bytes
+   alone answer. Verified BEFORE coding against an independent
+   Python oracle (oracle-txmerge.py, exec'ing oracle-txset.py's
+   member walker): an overlapping merge whose members share
+   inputs, identical sides, a disjoint clean merge, identical
+   single transactions collapsing, and a no-shared-transaction
+   merge that is still conflicted over shared inputs. */
+function parseTxSetSideFull(text, sideLabel) {
+  var fail = function (reason) { return { valid: false, reason: reason, entries: null }; };
+  if (typeof text !== "string") return fail("Paste the " + sideLabel + " set of serialized transactions first — one complete transaction per line, exactly as tool 29 takes them.");
+  var lines = text.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  if (lines.length < 1) return fail("The " + sideLabel + " set is empty — paste at least one complete serialized transaction, one per line.");
+  var seen = {};
+  var entries = [];
+  for (var i = 0; i < lines.length; i++) {
+    var tx = parseErgoTransaction(lines[i]);
+    if (!tx.valid) return fail("Transaction " + (i + 1) + " of " + lines.length + " does not parse: " + tx.reason);
+    if (seen[tx.txId]) return fail("Transaction " + (i + 1) + " of " + lines.length + " has the same ID as transaction " + seen[tx.txId] + " (" + tx.txId + ") — the signed and unsigned forms of one transaction share an ID, and a transaction counted twice would corrupt the merge, so duplicates inside one set are refused rather than merged.");
+    seen[tx.txId] = i + 1;
+    var reSum = 0n;
+    tx.outputs.forEach(function (o) { reSum += BigInt(o.valueNano); });
+    if (reSum.toString() !== tx.totalOutputNano) return fail("Internal error: transaction " + (i + 1) + "'s outputs re-sum to " + reSum.toString() + " nanoERG instead of the parser's " + tx.totalOutputNano + " — nothing was shown rather than an unverified merge.");
+    entries.push({ txId: tx.txId, totalOutputNano: tx.totalOutputNano, byteLength: tx.byteLength, inputBoxIds: tx.inputs.map(function (inp) { return inp.boxId; }), txHex: lines[i].replace(/\s+/g, "").toLowerCase() });
+  }
+  return { valid: true, reason: null, entries: entries };
+}
+
+function mergeTxSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, txCountA: null, txCountB: null, mergedCount: null, sharedCount: null, duplicatesRemoved: null, mergedIds: null, mergedHex: null, sharedInputs: null, totalOutputNano: null, totalBytes: null };
+  };
+  var a = parseTxSetSideFull(aText, "FIRST");
+  if (!a.valid) return fail("The FIRST set is refused: " + a.reason);
+  var b = parseTxSetSideFull(bText, "SECOND");
+  if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
+  var inB = {};
+  b.entries.forEach(function (e) { inB[e.txId] = true; });
+  var sharedCount = a.entries.filter(function (e) { return !!inB[e.txId]; }).length;
+  var byId = {};
+  a.entries.concat(b.entries).forEach(function (e) { byId[e.txId] = e; });
+  var merged = Object.keys(byId).map(function (id) { return byId[id]; }).sort(function (x, y) { return x.txId < y.txId ? -1 : 1; });
+  var duplicatesRemoved = a.entries.length + b.entries.length - merged.length;
+  if (duplicatesRemoved !== sharedCount || merged.length + duplicatesRemoved !== a.entries.length + b.entries.length) return fail("Internal error: the merge accounting does not close — nothing was shown rather than an unverified merge.");
+  var inMap = {};
+  merged.forEach(function (e) { e.inputBoxIds.forEach(function (box) { if (!inMap[box]) inMap[box] = []; inMap[box].push(e.txId); }); });
+  var sharedInputs = Object.keys(inMap).filter(function (k) { return inMap[k].length > 1; }).map(function (k) { return { boxId: k, txIds: inMap[k].slice().sort() }; }).sort(function (x, y) { return x.boxId < y.boxId ? -1 : 1; });
+  var totalOutputNano = merged.reduce(function (s, e) { return s + BigInt(e.totalOutputNano); }, 0n);
+  var totalBytes = merged.reduce(function (s, e) { return s + e.byteLength; }, 0);
+  var verdict;
+  if (merged.length === 1) verdict = "single-transaction";
+  else if (sharedInputs.length === 0) verdict = "conflict-free";
+  else verdict = "conflicted";
+  return {
+    valid: true, reason: null,
+    verdict: verdict,
+    txCountA: a.entries.length, txCountB: b.entries.length,
+    mergedCount: merged.length, sharedCount: sharedCount, duplicatesRemoved: duplicatesRemoved,
+    mergedIds: merged.map(function (e) { return e.txId; }),
+    mergedHex: merged.map(function (e) { return e.txHex; }).join("\n"),
+    sharedInputs: sharedInputs,
+    totalOutputNano: totalOutputNano.toString(),
+    totalBytes: totalBytes
+  };
+}
+
 /* Tool 62: block header inspector. Every other tool on this hub
    works below the header — boxes, transactions, trees. This one
    opens the header itself: the ~220 bytes that head every Ergo
@@ -8666,7 +8765,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, summarizeTxSet, compareTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -9471,6 +9570,28 @@ if (typeof document !== "undefined") {
         msg += "No conflicting inputs: no box is spent by different transactions across the two sets. ";
       }
       msg += "Every transaction was verified before the comparison is shown: each was parsed by tool 29 and its output value re-summed from its own outputs, and the membership accounting closes. This compares only the bytes you pasted — it fetches nothing, proves neither set is confirmed or broadcastable, and which set is the right one is not a question bytes alone answer. Compared locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txmerge-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txmerge-result");
+      var res = mergeTxSets(document.getElementById("txmerge-a").value, document.getElementById("txmerge-b").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not merge those sets. Nothing was merged.";
+        return;
+      }
+      var short = function (id) { return id.slice(0, 16) + "…"; };
+      var msg = "Merged " + res.txCountA + " + " + res.txCountB + " transaction(s) into " + res.mergedCount + " — " + res.sharedCount + " transaction(s) were in both sets and are counted once (" + res.duplicatesRemoved + " duplicate(s) removed). The merged set's total output value is exactly " + res.totalOutputNano + " nanoERG (outputs only; a fee needs the input boxes' values, which the serialized bytes do not carry) in " + res.totalBytes + " bytes in total. ";
+      if (res.verdict === "single-transaction") {
+        msg = "✓ " + msg + "The two sets collapse to that one transaction. ";
+      } else if (res.verdict === "conflict-free") {
+        msg = "✓ " + msg + "The merged set is conflict-free: no box is spent by more than one merged transaction, so nothing in the set spends the same box twice. ";
+      } else {
+        msg = "⚠ " + msg + "The merged set is conflicted. ";
+        res.sharedInputs.forEach(function (c) { msg += "⚠ Box " + c.boxId + " is spent by " + c.txIds.map(short).join(", ") + " — a box can be spent only once, so at most one of those transactions can ever confirm; all are kept, because which one should win is not a question bytes alone answer. "; });
+      }
+      msg += "Merged transactions, in transaction-ID order, ready to paste into tools 78 or 79: " + res.mergedHex + " Merge only, over the bytes you pasted: it fetches nothing, proves the merged set is confirmed or broadcastable nowhere. Merged locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

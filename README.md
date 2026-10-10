@@ -1776,6 +1776,26 @@ headers) — with 79 tools on one page it beats scrolling.
   identical, reordered, conflicting,
   subset, pure-conflict, disjoint and
   partially-conflicting set pairs.
+- **Transaction set merger** — two sets
+  of serialized transactions combined
+  into their union by transaction ID,
+  sorted by transaction ID, with shared
+  transactions counted once (never
+  double-counted in the merged exact
+  total output value or total bytes),
+  the merged bytes handed back in sorted
+  order for tools 78/79, and the
+  conflict verdict over the union — a
+  box spent by more than one merged
+  transaction, where at most one can
+  ever confirm. A single transaction is
+  a valid side; duplicates inside one
+  side (including signed/unsigned twins)
+  are refused. Verified against an
+  independent Python oracle over
+  overlapping, identical, disjoint,
+  single-transaction and shared-input
+  conflicted merges.
 
 ## Cross-chain integration
 

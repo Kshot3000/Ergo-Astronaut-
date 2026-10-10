@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>79 tools and counting — find the one you need:</p>
+    <p>80 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -1178,6 +1178,17 @@
         <p id="txsetdiff-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="txmerge-calc" data-family="transactions">
+        <h3>80 · Transaction set merger (two sets of serialized transactions, one per line → their union, and can it confirm together?)</h3>
+        <p>Tool 79 compares two transaction sets; this one <strong>combines</strong> them — the other half of working with transactions from two sources (two nodes' mempools, one block's transactions from two explorers, a batch assembled in two parts). Paste <strong>two sets</strong>, one serialized transaction per line in each box, and the merged set comes back: the union by transaction ID, sorted by transaction ID, with the transactions both sets carried counted once — never double-counted in the merged total output value or total bytes, which are the exact sums over the union. The merged transactions are handed back in sorted order so the result pastes straight into tools 78 or 79. The merger also judges the union as a set that would have to confirm together, which a comparison never asks: a box spent by more than one merged transaction is a <strong>shared input inside the merged set</strong> — at most one of those transactions can ever confirm. Data inputs are only read, not spent, so they never make a merged set conflicted. The verdict is conflict-free only when no merged box is spent twice. A single transaction is a valid side, and a transaction pasted twice inside one side — including its signed and unsigned forms, which share one ID — is refused, not merged twice. Every transaction is parsed by tool 29 first, and each one's output value is re-summed from its own outputs before it counts. Merge only, over the bytes you pasted: it fetches nothing, proves the merged set is confirmed or broadcastable nowhere, and when the merged set is conflicted every transaction is kept and flagged, because which one should win is not a question bytes alone answer. Merged locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txmerge-a">First set — serialized transactions, one per line (hex, as tool 29 takes them)</label>
+        <textarea id="txmerge-a" rows="5" spellcheck="false" placeholder="e.g. one full serialized transaction per line, signed or unsigned" autocomplete="off"></textarea>
+        <label for="txmerge-b">Second set — serialized transactions, one per line (hex, as tool 29 takes them)</label>
+        <textarea id="txmerge-b" rows="5" spellcheck="false" placeholder="e.g. one full serialized transaction per line, signed or unsigned" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Merge the sets</button>
+        <p id="txmerge-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1223,6 +1234,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=80"></script>
+<script src="app.js?v=81"></script>
 </body>
 </html>

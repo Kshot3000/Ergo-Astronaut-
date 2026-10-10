@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>76 tools and counting — find the one you need:</p>
+    <p>77 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -1147,6 +1147,17 @@
         <p id="headersetdiff-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="headermerge-calc" data-family="headers">
+        <h3>77 · Block header set merger (two sets of headers → their union, and is it one chain?)</h3>
+        <p>Tool 76 compares two header sets; this one <strong>combines</strong> them — the other half of working with headers from two sources (two nodes, two explorers, one sync in two batches). Paste <strong>two sets</strong> of serialized headers, one complete header per line in each box, and the merged set comes back: the union by header ID, sorted by height then ID, with the headers both sets carried counted once — never double-counted in the merged total difficulty, which is the exact sum over the union. The merged headers are handed back in sorted order so the result pastes straight into tools 65, 72, 73 or 76. The merger also judges the union as a chain, which a comparison never asks: a height the union carries under more than one ID is a <strong>fork inside the merged set</strong>, heights missing inside the covered span are counted (the first ten named — a real gap can span millions), and height-adjacent merged pairs are checked for parent linkage, a broken link reported with the parent the chain required and the parent the header actually carries. The verdict is a single chain only when there are no conflicts, no missing heights and every height-adjacent pair links — adjacency alone is not linkage. A header pasted twice inside one set is refused, not merged twice, and every header's difficulty is re-decoded from its own nBits before anything is shown. Merge only, over the bytes you pasted: it fetches nothing, proves the merged set sits on the main chain nowhere, and when the two sets conflict at a height both headers are kept and flagged, because which one is right is not a question bytes alone answer. Merged locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="headermerge-a">First set of serialized block headers (one per line)</label>
+        <textarea id="headermerge-a" rows="4" spellcheck="false" placeholder="e.g. the headers from one source, one complete header per line" autocomplete="off"></textarea>
+        <label for="headermerge-b">Second set of serialized block headers (one per line)</label>
+        <textarea id="headermerge-b" rows="4" spellcheck="false" placeholder="e.g. the headers from another source, one complete header per line" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Merge the sets</button>
+        <p id="headermerge-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1192,6 +1203,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=77"></script>
+<script src="app.js?v=78"></script>
 </body>
 </html>

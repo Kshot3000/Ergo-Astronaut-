@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 76 tools on one page it beats scrolling.
+headers) — with 77 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1714,6 +1714,25 @@ headers) — with 76 tools on one page it beats scrolling.
   identical, reordered, fork-compared,
   subset, disjoint and partially-forked
   set pairs.
+- **Block header set merger** — two sets
+  of serialized headers merged into
+  their union by header ID, sorted by
+  height then ID: shared headers counted
+  once (never double-counted in the exact
+  merged difficulty total), the merged
+  bytes handed back in sorted order for
+  tools 65, 72, 73 or 76, and the union
+  judged as a chain — conflict heights
+  carried under more than one ID, missing
+  heights in the covered span counted
+  with the first ten named, and broken
+  parent links reported with the expected
+  and actual parents. Duplicates inside
+  one side are refused. Verified against
+  an independent Python oracle over a
+  split chained pair, a fork, an
+  overlapping gapped merge, a disjoint
+  merge and identical sides.
 
 ## Cross-chain integration
 

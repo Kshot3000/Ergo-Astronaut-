@@ -7437,6 +7437,123 @@ function compareHeaderSets(aText, bText) {
   };
 }
 
+/* Tool 77: block header set merger — two sets of headers → their
+   union, and whether that union is one chain. Tool 76 compares two
+   sets; nothing on the hub COMBINES them, which is the other half
+   of working with header collections from two sources (two nodes,
+   two explorers, a sync in two batches): paste both sets and the
+   merged set comes back — the union by header ID, sorted by
+   height then ID, with the shared headers counted once and the
+   merged bytes handed back in that sorted order so the result can
+   be pasted straight into tools 65, 72, 73 or 76. A shared header
+   is a duplicate removed, never a double count: the merged total
+   difficulty is the exact BigInt sum over the UNION, each header
+   counted once however many sets carried it. The merger also
+   judges the union as a chain, which a differ never asks: a
+   CONFLICT height is one the union carries under more than one
+   ID (a fork inside the merged set), missing heights inside the
+   covered span are counted (with the first ten named — a real
+   gap can span millions of heights, so, like tool 73, the count
+   is the figure), and height-adjacent merged pairs are checked
+   for parent linkage, a broken link reported with the parent the
+   chain required and the parent the header actually carries.
+   The verdict is "single-chain" only when there are no
+   conflicts, no missing heights and every height-adjacent pair
+   links — adjacency alone is not linkage, and a set with no
+   height-adjacent pair at all cannot claim to be a chain.
+   Verified before anything is shown: every header on both sides
+   is inspected by tool 62, its difficulty re-decodes from its
+   nBits through tool 69, and the accounting must close (merged +
+   duplicates removed = first count + second count). The honesty
+   boundary: this merges the bytes you pasted — it fetches
+   nothing, proves the merged set sits on the main chain nowhere,
+   and when the two sets conflict at a height both headers are
+   kept and flagged, because which one is right is not a question
+   bytes alone answer. Verified BEFORE coding against an
+   independent Python oracle (oracle-headermerge.py): a chained
+   pair split across the sets, a fork at one height, an
+   overlapping gapped merge, a disjoint merge and identical sides
+   collapsing to a single header. */
+function parseHeaderSetSideFull(text, sideLabel) {
+  var fail = function (reason) { return { valid: false, reason: reason, entries: null }; };
+  if (typeof text !== "string") return fail("Paste the " + sideLabel + " set of serialized block headers first — one complete header per line, exactly as tool 62 takes them.");
+  var lines = text.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  if (lines.length < 1) return fail("The " + sideLabel + " set is empty — paste at least one complete serialized header, one per line.");
+  var seen = {};
+  var entries = [];
+  for (var i = 0; i < lines.length; i++) {
+    var h = inspectBlockHeader(lines[i], "");
+    if (!h.valid) return fail("Header " + (i + 1) + " of " + lines.length + " does not inspect: " + h.reason);
+    if (seen[h.headerId]) return fail("Header " + (i + 1) + " of " + lines.length + " is the same header as header " + seen[h.headerId] + " (ID " + h.headerId + ") — a header counted twice would corrupt the merge, so duplicates inside one set are refused rather than merged.");
+    seen[h.headerId] = i + 1;
+    if (decodeCompactBits(h.nBits).toString() !== h.difficulty) return fail("Internal error: header " + (i + 1) + "'s difficulty does not re-decode from its own nBits — nothing was shown rather than an unverified merge.");
+    entries.push({ headerId: h.headerId, height: h.height, parentId: h.parentId, difficulty: h.difficulty, headerHex: lines[i].replace(/\s+/g, "").toLowerCase() });
+  }
+  return { valid: true, reason: null, entries: entries };
+}
+
+function mergeHeaderSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, headerCountA: null, headerCountB: null, mergedCount: null, sharedCount: null, duplicatesRemoved: null, mergedIds: null, mergedHex: null, conflictHeights: null, minHeight: null, maxHeight: null, missingHeightCount: null, firstMissingHeights: null, adjacentPairs: null, linkedPairs: null, brokenLinks: null, totalDifficulty: null };
+  };
+  var a = parseHeaderSetSideFull(aText, "FIRST");
+  if (!a.valid) return fail("The FIRST set is refused: " + a.reason);
+  var b = parseHeaderSetSideFull(bText, "SECOND");
+  if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
+  var inA = {}, inB = {};
+  a.entries.forEach(function (e) { inA[e.headerId] = true; });
+  b.entries.forEach(function (e) { inB[e.headerId] = true; });
+  var sharedCount = a.entries.filter(function (e) { return !!inB[e.headerId]; }).length;
+  var byId = {};
+  a.entries.concat(b.entries).forEach(function (e) { byId[e.headerId] = e; });
+  var merged = Object.keys(byId).map(function (id) { return byId[id]; }).sort(function (x, y) {
+    if (x.height !== y.height) return x.height - y.height;
+    return x.headerId < y.headerId ? -1 : 1;
+  });
+  var duplicatesRemoved = a.entries.length + b.entries.length - merged.length;
+  if (duplicatesRemoved !== sharedCount || merged.length + duplicatesRemoved !== a.entries.length + b.entries.length) return fail("Internal error: the merge accounting does not close — nothing was shown rather than an unverified merge.");
+  var byHeight = {};
+  merged.forEach(function (e) { if (!byHeight[e.height]) byHeight[e.height] = []; byHeight[e.height].push(e.headerId); });
+  var conflictHeights = Object.keys(byHeight).filter(function (k) { return byHeight[k].length > 1; }).map(function (k) {
+    return { height: Number(k), ids: byHeight[k].slice().sort() };
+  }).sort(function (x, y) { return x.height - y.height; });
+  var minHeight = merged[0].height;
+  var maxHeight = merged[merged.length - 1].height;
+  var distinctHeights = Object.keys(byHeight).map(Number).sort(function (x, y) { return x - y; });
+  var missingHeightCount = (maxHeight - minHeight + 1) - distinctHeights.length;
+  var firstMissingHeights = [];
+  for (var di = 0; di + 1 < distinctHeights.length && firstMissingHeights.length < 10; di++) {
+    for (var mh = distinctHeights[di] + 1; mh < distinctHeights[di + 1] && firstMissingHeights.length < 10; mh++) firstMissingHeights.push(mh);
+  }
+  if (firstMissingHeights.length !== Math.min(10, missingHeightCount)) return fail("Internal error: the missing-height sample does not match the missing-height count — nothing was shown rather than an unverified merge.");
+  var adjacentPairs = 0, linkedPairs = 0, brokenLinks = [];
+  for (var i = 0; i + 1 < merged.length; i++) {
+    if (merged[i + 1].height - merged[i].height === 1) {
+      adjacentPairs += 1;
+      if (merged[i + 1].parentId === merged[i].headerId) linkedPairs += 1;
+      else brokenLinks.push({ height: merged[i + 1].height, expectedParent: merged[i].headerId, actualParent: merged[i + 1].parentId });
+    }
+  }
+  var totalDifficulty = merged.reduce(function (s, e) { return s + BigInt(e.difficulty); }, 0n);
+  var verdict;
+  if (merged.length === 1) verdict = "single-header";
+  else if (conflictHeights.length === 0 && missingHeightCount === 0 && adjacentPairs > 0 && adjacentPairs === linkedPairs) verdict = "single-chain";
+  else verdict = "not-a-single-chain";
+  return {
+    valid: true, reason: null,
+    verdict: verdict,
+    headerCountA: a.entries.length, headerCountB: b.entries.length,
+    mergedCount: merged.length, sharedCount: sharedCount, duplicatesRemoved: duplicatesRemoved,
+    mergedIds: merged.map(function (e) { return e.headerId; }),
+    mergedHex: merged.map(function (e) { return e.headerHex; }).join("\n"),
+    conflictHeights: conflictHeights,
+    minHeight: minHeight, maxHeight: maxHeight,
+    missingHeightCount: missingHeightCount, firstMissingHeights: firstMissingHeights,
+    adjacentPairs: adjacentPairs, linkedPairs: linkedPairs, brokenLinks: brokenLinks,
+    totalDifficulty: totalDifficulty.toString()
+  };
+}
+
 function inspectBlockHeader(headerHex, expectedStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, headerId: null, idMatches: null, expectedId: null, version: null, autolykosVersion: null, parentId: null, adProofsRoot: null, transactionsRoot: null, stateRoot: null, extensionRoot: null, timestampMs: null, timestampIso: null, nBits: null, nBitsHex: null, difficulty: null, height: null, votesHex: null, votes: null, unparsedHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null, byteLength: null, withoutPowLength: null, solutionLength: null };
@@ -8321,7 +8438,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -9048,6 +9165,30 @@ if (typeof document !== "undefined") {
         msg += "Total difficulty " + res.totalDifficultyA + " → " + res.totalDifficultyB + " (" + (res.difficultyDelta.charAt(0) === "-" ? "" : "+") + res.difficultyDelta + ", exact). ";
       }
       msg += "Comparison only, over the bytes you pasted: it fetches nothing, proves neither set sits on the main chain, and which set is the right one is not a question bytes alone answer. Compared locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("headermerge-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("headermerge-result");
+      var res = mergeHeaderSets(document.getElementById("headermerge-a").value, document.getElementById("headermerge-b").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not merge those sets. Nothing was merged.";
+        return;
+      }
+      var msg = "Merged " + res.headerCountA + " + " + res.headerCountB + " header(s) into " + res.mergedCount + " — " + res.sharedCount + " header(s) were in both sets and are counted once (" + res.duplicatesRemoved + " duplicate(s) removed). The merged set covers heights " + res.minHeight + "–" + res.maxHeight + " with total difficulty " + res.totalDifficulty + " (exact, each merged header counted once). ";
+      if (res.verdict === "single-chain") {
+        msg = "✓ " + msg + "The merged set is a single chain: no height is carried by two headers, no height in the span is missing, and all " + res.adjacentPairs + " height-adjacent pair(s) link parent-to-child. ";
+      } else if (res.verdict === "single-header") {
+        msg = "✓ " + msg + "The two sets collapse to that one header. ";
+      } else {
+        msg = "⚠ " + msg + "The merged set is not a single chain. ";
+        res.conflictHeights.forEach(function (c) { msg += "⚠ Height " + c.height + " is carried by " + c.ids.length + " different headers (" + c.ids.join(", ") + ") — a fork inside the merged set; both are kept, because which one is right is not a question bytes alone answer. "; });
+        if (res.missingHeightCount > 0) msg += res.missingHeightCount + " height(s) in the span have no header (first missing: " + res.firstMissingHeights.join(", ") + "). ";
+        res.brokenLinks.forEach(function (bl) { msg += "⚠ The header at height " + bl.height + " names parent " + bl.actualParent + ", not the merged header at height " + (bl.height - 1) + " (" + bl.expectedParent + ") — that link does not stitch. "; });
+        if (res.adjacentPairs === 0 && res.conflictHeights.length === 0) msg += "No two merged headers sit at adjacent heights, so no parent link could be checked at all. ";
+      }
+      msg += "Merged headers, in height order, ready to paste into tools 65, 72, 73 or 76: " + res.mergedHex + " Merge only, over the bytes you pasted: it fetches nothing, proves the merged set sits on the main chain nowhere, and when the two sets conflict at a height both headers are kept and flagged. Merged locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

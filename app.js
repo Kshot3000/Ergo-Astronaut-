@@ -7255,6 +7255,95 @@ function extractHeaderField(headerHex, fieldKey) {
   return { valid: true, reason: null, headerId: h.headerId, height: h.height, version: h.version, field: key, fieldLabel: HEADER_FIELD_LABELS[key], present: present, value: value, detail: detail };
 }
 
+/* Tool 75: block header size breakdown — where a serialized
+   header's bytes go, field by field, the header family's analogue
+   of tool 42's transaction size breakdown. Almost everything in a
+   header is a fixed-width field (the version byte, three 32-byte
+   roots, the 33-byte state root, nBits at 4 bytes, the 3 vote
+   bytes, the solution's keys and nonce); the only variable parts
+   are the two VLQ numbers (timestamp, height), the version 2+
+   extra-fields section (a length byte plus its bytes) and the
+   Autolykos v1 distance (a length byte plus d's minimal
+   big-endian bytes). Each field's size is computed from the
+   inspected VALUES — fixed widths from the reference layout, VLQ
+   lengths by re-encoding the value with the hub's own VLQ writer,
+   the distance length from d's value exactly as tool 63's builder
+   serializes it — never by trusting offsets alone, and the parts
+   must sum to tool 62's own split (bytes before the solution,
+   solution bytes, total) before anything is shown. A field a
+   version does not carry (extra fields on version 1, the one-time
+   key and distance on Autolykos version 2) is listed as absent
+   with 0 bytes, never silently dropped from the account.
+   Verified against an independent Python oracle
+   (oracle-headersize.py) that computes the same sizes from the
+   field values of the three real headers, the mutation, a
+   version 3 synthetic carrying 5 extra-fields bytes and a
+   version 1 synthetic whose distance is 0. */
+function analyzeHeaderSize(headerHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, headerId: null, height: null, version: null, byteLength: null, withoutPowBytes: null, solutionBytes: null, solutionSharePercent: null, fields: null, largestField: null, largestFieldBytes: null };
+  };
+  var h = inspectBlockHeader(headerHex, "");
+  if (!h.valid) return fail("The header does not inspect: " + h.reason);
+  var cleaned = String(headerHex).replace(/\s+/g, "").toLowerCase();
+  var rebuilt = buildBlockHeader({
+    version: String(h.version), parentId: h.parentId, adProofsRoot: h.adProofsRoot,
+    transactionsRoot: h.transactionsRoot, stateRoot: h.stateRoot, timestampMs: h.timestampMs,
+    extensionRoot: h.extensionRoot, nBits: String(h.nBits), height: String(h.height),
+    votesHex: h.votesHex, unparsedHex: h.unparsedHex === null ? "" : h.unparsedHex,
+    minerPk: h.minerPk, nonce: h.nonce,
+    onetimePk: h.onetimePk === null ? "" : h.onetimePk,
+    powDistance: h.powDistance === null ? "" : h.powDistance
+  });
+  if (!rebuilt.valid || rebuilt.headerHex !== cleaned || rebuilt.headerId !== h.headerId) return fail("Internal error: the header does not rebuild identically from its inspected fields — nothing was shown rather than an unverified breakdown.");
+  var tsBytes = writeVlqBig(BigInt(h.timestampMs)).length;
+  var htBytes = writeVlqBig(BigInt(h.height)).length;
+  var extraPresent = h.version > 1;
+  var dFieldBytes = 0;
+  if (h.powDistance !== null) {
+    var dv = BigInt(h.powDistance);
+    var dLen = dv === 0n ? 1 : 0;
+    while (dv > 0n) { dLen += 1; dv >>= 8n; }
+    dFieldBytes = 1 + dLen;
+  }
+  var raw = [
+    ["version", "Block version", 1, true, "header"],
+    ["parent-id", "Parent ID", 32, true, "header"],
+    ["ad-proofs-root", "AD-proofs root", 32, true, "header"],
+    ["transactions-root", "Transactions root", 32, true, "header"],
+    ["state-root", "State root", 33, true, "header"],
+    ["timestamp", "Timestamp (VLQ)", tsBytes, true, "header"],
+    ["extension-root", "Extension root", 32, true, "header"],
+    ["nbits", "nBits", 4, true, "header"],
+    ["height", "Height (VLQ)", htBytes, true, "header"],
+    ["votes", "Miner votes", 3, true, "header"],
+    ["extra-fields", "Extra fields", extraPresent ? 1 + h.unparsedHex.length / 2 : 0, extraPresent, "header"],
+    ["miner-pk", "Miner public key", 33, true, "solution"],
+    ["onetime-pk", "One-time public key", h.onetimePk !== null ? 33 : 0, h.onetimePk !== null, "solution"],
+    ["nonce", "Nonce", 8, true, "solution"],
+    ["pow-distance", "PoW distance d", dFieldBytes, h.powDistance !== null, "solution"]
+  ];
+  var total = h.byteLength;
+  var fields = raw.map(function (r) {
+    return { key: r[0], label: r[1], bytes: r[2], present: r[3], section: r[4], percent: r[3] ? (r[2] * 100 / total).toFixed(2) : null };
+  });
+  var withoutPowBytes = fields.filter(function (f) { return f.section === "header"; }).reduce(function (s, f) { return s + f.bytes; }, 0);
+  var solutionBytes = fields.filter(function (f) { return f.section === "solution"; }).reduce(function (s, f) { return s + f.bytes; }, 0);
+  if (withoutPowBytes !== h.withoutPowLength || solutionBytes !== h.solutionLength || withoutPowBytes + solutionBytes !== total) {
+    return fail("Internal error: the field sizes do not sum to the header's serialized length — nothing was shown rather than a breakdown that does not add up.");
+  }
+  var largest = null;
+  fields.forEach(function (f) { if (f.present && (largest === null || f.bytes > largest.bytes)) largest = f; });
+  return {
+    valid: true, reason: null,
+    headerId: h.headerId, height: h.height, version: h.version,
+    byteLength: total, withoutPowBytes: withoutPowBytes, solutionBytes: solutionBytes,
+    solutionSharePercent: (solutionBytes * 100 / total).toFixed(2),
+    fields: fields,
+    largestField: largest.key, largestFieldBytes: largest.bytes
+  };
+}
+
 function inspectBlockHeader(headerHex, expectedStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, headerId: null, idMatches: null, expectedId: null, version: null, autolykosVersion: null, parentId: null, adProofsRoot: null, transactionsRoot: null, stateRoot: null, extensionRoot: null, timestampMs: null, timestampIso: null, nBits: null, nBitsHex: null, difficulty: null, height: null, votesHex: null, votes: null, unparsedHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null, byteLength: null, withoutPowLength: null, solutionLength: null };
@@ -8139,7 +8228,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -8822,6 +8911,23 @@ if (typeof document !== "undefined") {
         if (res.detail) msg += " — " + res.detail;
         msg += ". The header was inspected by tool 62 and rebuilt identically by tool 63 before this field was shown. Extracted locally; nothing was fetched, signed or sent.";
       }
+      out.textContent = msg;
+    });
+
+    document.getElementById("headersize-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("headersize-result");
+      var res = analyzeHeaderSize(document.getElementById("headersize-bytes").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not break that header down. Nothing was shown.";
+        return;
+      }
+      var parts = res.fields.filter(function (f) { return f.present; }).map(function (f) { return f.label + " " + f.bytes + " byte" + (f.bytes === 1 ? "" : "s") + " (" + f.percent + "%)"; });
+      var absent = res.fields.filter(function (f) { return !f.present; }).map(function (f) { return f.label; });
+      var msg = "✓ Header " + res.headerId + " (version " + res.version + ", height " + res.height + ") is " + res.byteLength + " bytes: " + res.withoutPowBytes + " bytes before the solution + " + res.solutionBytes + " bytes of Autolykos solution (" + res.solutionSharePercent + "% of the header). Where the bytes go: " + parts.join("; ") + ". ";
+      msg += "The largest field is " + res.fields.filter(function (f) { return f.key === res.largestField; })[0].label + " at " + res.largestFieldBytes + " bytes. ";
+      if (absent.length) msg += "Not carried by this header's version (0 bytes, listed so the account is complete): " + absent.join("; ") + ". ";
+      msg += "The field sizes sum exactly to the serialized length, and the header was inspected by tool 62 and rebuilt identically by tool 63 before the breakdown was shown. Measurement only, over the bytes you pasted — a header's size is a fact about its bytes, not a verdict on it. Broken down locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>71 tools and counting — find the one you need:</p>
+    <p>75 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -1127,6 +1127,15 @@
         <p id="headerfield-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="headersize-calc" data-family="headers">
+        <h3>75 · Block header size breakdown (serialized header → where its bytes go, field by field)</h3>
+        <p>Tool 42 does this for a transaction; this does it for a <strong>header</strong>. Paste a serialized header and it accounts for every byte: the fixed-width fields at their reference widths (the version byte, three 32-byte roots, the 33-byte state root, nBits at 4 bytes, the 3 vote bytes, the solution's keys and nonce) and the variable ones measured from their values — the timestamp and height VLQs re-encoded to be sized, the version 2+ extra-fields section as its length byte plus its bytes, the Autolykos v1 distance as its length byte plus d's minimal big-endian bytes. A field the header's version does not carry — the extra-fields section on version 1, the one-time key and distance d on Autolykos version 2 — is listed as absent at 0 bytes, so the account is complete rather than quietly short. The parts must sum exactly to tool 62's own split (bytes before the solution, solution bytes, total) and the header is rebuilt identically by tool 63 before anything is shown — a breakdown that does not add up is refused, not displayed. Measurement only: a header's size is a fact about its bytes, not a verdict on it, and this tool states no protocol size limit. Broken down locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="headersize-bytes">Serialized block header (hex, as tool 62 takes it)</label>
+        <textarea id="headersize-bytes" rows="4" spellcheck="false" placeholder="e.g. one full serialized header, solution included" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Break down the size</button>
+        <p id="headersize-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1172,6 +1181,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=75"></script>
+<script src="app.js?v=76"></script>
 </body>
 </html>

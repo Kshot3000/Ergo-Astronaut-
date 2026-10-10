@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 74 tools on one page it beats scrolling.
+headers) — with 75 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1682,6 +1682,22 @@ headers) — with 74 tools on one page it beats scrolling.
   Verified against an independent Python
   oracle over every field of the real
   headers plus the mutation.
+- **Block header size breakdown** — where a
+  serialized header's bytes go, field by
+  field: the fixed-width fields at their
+  reference widths and the variable ones
+  (the timestamp and height VLQs, the
+  extra-fields section, the Autolykos v1
+  distance) measured from their values.
+  Fields a version does not carry are
+  listed as absent at 0 bytes, and the
+  parts must sum exactly to the inspector's
+  own byte split before anything is shown.
+  Verified against an independent Python
+  oracle over the real headers, the
+  mutation, a version 3 synthetic with
+  extra-fields bytes and a version 1
+  synthetic whose distance is 0.
 
 ## Cross-chain integration
 

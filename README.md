@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 73 tools on one page it beats scrolling.
+headers) — with 74 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1665,6 +1665,23 @@ headers) — with 73 tools on one page it beats scrolling.
   headers, a built parent-to-child pair
   exactly 120,000 ms apart, and a fork set
   at the tip height.
+- **Block header field extractor** — one
+  field of a serialized header, pulled
+  exactly: version, header ID, parent ID,
+  height, timestamp (with its ISO form),
+  the four roots, nBits (with its difficulty
+  re-decoded by the compact-bits codec),
+  the miner votes (with the signed decode
+  spelled out byte by byte), the extra
+  fields, the Autolykos solution fields and
+  the serialized size. A field the header's
+  version does not carry — the extra-fields
+  section on version 1, the one-time key
+  and distance d on Autolykos version 2 —
+  is reported absent, never invented.
+  Verified against an independent Python
+  oracle over every field of the real
+  headers plus the mutation.
 
 ## Cross-chain integration
 

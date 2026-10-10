@@ -7144,6 +7144,117 @@ function summarizeHeaderSet(text) {
   };
 }
 
+/* Tool 74: block header field extractor — one field, pulled
+   exactly, in the line of the transaction extractors (tools
+   47-61), which the header family never got. Tool 62 dumps
+   every field of a header at once; when you need ONE value —
+   the parent ID to chain a child onto, the state root to
+   compare against an explorer, the nBits to feed tool 69 —
+   this extracts just that field, with the decoding the header
+   family already defines where one exists: nBits comes with
+   its difficulty re-decoded by the tool 69 codec, the votes
+   come with tool 71's signed decode, the timestamp with its
+   ISO form. A field the header's version does not carry is
+   reported ABSENT, never invented: version 1 headers have no
+   extra-fields section, and Autolykos version 2 solutions
+   carry neither a one-time public key nor a distance d.
+   Verified before anything is shown: the header is inspected
+   by tool 62, tool 63 must rebuild the identical header (same
+   bytes, same ID) from the inspected fields, the nBits field's
+   difficulty must re-decode to tool 62's, and the votes field's
+   decode must come from tool 71 with the same votes hex.
+   Verified BEFORE coding against an independent Python oracle
+   (oracle-headerfield.py, exec'ing oracle-header.py's
+   serializer/describe and oracle-headervotes.py's decode):
+   every field of the three real mainnet headers plus the
+   mutation, including the absent fields on each version. */
+var HEADER_FIELD_LABELS = {
+  "version": "Block version",
+  "header-id": "Header ID",
+  "parent-id": "Parent ID",
+  "height": "Height",
+  "timestamp": "Timestamp",
+  "ad-proofs-root": "AD-proofs root",
+  "transactions-root": "Transactions root",
+  "state-root": "State root",
+  "extension-root": "Extension root",
+  "nbits": "nBits",
+  "votes": "Miner votes",
+  "extra-fields": "Extra fields (unparsed bytes)",
+  "miner-pk": "Miner public key (Autolykos solution)",
+  "onetime-pk": "One-time public key (Autolykos v1 solution)",
+  "nonce": "Nonce (Autolykos solution)",
+  "pow-distance": "PoW distance d (Autolykos v1 solution)",
+  "size": "Serialized size"
+};
+
+function extractHeaderField(headerHex, fieldKey) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, headerId: null, height: null, version: null, field: null, fieldLabel: null, present: null, value: null, detail: null };
+  };
+  var key = typeof fieldKey === "string" ? fieldKey.trim() : "";
+  if (!Object.prototype.hasOwnProperty.call(HEADER_FIELD_LABELS, key)) return fail("Pick the field to extract — one of: " + Object.keys(HEADER_FIELD_LABELS).join(", ") + ".");
+  var h = inspectBlockHeader(headerHex, "");
+  if (!h.valid) return fail("The header does not inspect: " + h.reason);
+  var cleaned = String(headerHex).replace(/\s+/g, "").toLowerCase();
+  var rebuilt = buildBlockHeader({
+    version: String(h.version), parentId: h.parentId, adProofsRoot: h.adProofsRoot,
+    transactionsRoot: h.transactionsRoot, stateRoot: h.stateRoot, timestampMs: h.timestampMs,
+    extensionRoot: h.extensionRoot, nBits: String(h.nBits), height: String(h.height),
+    votesHex: h.votesHex, unparsedHex: h.unparsedHex === null ? "" : h.unparsedHex,
+    minerPk: h.minerPk, nonce: h.nonce,
+    onetimePk: h.onetimePk === null ? "" : h.onetimePk,
+    powDistance: h.powDistance === null ? "" : h.powDistance
+  });
+  if (!rebuilt.valid || rebuilt.headerHex !== cleaned || rebuilt.headerId !== h.headerId) return fail("Internal error: the header does not rebuild identically from its inspected fields — nothing was shown rather than an unverified extraction.");
+  var present = true, value = null, detail = null;
+  switch (key) {
+    case "version": value = String(h.version); detail = "Autolykos version " + h.autolykosVersion; break;
+    case "header-id": value = h.headerId; detail = "Blake2b-256 of the full serialized header"; break;
+    case "parent-id": value = h.parentId; break;
+    case "height": value = String(h.height); break;
+    case "timestamp": value = h.timestampMs; detail = h.timestampIso; break;
+    case "ad-proofs-root": value = h.adProofsRoot; break;
+    case "transactions-root": value = h.transactionsRoot; break;
+    case "state-root": value = h.stateRoot; detail = "33 bytes: the AVL tree digest carries one extra byte"; break;
+    case "extension-root": value = h.extensionRoot; break;
+    case "nbits":
+      if (decodeCompactBits(h.nBits).toString() !== h.difficulty) return fail("Internal error: the difficulty does not re-decode from this header's nBits — nothing was shown rather than an unverified extraction.");
+      value = String(h.nBits); detail = h.nBitsHex + " - difficulty " + h.difficulty; break;
+    case "votes": {
+      var vd = decodeHeaderVotes(headerHex);
+      if (!vd.valid || vd.votesHex !== h.votesHex) return fail("Internal error: the votes do not decode through tool 71 — nothing was shown rather than an unverified extraction.");
+      value = h.votesHex;
+      detail = vd.bytes.map(function (b) {
+        var desc;
+        if (b.kind === "none") desc = "no vote (0)";
+        else if (b.kind === "increase") desc = "increase " + b.paramName + " (+" + b.signed + ")";
+        else if (b.kind === "decrease") desc = "decrease " + b.paramName + " (" + b.signed + ")";
+        else if (b.kind === "soft-fork") desc = "soft-fork vote (+120)";
+        else desc = "unknown byte (" + b.signed + ") - not a vote the reference node defines";
+        return "byte " + (b.index + 1) + ": " + desc;
+      }).join("; ");
+      break;
+    }
+    case "extra-fields":
+      if (h.unparsedHex === null) { present = false; detail = "version 1 headers carry no extra-fields section"; }
+      else { value = h.unparsedHex; detail = (h.unparsedHex.length / 2) + " byte(s) of extra header fields"; }
+      break;
+    case "miner-pk": value = h.minerPk; break;
+    case "onetime-pk":
+      if (h.onetimePk === null) { present = false; detail = "Autolykos version 2 solutions carry no one-time public key"; }
+      else value = h.onetimePk;
+      break;
+    case "nonce": value = h.nonce; break;
+    case "pow-distance":
+      if (h.powDistance === null) { present = false; detail = "Autolykos version 2 solutions carry no distance d"; }
+      else value = h.powDistance;
+      break;
+    case "size": value = String(h.byteLength); detail = h.withoutPowLength + " bytes before the solution + " + h.solutionLength + " bytes of Autolykos solution"; break;
+  }
+  return { valid: true, reason: null, headerId: h.headerId, height: h.height, version: h.version, field: key, fieldLabel: HEADER_FIELD_LABELS[key], present: present, value: value, detail: detail };
+}
+
 function inspectBlockHeader(headerHex, expectedStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, headerId: null, idMatches: null, expectedId: null, version: null, autolykosVersion: null, parentId: null, adProofsRoot: null, transactionsRoot: null, stateRoot: null, extensionRoot: null, timestampMs: null, timestampIso: null, nBits: null, nBitsHex: null, difficulty: null, height: null, votesHex: null, votes: null, unparsedHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null, byteLength: null, withoutPowLength: null, solutionLength: null };
@@ -8028,7 +8139,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -8692,6 +8803,25 @@ if (typeof document !== "undefined") {
       msg += "In height order there are " + res.adjacentPairs + " adjacent pair(s) one height apart, " + res.linkedPairs + " of them parent-linked";
       msg += res.timestampRegressions ? ", and ⚠ " + res.timestampRegressions + " timestamp regression(s) where time goes backwards. " : ", with no timestamp regressions. ";
       msg += "This summary covers only the headers you pasted — it proves none of them sits on the main chain. Summarized locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("headerfield-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("headerfield-result");
+      var res = extractHeaderField(document.getElementById("headerfield-bytes").value, document.getElementById("headerfield-field").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not extract that field. Nothing was extracted.";
+        return;
+      }
+      var msg;
+      if (!res.present) {
+        msg = "✓ Header " + res.headerId + " (version " + res.version + ", height " + res.height + ") does not carry the " + res.fieldLabel + " field — " + res.detail + ". Nothing was invented in its place. Extracted locally; nothing was fetched, signed or sent.";
+      } else {
+        msg = "✓ " + res.fieldLabel + " of header " + res.headerId + " (version " + res.version + ", height " + res.height + "): " + (res.value === "" ? "(empty)" : res.value);
+        if (res.detail) msg += " — " + res.detail;
+        msg += ". The header was inspected by tool 62 and rebuilt identically by tool 63 before this field was shown. Extracted locally; nothing was fetched, signed or sent.";
+      }
       out.textContent = msg;
     });
 

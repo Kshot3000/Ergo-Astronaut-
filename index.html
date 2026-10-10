@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>77 tools and counting — find the one you need:</p>
+    <p>78 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -1158,6 +1158,15 @@
         <p id="headermerge-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="txset-calc" data-family="transactions">
+        <h3>78 · Transaction set summarizer (serialized transactions, one per line → what this set of transactions does)</h3>
+        <p>Tools 29–61 each work on <strong>one</strong> transaction, tool 33 summarizes a set of boxes and tool 73 a set of headers — this is the transaction family's set view. Paste serialized transactions, one per line — a batch of pending sends, the transactions of one block copied from an explorer, two sources' views of the same mempool — and it aggregates the whole set: the input, data-input and output counts; the exact total output value in BigInt over every output of every transaction (outputs only — a fee needs the input boxes' values, which the serialized bytes do not carry; tool 34 computes it when the boxes are supplied); the size account (total, smallest, largest and floored mean); how many transactions carry a proof on at least one input; the token account (entries across all outputs, distinct token IDs, and the exact per-token totals summed over the whole set); and the mints (a token whose ID is its transaction's first input box ID — the protocol's mint rule). The verdict no single-transaction tool can give is the <strong>shared input</strong>: a box spent by more than one transaction in the set can only ever be spent once, so at most one of those transactions can confirm — flagged with the transactions that spend it, never smoothed over. Data inputs are only read, not spent, so shared data inputs are counted distinct, not flagged. A transaction pasted twice — including its signed and unsigned forms, which share one ID — would double-count every aggregate, so duplicate IDs are refused rather than summarized. Every transaction is parsed by tool 29 first, and each one's output value and token totals are re-aggregated from its own outputs before it counts. The summary covers only the transactions you paste — it does not say any of them is confirmed, still valid against the current UTXO set, or broadcastable. Summarized locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="txset-txs">Serialized transactions, one per line (hex, as tool 29 takes them)</label>
+        <textarea id="txset-txs" rows="5" spellcheck="false" placeholder="e.g. one full serialized transaction per line, signed or unsigned" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Summarize the set</button>
+        <p id="txset-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1203,6 +1212,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=78"></script>
+<script src="app.js?v=79"></script>
 </body>
 </html>

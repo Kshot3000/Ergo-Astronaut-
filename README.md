@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 77 tools on one page it beats scrolling.
+headers) — with 78 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1733,6 +1733,30 @@ headers) — with 77 tools on one page it beats scrolling.
   split chained pair, a fork, an
   overlapping gapped merge, a disjoint
   merge and identical sides.
+- **Transaction set summarizer** — a set
+  of serialized transactions, one per
+  line, aggregated as a whole: input,
+  data-input and output counts; the
+  exact total output value (BigInt over
+  every output — outputs only, since a
+  fee needs the input boxes' values the
+  bytes do not carry); the size account
+  (total, smallest, largest, floored
+  mean); signed vs unsigned counts; the
+  token account (entries, distinct IDs,
+  exact per-token totals over the set);
+  the mints (token ID = first input box
+  ID); and the shared-input verdict — a
+  box spent by two transactions in the
+  set can only ever be spent once, so at
+  most one of them can confirm. Duplicate
+  transaction IDs (including a
+  transaction's signed and unsigned
+  forms) are refused. Verified against
+  an independent Python oracle over
+  three real/fleet transactions, an
+  output-variant pair over identical
+  inputs, and a two-mint set.
 
 ## Cross-chain integration
 

@@ -7039,6 +7039,111 @@ function tallyHeaderVotes(text) {
   };
 }
 
+/* Tool 73: block header set summarizer — the coverage summary the
+   header family does not yet give. Tools 62–72 open, build, diff,
+   chain, tally and verify headers one property at a time; paste a
+   SET of serialized headers, one per line, and this tool answers
+   what the set as a whole covers: how many headers, which heights
+   (span, distinct heights, heights inside the span with no header
+   supplied, and heights carrying more than one distinct header —
+   a fork in the set), which block versions, the exact difficulty
+   aggregates (total, minimum, maximum and the floored mean, all
+   BigInt from each header's own nBits), and the time coverage
+   (earliest and latest timestamps, their span, and the mean block
+   interval between the endpoint heights). Ordering for adjacency
+   is by (height, header ID): an adjacent pair is two consecutive
+   entries in that order whose heights differ by exactly one, and
+   it is linked when the later header's parent ID names the
+   earlier header's ID; a timestamp regression is an adjacent pair
+   in that order whose timestamp goes backwards. The endpoint mean
+   interval is reported ONLY when exactly one header sits at each
+   endpoint height — with a fork at an endpoint there is no single
+   interval to mean. A header pasted twice would double-count
+   every aggregate, so duplicates are refused, not summarized.
+   Verified before anything is shown: every header is inspected
+   by tool 62, its difficulty is re-decoded from its nBits by the
+   tool 69 codec and must match, the version counts must sum to
+   the header count, and distinct heights + missing heights must
+   equal the span + 1. Verified BEFORE coding against an
+   independent Python oracle (oracle-headerset.py): the three real
+   mainnet headers plus the mutation, a built pair chained
+   parent-to-child exactly 120,000 ms apart, and a fork set whose
+   twin at the tip height makes the endpoint interval null. */
+function summarizeHeaderSet(text) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, headerCount: null, entries: null, minHeight: null, maxHeight: null, heightSpan: null, distinctHeights: null, missingHeights: null, forkHeights: null, versions: null, totalDifficulty: null, minDifficulty: null, maxDifficulty: null, meanDifficulty: null, earliestTimestampMs: null, latestTimestampMs: null, timestampSpanMs: null, adjacentPairs: null, linkedPairs: null, timestampRegressions: null, endpointMeanIntervalMs: null };
+  };
+  if (typeof text !== "string") return fail("Paste the serialized block headers first — one complete header per line, exactly as tool 62 takes them.");
+  var lines = text.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  if (lines.length < 2) return fail("A set summary needs at least two headers — paste one complete serialized header per line. For a single header, tool 62 inspects it on its own.");
+  var seen = {};
+  var entries = [];
+  for (var i = 0; i < lines.length; i++) {
+    var h = inspectBlockHeader(lines[i], "");
+    if (!h.valid) return fail("Header " + (i + 1) + " of " + lines.length + " does not inspect: " + h.reason);
+    if (seen[h.headerId]) return fail("Header " + (i + 1) + " of " + lines.length + " is the same header as header " + seen[h.headerId] + " (ID " + h.headerId + ") — a header counted twice would corrupt every aggregate, so duplicates are refused rather than summarized.");
+    seen[h.headerId] = i + 1;
+    if (decodeCompactBits(h.nBits).toString() !== h.difficulty) return fail("Internal error: header " + (i + 1) + "'s difficulty does not re-decode from its own nBits — nothing was shown rather than an unverified summary.");
+    entries.push({ index: i, headerId: h.headerId, parentId: h.parentId, height: h.height, version: h.version, timestampMs: h.timestampMs, nBits: h.nBits, difficulty: h.difficulty });
+  }
+  var minHeight = null, maxHeight = null;
+  var byHeight = {};
+  var versionCounts = {};
+  var total = 0n, minDiff = null, maxDiff = null;
+  var earliest = null, latest = null;
+  entries.forEach(function (e) {
+    if (minHeight === null || e.height < minHeight) minHeight = e.height;
+    if (maxHeight === null || e.height > maxHeight) maxHeight = e.height;
+    if (!byHeight[e.height]) byHeight[e.height] = [];
+    byHeight[e.height].push(e);
+    versionCounts[e.version] = (versionCounts[e.version] || 0) + 1;
+    var d = BigInt(e.difficulty);
+    total += d;
+    if (minDiff === null || d < minDiff) minDiff = d;
+    if (maxDiff === null || d > maxDiff) maxDiff = d;
+    var ts = BigInt(e.timestampMs);
+    if (earliest === null || ts < earliest) earliest = ts;
+    if (latest === null || ts > latest) latest = ts;
+  });
+  var distinctHeights = Object.keys(byHeight).length;
+  var heightSpan = maxHeight - minHeight;
+  var missingHeights = heightSpan + 1 - distinctHeights;
+  if (distinctHeights + missingHeights !== heightSpan + 1) return fail("Internal error: the height accounting does not close — nothing was shown rather than an unverified summary.");
+  var versionTotal = Object.keys(versionCounts).reduce(function (s, k) { return s + versionCounts[k]; }, 0);
+  if (versionTotal !== entries.length) return fail("Internal error: the version counts sum to " + versionTotal + " for " + entries.length + " headers — nothing was shown rather than an unverified summary.");
+  var forkHeights = Object.keys(byHeight).filter(function (k) { return byHeight[k].length > 1; }).map(function (k) { return { height: Number(k), count: byHeight[k].length }; }).sort(function (a, b) { return a.height - b.height; });
+  var versions = Object.keys(versionCounts).map(function (k) { return { version: Number(k), count: versionCounts[k] }; }).sort(function (a, b) { return a.version - b.version; });
+  var ordered = entries.slice().sort(function (a, b) { return (a.height - b.height) || (a.headerId < b.headerId ? -1 : 1); });
+  var adjacentPairs = 0, linkedPairs = 0, timestampRegressions = 0;
+  for (var j = 1; j < ordered.length; j++) {
+    var prev = ordered[j - 1], nxt = ordered[j];
+    if (nxt.height === prev.height + 1) {
+      adjacentPairs++;
+      if (nxt.parentId === prev.headerId) linkedPairs++;
+    }
+    if (BigInt(nxt.timestampMs) < BigInt(prev.timestampMs)) timestampRegressions++;
+  }
+  var endpointMeanIntervalMs = null;
+  if (maxHeight > minHeight && byHeight[minHeight].length === 1 && byHeight[maxHeight].length === 1) {
+    endpointMeanIntervalMs = ((BigInt(byHeight[maxHeight][0].timestampMs) - BigInt(byHeight[minHeight][0].timestampMs)) / BigInt(heightSpan)).toString();
+  }
+  return {
+    valid: true, reason: null,
+    headerCount: entries.length, entries: entries,
+    minHeight: minHeight, maxHeight: maxHeight, heightSpan: heightSpan,
+    distinctHeights: distinctHeights, missingHeights: missingHeights,
+    forkHeights: forkHeights, versions: versions,
+    totalDifficulty: total.toString(),
+    minDifficulty: minDiff.toString(), maxDifficulty: maxDiff.toString(),
+    meanDifficulty: (total / BigInt(entries.length)).toString(),
+    earliestTimestampMs: earliest.toString(), latestTimestampMs: latest.toString(),
+    timestampSpanMs: (latest - earliest).toString(),
+    adjacentPairs: adjacentPairs, linkedPairs: linkedPairs,
+    timestampRegressions: timestampRegressions,
+    endpointMeanIntervalMs: endpointMeanIntervalMs
+  };
+}
+
 function inspectBlockHeader(headerHex, expectedStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, headerId: null, idMatches: null, expectedId: null, version: null, autolykosVersion: null, parentId: null, adProofsRoot: null, transactionsRoot: null, stateRoot: null, extensionRoot: null, timestampMs: null, timestampIso: null, nBits: null, nBitsHex: null, difficulty: null, height: null, votesHex: null, votes: null, unparsedHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null, byteLength: null, withoutPowLength: null, solutionLength: null };
@@ -7923,7 +8028,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -8562,6 +8667,31 @@ if (typeof document !== "undefined") {
         ? "The soft-fork tally of " + res.softForkCount + " reaches the " + VOTE_SOFT_FORK_APPROVAL_MIN + " bar — again, only an approval if the votes span the 32-epoch window the chain counts. "
         : "The soft-fork tally is " + res.softForkCount + " of the " + VOTE_SOFT_FORK_APPROVAL_MIN + " votes a soft-fork needs over 32 epochs. ";
       msg += "This tally covers only the headers you pasted — it is not the chain's own epoch count. Tallied locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("headerset-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("headerset-result");
+      var res = summarizeHeaderSet(document.getElementById("headerset-headers").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not summarize that set. Nothing was summarized.";
+        return;
+      }
+      var fmtTs = function (ms) { return new Date(Number(BigInt(ms))).toISOString(); };
+      var msg = "✓ Summarized " + res.headerCount + " headers covering heights " + res.minHeight + "–" + res.maxHeight + " (span " + res.heightSpan + "): " + res.distinctHeights + " distinct height(s), " + res.missingHeights + " height(s) inside the span with no header supplied. ";
+      if (res.forkHeights.length) {
+        msg += "⚠ Fork in the set: " + res.forkHeights.map(function (f) { return "height " + f.height + " carries " + f.count + " distinct headers"; }).join("; ") + ". ";
+      }
+      msg += "Versions: " + res.versions.map(function (v) { return "v" + v.version + " × " + v.count; }).join(", ") + ". ";
+      msg += "Difficulty (exact, from each header's nBits): total " + res.totalDifficulty + ", min " + res.minDifficulty + ", max " + res.maxDifficulty + ", mean " + res.meanDifficulty + " (floored). ";
+      msg += "Timestamps run from " + fmtTs(res.earliestTimestampMs) + " to " + fmtTs(res.latestTimestampMs) + " — a span of " + res.timestampSpanMs + " ms. ";
+      msg += res.endpointMeanIntervalMs !== null
+        ? "Mean block interval between the endpoint heights: " + res.endpointMeanIntervalMs + " ms (floored). "
+        : "No endpoint mean interval: an endpoint height carries more than one header, so there is no single interval to mean. ";
+      msg += "In height order there are " + res.adjacentPairs + " adjacent pair(s) one height apart, " + res.linkedPairs + " of them parent-linked";
+      msg += res.timestampRegressions ? ", and ⚠ " + res.timestampRegressions + " timestamp regression(s) where time goes backwards. " : ", with no timestamp regressions. ";
+      msg += "This summary covers only the headers you pasted — it proves none of them sits on the main chain. Summarized locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

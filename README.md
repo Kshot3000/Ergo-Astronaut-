@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 72 tools on one page it beats scrolling.
+headers) — with 73 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1645,6 +1645,26 @@ headers) — with 72 tools on one page it beats scrolling.
   oracle over the real headers, the vote
   synthetics, and a 513-header set whose
   tally is exactly the approval minimum.
+- **Block header set summarizer** — what a
+  pasted set of headers, one per line,
+  covers as a whole: height span, distinct
+  heights, heights inside the span with no
+  header supplied, fork heights carrying
+  more than one distinct header, the count
+  per block version, exact difficulty
+  aggregates (total, minimum, maximum and
+  floored mean, each re-decoded from the
+  header's own nBits), timestamp span, the
+  endpoint mean block interval (only when
+  each endpoint height carries exactly one
+  header), adjacent and parent-linked pair
+  counts, and timestamp regressions.
+  Duplicates are refused rather than
+  double-counted. Verified against an
+  independent Python oracle over the real
+  headers, a built parent-to-child pair
+  exactly 120,000 ms apart, and a fork set
+  at the tip height.
 
 ## Cross-chain integration
 

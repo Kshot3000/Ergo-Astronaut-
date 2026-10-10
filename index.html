@@ -1089,6 +1089,15 @@
         <p id="votetally-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="headerset-calc" data-family="headers">
+        <h3>73 · Block header set summarizer (serialized headers, one per line → what this set of headers covers)</h3>
+        <p>The other header tools each open one property at a time — this one answers for a <strong>set</strong>: paste serialized headers, one per line, and it summarizes their coverage. Heights: the span from lowest to highest, how many distinct heights are present, how many heights inside the span have no header supplied, and any height carrying more than one distinct header — a fork inside your set. Versions: how many headers carry each block version. Difficulty: the exact total, minimum, maximum and mean (floored) of the difficulties each header's own nBits declares, in exact integer maths — every header is inspected by tool 62 and its difficulty re-decoded from its nBits by the tool 69 codec before it counts. Time: the earliest and latest timestamps and the span between them, plus the mean block interval between the endpoint heights — reported only when exactly one header sits at each endpoint height, because with a fork at an endpoint there is no single interval to mean. Adjacent pairs (consecutive in height order, exactly one height apart) are counted, and how many of them actually link parent-to-child; a timestamp that goes backwards in height order is flagged, never smoothed over. A header pasted twice would double-count every aggregate, so duplicates are refused rather than summarized. The summary covers only the headers you paste — it proves none of them sits on the main chain. Summarized locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="headerset-headers">Serialized block headers, one per line (hex, as tool 62 takes them)</label>
+        <textarea id="headerset-headers" rows="5" spellcheck="false" placeholder="e.g. one full serialized header per line, solution included" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Summarize the set</button>
+        <p id="headerset-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1134,6 +1143,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=73"></script>
+<script src="app.js?v=74"></script>
 </body>
 </html>

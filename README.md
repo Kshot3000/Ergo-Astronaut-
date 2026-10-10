@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 79 tools on one page it beats scrolling.
+headers) — with 85 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -764,6 +764,34 @@ headers) — with 79 tools on one page it beats scrolling.
   disjoint pair, a first set wholly inside the
   second, and one token aggregating across two
   common boxes.
+- **Box set symmetric difference** — keeps only what
+  exactly one of two sets of serialized boxes (one
+  box per line in each) holds: the disagreement
+  itself, handed back as a set. The differing boxes
+  are keyed by box ID and sorted by box ID, split
+  into only-in-the-first and only-in-the-second, and
+  their bytes come back in that order ready to paste
+  into the box set summarizer or differ. The
+  differing ERG total, byte total, combined size
+  minimum and per-token totals are exact sums over
+  the differing boxes only, taken from the box set
+  summarizer itself run over the difference bytes,
+  so the two tools can never disagree. Two identical
+  sets are reported plainly as identical, with an
+  empty difference and zero totals — an answer, not
+  an error. A single box is a valid side; an
+  unparseable line or a duplicated box inside one
+  side refuses the whole difference with the side
+  and line named. It fetches nothing and is not a
+  live wallet balance, and a difference between two
+  pasted sets proves neither is the chain's real
+  UTXO set. Verified against an independent Python
+  oracle over fleet-sdk's published box vectors plus
+  a from-scratch token-amount variant: a
+  one-box-each-side overlap, identical sides in
+  different orders, a disjoint pair, each side
+  wholly inside the other, and one token aggregating
+  across differing boxes on both sides.
 - **Unsigned-form extractor** — takes one serialized
   transaction and returns the unsigned form its
   transaction ID is computed over: every input's

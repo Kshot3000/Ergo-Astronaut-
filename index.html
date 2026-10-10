@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>84 tools and counting — find the one you need:</p>
+    <p>85 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -788,6 +788,17 @@
         <p id="boxintersect-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="boxxor-calc" data-family="boxes">
+        <h3>85 · Box set symmetric difference (two sets of boxes → what only one set holds)</h3>
+        <p>Tools 81 and 82 union and intersect two sets of boxes; this keeps only what exactly one set holds — the disagreement itself, handed back as a set: which boxes does one source report that the other does not? Tool 44 names those boxes inside a comparison, but never hands them back as a set with their own totals. Paste both sets, one full serialized box per line in each, and the differing boxes come back: sorted by box ID, split into only-in-the-first and only-in-the-second, with their bytes handed back in that order, ready to paste into tools 33 or 44 and inspect on their own. Sorting by box ID makes the difference order a property of the set, never of paste order. The differing ERG total, byte total, combined size minimum and per-token totals are exact sums over the differing boxes only, and they are tool 33's own totals for the difference bytes — the difference set is re-summarized by tool 33 itself before anything is shown, so the two tools can never disagree. Two identical sets are reported plainly as identical, with an empty difference and zero totals — an answer, not an error. Each side is a set in its own right, so a single box is a valid side; an unparseable line, or the same box listed twice inside one side, refuses the whole difference with the side and line named. The honesty boundary is stated plainly: this differences the bytes you pasted — it fetches nothing and is not a live wallet balance, and a difference between two pasted sets proves neither is the chain's real UTXO set. Difference only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="boxxor-a">First set — serialized boxes (hex, one full box per line, as tool 33 takes them)</label>
+        <textarea id="boxxor-a" rows="5" spellcheck="false" placeholder="e.g. c0843d00… (one box's full serialized bytes per line)" autocomplete="off"></textarea>
+        <label for="boxxor-b">Second set — serialized boxes (hex, one full box per line)</label>
+        <textarea id="boxxor-b" rows="5" spellcheck="false" placeholder="e.g. c0843d00… (one box's full serialized bytes per line)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Difference the box sets</button>
+        <p id="boxxor-result" role="status" aria-live="polite"></p>
+      </form>
+
       <form class="tool" id="txstrip-calc" data-family="transactions">
         <h3>45 · Unsigned-form extractor (transaction bytes → the unsigned form its ID is computed over)</h3>
         <p>Tool 29 reports a transaction's ID and tool 42 reports its unsigned size, but neither shows the unsigned bytes themselves — the exact form the transaction ID is the Blake2b-256 of: every input's spending proof replaced by a single zero length byte, everything else verbatim. Tool 36 refuses signed bytes rather than drop proofs silently; this tool makes that drop explicit and hands you the unsigned hex itself, ready to paste into the parser, the JSON converter or the differ. The extraction is verified before it is shown: the result must hash to the transaction's own ID and re-parse as the same transaction, unsigned — a proof longer than 127 bytes has a multi-byte length VLQ, so stripping can remove more than the proof bytes themselves, and the report counts the whole difference. The honesty boundary is stated plainly: the unsigned form cannot be spent and the removed proofs are gone from this copy, so keep the original if you need them — and no proof that was present was verified here, only removed. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
@@ -1278,6 +1289,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=85"></script>
+<script src="app.js?v=86"></script>
 </body>
 </html>

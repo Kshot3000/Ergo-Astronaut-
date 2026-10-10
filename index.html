@@ -1080,6 +1080,15 @@
         <p id="headervotes-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="votetally-calc" data-family="headers">
+        <h3>72 · Block header votes tally (serialized headers, one per line → the epoch tally of their miner votes)</h3>
+        <p>Tool 71 decodes one header's ballot and stops there, because a vote cast is not a change approved — approval is a <strong>tally</strong>: the chain counts votes over a 1,024-block voting epoch, keyed by the <em>signed</em> byte value, so a vote to increase a parameter and a vote to decrease it are different proposed changes with separate counts. Paste a set of serialized headers, one per line, and this tool tallies them: every header is decoded by tool 71 (inspected by tool 62, rebuilt by tool 63), and the tally reports how many headers cast each increase, each decrease and the soft-fork vote, with the bars stated next to the counts — a parameter change is approved at 513 or more votes for the same signed value within one epoch, a soft-fork at 29,492 or more over 32 epochs. The condition matters and is not assumed away: a tally at or over a bar is reported as an approval <em>only if</em> those votes fall inside the window the chain counts, and this tally covers only the headers you paste — it is not the chain's own epoch count, and it proves none of the headers sits on the main chain. A header pasted twice is a ballot counted twice, so duplicates are refused rather than tallied; bytes the reference node does not define are counted as unknown, never as votes. Tallied locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="votetally-headers">Serialized block headers, one per line (hex, as tool 62 takes them)</label>
+        <textarea id="votetally-headers" rows="5" spellcheck="false" placeholder="e.g. one full serialized header per line, solution included" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Tally the votes</button>
+        <p id="votetally-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1125,6 +1134,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=72"></script>
+<script src="app.js?v=73"></script>
 </body>
 </html>

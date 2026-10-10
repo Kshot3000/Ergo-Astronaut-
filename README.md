@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 71 tools on one page it beats scrolling.
+headers) — with 72 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1626,6 +1626,25 @@ headers) — with 71 tools on one page it beats scrolling.
   oracle implementing the same source:
   the real version-2 header's 040000 is a
   vote to increase the maximum block cost.
+- **Block header votes tally** — the epoch
+  tally over a pasted set of headers, one
+  per line: every header decoded by the
+  votes decoder, the ballots counted keyed
+  by signed value (+4 and -4 are separate
+  proposed changes), with the approval
+  bars beside the counts — 513 for a
+  parameter change within one 1,024-block
+  epoch, 29,492 for a soft-fork over 32
+  epochs. Stated honestly throughout: a
+  tally at the bar is an approval only if
+  the votes fall inside the window the
+  chain counts, the tally covers only the
+  headers pasted, and a duplicated header
+  is refused rather than counted twice.
+  Verified against an independent Python
+  oracle over the real headers, the vote
+  synthetics, and a 513-header set whose
+  tally is exactly the approval minimum.
 
 ## Cross-chain integration
 

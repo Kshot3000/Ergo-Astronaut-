@@ -6963,6 +6963,82 @@ function decodeHeaderVotes(headerHex) {
   };
 }
 
+/* Tool 72: block header votes tally — the epoch tally tool 71
+   decodes ballots for but does not perform. Paste serialized
+   headers, one per line; every header is decoded by tool 71
+   (which inspects it with tool 62 and rebuilds it with tool 63),
+   and its three vote bytes are tallied KEYED BY SIGNED VALUE:
+   +4 and -4 are different proposed changes with separate counts,
+   exactly as the reference node's votes map keys them. A
+   parameter change is approved at 513 or more votes for the same
+   signed value within one 1,024-block voting epoch; a soft-fork
+   at 29,492 or more over 32 epochs (VotingSettings over the
+   mainnet settings, as in tool 71). The tally covers ONLY the
+   headers supplied — the approval flags are stated against that
+   condition, never as a claim about the chain. A header pasted
+   twice is a ballot counted twice, so duplicates are refused,
+   not silently tallied. Unknown bytes are counted as unknown,
+   never as votes. Verified before anything is shown: the tally
+   buckets (signed counts + soft-fork + unknown + empty slots)
+   must sum to exactly three bytes per header. Verified BEFORE
+   coding against an independent Python oracle
+   (oracle-votetally.py): the three real mainnet headers plus the
+   mutation, the five vote synthetics of tool 71, the nine-header
+   combination, and a 513-header set whose +4 tally is exactly
+   the approval minimum. */
+function tallyHeaderVotes(text) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, headerCount: null, entries: null, minHeight: null, maxHeight: null, headersWithVotes: null, tallies: null, softForkCount: null, unknownCount: null, noneCount: null, totalVoteBytes: null, approvedChanges: null, softForkApproved: null };
+  };
+  if (typeof text !== "string") return fail("Paste the serialized block headers first — one complete header per line, exactly as tool 62 takes them.");
+  var lines = text.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  if (lines.length < 2) return fail("A tally needs at least two headers — paste one complete serialized header per line. For a single header, tool 71 decodes its ballot on its own.");
+  var seen = {};
+  var entries = [];
+  var bySigned = {};
+  var softForkCount = 0, unknownCount = 0, noneCount = 0, headersWithVotes = 0;
+  var minHeight = null, maxHeight = null;
+  for (var i = 0; i < lines.length; i++) {
+    var d = decodeHeaderVotes(lines[i]);
+    if (!d.valid) return fail("Header " + (i + 1) + " of " + lines.length + " does not decode: " + d.reason);
+    if (seen[d.headerId]) return fail("Header " + (i + 1) + " of " + lines.length + " is the same header as header " + seen[d.headerId] + " (ID " + d.headerId + ") — a ballot counted twice would corrupt the tally, so duplicates are refused rather than tallied.");
+    seen[d.headerId] = i + 1;
+    entries.push({ index: i, headerId: d.headerId, height: d.height, version: d.version, votesHex: d.votesHex });
+    if (minHeight === null || d.height < minHeight) minHeight = d.height;
+    if (maxHeight === null || d.height > maxHeight) maxHeight = d.height;
+    var cast = false;
+    d.bytes.forEach(function (b) {
+      if (b.kind === "none") { noneCount++; return; }
+      if (b.kind === "unknown") { unknownCount++; return; }
+      bySigned[b.signed] = (bySigned[b.signed] || 0) + 1;
+      if (b.kind === "soft-fork") softForkCount++;
+      cast = true;
+    });
+    if (cast) headersWithVotes++;
+  }
+  var tallies = Object.keys(bySigned).map(function (k) {
+    var signed = Number(k);
+    var kind = signed === VOTE_SOFT_FORK_ID ? "soft-fork" : (signed > 0 ? "increase" : "decrease");
+    return { signed: signed, count: bySigned[k], kind: kind, paramId: kind === "soft-fork" ? VOTE_SOFT_FORK_ID : Math.abs(signed), paramName: kind === "soft-fork" ? "Soft-fork (increasing version of a block)" : VOTE_PARAM_NAMES[Math.abs(signed)] };
+  }).sort(function (a, b) { return (Math.abs(a.signed) - Math.abs(b.signed)) || (a.signed - b.signed); });
+  var counted = tallies.reduce(function (s, t) { return s + t.count; }, 0) + unknownCount + noneCount;
+  if (counted !== 3 * lines.length) return fail("Internal error: the tally buckets sum to " + counted + " vote bytes for " + lines.length + " headers instead of " + (3 * lines.length) + " — nothing was shown rather than an unverified tally.");
+  var approvedChanges = tallies.filter(function (t) { return t.kind !== "soft-fork" && t.count >= VOTE_PARAM_APPROVAL_MIN; });
+  return {
+    valid: true, reason: null,
+    headerCount: lines.length, entries: entries,
+    minHeight: minHeight, maxHeight: maxHeight,
+    headersWithVotes: headersWithVotes,
+    tallies: tallies,
+    softForkCount: softForkCount,
+    unknownCount: unknownCount,
+    noneCount: noneCount,
+    totalVoteBytes: 3 * lines.length,
+    approvedChanges: approvedChanges,
+    softForkApproved: softForkCount >= VOTE_SOFT_FORK_APPROVAL_MIN
+  };
+}
+
 function inspectBlockHeader(headerHex, expectedStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, headerId: null, idMatches: null, expectedId: null, version: null, autolykosVersion: null, parentId: null, adProofsRoot: null, transactionsRoot: null, stateRoot: null, extensionRoot: null, timestampMs: null, timestampIso: null, nBits: null, nBitsHex: null, difficulty: null, height: null, votesHex: null, votes: null, unparsedHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null, byteLength: null, withoutPowLength: null, solutionLength: null };
@@ -7847,7 +7923,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -8455,6 +8531,37 @@ if (typeof document !== "undefined") {
         if (res.unknownCount) msg += "⚠ " + res.unknownCount + " byte(s) are not votes the reference node defines, so they change nothing. ";
       }
       msg += "Votes are tallied over 1,024-block voting epochs: a parameter change needs more than half an epoch's votes (at least " + VOTE_PARAM_APPROVAL_MIN + "), and a soft-fork needs more than 90% over 32 epochs (at least " + VOTE_SOFT_FORK_APPROVAL_MIN + " of 32,768). One header's bytes are one miner's ballot in that tally — a vote cast here is not a change approved. Decoded locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("votetally-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("votetally-result");
+      var res = tallyHeaderVotes(document.getElementById("votetally-headers").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not tally those votes. Nothing was tallied.";
+        return;
+      }
+      var describeTally = function (t) {
+        if (t.kind === "soft-fork") return "soft-fork: " + t.count + " vote(s)";
+        return (t.kind === "increase" ? "INCREASE" : "DECREASE") + " parameter " + t.paramId + " (" + t.paramName + "): " + t.count + " vote(s)";
+      };
+      var msg = "✓ Tallied " + res.headerCount + " headers (heights " + res.minHeight + "–" + res.maxHeight + "): " + res.headersWithVotes + " cast at least one defined vote, " + (res.headerCount - res.headersWithVotes) + " cast none. ";
+      if (res.tallies.length) {
+        msg += "The ballots: " + res.tallies.map(describeTally).join("; ") + ". ";
+      } else {
+        msg += "No defined votes at all in this set. ";
+      }
+      if (res.unknownCount) msg += "⚠ " + res.unknownCount + " vote byte(s) are not votes the reference node defines — counted as unknown, never as votes. ";
+      if (res.approvedChanges.length) {
+        msg += "At or over the bar: " + res.approvedChanges.map(function (t) { return (t.kind === "increase" ? "increase" : "decrease") + " of parameter " + t.paramId + " with " + t.count + " votes (≥ " + VOTE_PARAM_APPROVAL_MIN + ")"; }).join("; ") + " — each would be an approved change IF those votes all fall inside a single 1,024-block voting epoch, which is the condition the chain applies and this tally does not assume. ";
+      } else {
+        msg += "No parameter change in this set reaches the approval bar of " + VOTE_PARAM_APPROVAL_MIN + " votes for the same signed value within one 1,024-block voting epoch. ";
+      }
+      msg += res.softForkApproved
+        ? "The soft-fork tally of " + res.softForkCount + " reaches the " + VOTE_SOFT_FORK_APPROVAL_MIN + " bar — again, only an approval if the votes span the 32-epoch window the chain counts. "
+        : "The soft-fork tally is " + res.softForkCount + " of the " + VOTE_SOFT_FORK_APPROVAL_MIN + " votes a soft-fork needs over 32 epochs. ";
+      msg += "This tally covers only the headers you pasted — it is not the chain's own epoch count. Tallied locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

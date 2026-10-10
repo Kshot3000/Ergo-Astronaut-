@@ -4395,6 +4395,97 @@ function xorBoxSets(aText, bText) {
   };
 }
 
+/* ---------- Box set difference (first set minus second set) ---------- */
+/* Tools 81, 82 and 85 union, intersect and symmetric-difference
+   two box sets; this one is the asymmetric operation none of
+   them hands back: the boxes the FIRST set holds that the SECOND
+   does not — what is left of a set after another set is taken
+   away. A wallet's boxes minus the boxes a transaction spends,
+   a snapshot minus the boxes a later scan already accounted for.
+   Tool 85 splits its difference into only-in-first and
+   only-in-second but hands the two sides back COMBINED, so the
+   first side's remainder cannot be pasted onward alone; here
+   the remainder comes back by itself: sorted by box ID, its
+   bytes — always the FIRST set's bytes, the remainder's owning
+   side — handed back in that order so it can be pasted straight
+   into tools 33 or 44. Sorting by box ID makes the remainder
+   order a property of the SET, never of paste order. Direction
+   matters and is named in every report: subtracting the second
+   set from the first is a different question from the reverse,
+   and the oracle pins a swapped pair to prove the tool does not
+   quietly symmetrize it. The totals are exact sums over the
+   REMAINDER boxes only and they are tool 33's own totals for the
+   remainder bytes, because the remainder hex is summarized by
+   tool 33 itself before anything is shown, so this tool can
+   never disagree with the summarizer. The verdict is "emptied"
+   when the second set covers the first (a valid answer, reported
+   with zero totals, never refused), "unchanged" when the second
+   set removes nothing (the sets are disjoint), and "partial"
+   otherwise. Each side is a set in its own right, so a single
+   box is a valid side, and tool 33's strictness carries over: an
+   unparseable line, or the same box listed twice inside one
+   side, refuses the whole difference with the side and line
+   named. The accounting must close before anything is shown
+   (remainder + removed = first count, and removed never exceeds
+   the second count). The honesty boundary: this subtracts the
+   bytes you pasted — it fetches nothing, is not a live wallet
+   balance, and a remainder between two pasted sets proves
+   neither is the chain's real UTXO set. Verified BEFORE coding
+   against an independent Python oracle (oracle-boxminus.py,
+   exec'ing oracle-boxsetdiff.py's from-scratch box reader/writer):
+   a one-box partial remainder, a first set wholly covered by the
+   second, identical sides, a disjoint pair that removes nothing,
+   a token carried by two remainder boxes aggregating into one
+   total, and the swapped pair returning the other side's box. */
+function subtractBoxSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, boxCountA: null, boxCountB: null, remainderCount: null, removedCount: null, remainderIds: null, remainderHex: null, totalNano: null, totalErg: null, totalBytes: null, minTotalNano: null, minTotalErg: null, allMeetMinimum: null, belowMinimum: null, tokenTotals: null, distinctTokens: null };
+  };
+  var a = summarizeBoxSet(aText, "");
+  if (!a.valid) return fail("The FIRST set is refused: " + a.reason);
+  var b = summarizeBoxSet(bText, "");
+  if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
+  var hexOf = function (text) {
+    var map = {};
+    String(text).split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
+      var parsed = parseErgoBox(line);
+      if (parsed.valid) map[parsed.boxId] = line.replace(/\s+/g, "").toLowerCase();
+    });
+    return map;
+  };
+  var hexA = hexOf(aText);
+  var inB = {};
+  b.boxes.forEach(function (x) { inB[x.boxId] = true; });
+  var remainderIds = a.boxes.map(function (x) { return x.boxId; }).filter(function (id) { return !inB[id]; }).sort();
+  var removedCount = a.boxCount - remainderIds.length;
+  if (remainderIds.length + removedCount !== a.boxCount || removedCount < 0 || removedCount > b.boxCount) return fail("Internal error: the subtraction accounting does not close — nothing was shown rather than an unverified remainder.");
+  var remainderHex = remainderIds.map(function (id) { return hexA[id]; }).join("\n");
+  var totalNano = "0", totalErg = "0", totalBytes = 0, minTotalNano = "0", minTotalErg = "0", allMeetMinimum = true, belowMinimum = [], tokenTotals = [], distinctTokens = 0;
+  if (remainderIds.length) {
+    var s = summarizeBoxSet(remainderHex, "");
+    if (!s.valid || s.boxCount !== remainderIds.length) return fail("Internal error: the remainder set does not re-summarize as itself — nothing was shown rather than an unverified remainder.");
+    totalNano = s.totalNano; totalErg = s.totalErg; totalBytes = s.totalBytes;
+    minTotalNano = s.minTotalNano; minTotalErg = s.minTotalErg;
+    allMeetMinimum = s.allMeetMinimum; belowMinimum = s.belowMinimum;
+    tokenTotals = s.tokenTotals; distinctTokens = s.distinctTokens;
+  }
+  var verdict;
+  if (remainderIds.length === 0) verdict = "emptied";
+  else if (removedCount === 0) verdict = "unchanged";
+  else verdict = "partial";
+  return {
+    valid: true, reason: null,
+    verdict: verdict,
+    boxCountA: a.boxCount, boxCountB: b.boxCount,
+    remainderCount: remainderIds.length, removedCount: removedCount,
+    remainderIds: remainderIds, remainderHex: remainderHex,
+    totalNano: totalNano, totalErg: totalErg, totalBytes: totalBytes,
+    minTotalNano: minTotalNano, minTotalErg: minTotalErg,
+    allMeetMinimum: allMeetMinimum, belowMinimum: belowMinimum,
+    tokenTotals: tokenTotals, distinctTokens: distinctTokens
+  };
+}
+
 /* ---------- Unsigned-form extractor ----------
    Tool 29 reports a transaction's ID, and tool 42 reports the
    unsigned size, but neither shows the unsigned bytes themselves —
@@ -9544,7 +9635,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -11100,6 +11191,36 @@ if (typeof document !== "undefined") {
         msg += "No tokens in any differing box. ";
       }
       msg += "Differing boxes, in box-ID order, ready to paste into tools 33 or 44: " + res.diffHex + " Difference only, over the bytes you pasted: it fetches nothing and is not a live wallet balance, and a difference between two pasted sets proves neither is the chain's real UTXO set. Differenced locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("boxminus-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("boxminus-result");
+      var res = subtractBoxSets(document.getElementById("boxminus-a").value, document.getElementById("boxminus-b").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not subtract those sets. Nothing was subtracted.";
+        return;
+      }
+      var msg;
+      if (res.verdict === "emptied") {
+        msg = "✓ The second set covers every box in the first — all " + res.boxCountA + " box(es) of the first set are removed, so the remainder is empty and holds exactly 0 nanoERG. Emptied is an answer, not an error: the first set minus the second either leaves something or it does not. Subtraction only, over the bytes you pasted: it fetches nothing and is not a live wallet balance. Subtracted locally; nothing was fetched, signed or sent.";
+        out.textContent = msg;
+        return;
+      }
+      msg = "Of " + res.boxCountA + " box(es) in the first set, the second set's " + res.boxCountB + " box(es) remove " + res.removedCount + ", leaving a remainder of " + res.remainderCount + " box(es). The remainder holds exactly " + res.totalNano + " nanoERG (" + res.totalErg + " ERG) in " + res.totalBytes + " bytes in total, against a combined size minimum of " + res.minTotalNano + " nanoERG (" + res.minTotalErg + " ERG) — " + (res.allMeetMinimum ? "every remainder box meets its own size minimum." : "below minimum: " + res.belowMinimum.map(function (x) { return "box " + x.boxId + " is " + x.shortfallNano + " nanoERG short of its " + x.minNano + " minimum"; }).join("; ") + ".") + " ";
+      if (res.verdict === "unchanged") {
+        msg = "✓ " + msg + "The two sets share no box at all — the second set removes nothing, and the remainder is the first set exactly. Direction matters: swapping the two sets would answer the reverse question. ";
+      } else {
+        msg = "✓ " + msg + "Direction matters: this is the first set minus the second — swapping the two sets would answer the reverse question. ";
+      }
+      msg += "Remainder boxes: " + res.remainderIds.join(", ") + ". ";
+      if (res.tokenTotals.length) {
+        msg += "Tokens across the remainder: " + res.tokenTotals.map(function (t) { return t.amount + " raw of " + t.tokenId + " (in " + t.boxCount + " box(es))"; }).join("; ") + " — raw on-chain integers; tool 6 converts them once you know each token's decimals. ";
+      } else {
+        msg += "No tokens in any remainder box. ";
+      }
+      msg += "Remainder boxes, in box-ID order, ready to paste into tools 33 or 44: " + res.remainderHex + " Subtraction only, over the bytes you pasted: it fetches nothing and is not a live wallet balance, and a remainder between two pasted sets proves neither is the chain's real UTXO set. Subtracted locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

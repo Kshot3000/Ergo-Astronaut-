@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 87 tools on one page it beats scrolling.
+headers) — with 88 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -792,6 +792,39 @@ headers) — with 87 tools on one page it beats scrolling.
   different orders, a disjoint pair, each side
   wholly inside the other, and one token aggregating
   across differing boxes on both sides.
+- **Box set difference** — the asymmetric remainder:
+  the boxes the first of two sets of serialized boxes
+  (one box per line in each) holds that the second
+  does not — what is left of a set after another set
+  is taken away, which the symmetric difference
+  cannot hand back on its own because it returns
+  both sides combined. The remainder boxes are keyed
+  by box ID and sorted by box ID, and their bytes —
+  always the first set's bytes, the remainder's
+  owning side — come back in that order ready to
+  paste into the box set summarizer or differ. The
+  remainder ERG total, byte total, combined size
+  minimum and per-token totals are exact sums over
+  the remainder boxes only, taken from the box set
+  summarizer itself run over the remainder bytes,
+  so the two tools can never disagree. A second set
+  that covers the first is reported plainly as
+  emptying it, with zero totals — an answer, not an
+  error; a disjoint second set removes nothing. A
+  single box is a valid side; an unparseable line or
+  a duplicated box inside one side refuses the whole
+  subtraction with the side and line named. It
+  fetches nothing and is not a live wallet balance,
+  and a remainder between two pasted sets proves
+  neither is the chain's real UTXO set. Verified
+  against an independent Python oracle over
+  fleet-sdk's published box vectors plus a
+  from-scratch token-amount variant: a one-box
+  partial remainder, a first set wholly covered by
+  the second, identical sides, a disjoint pair that
+  removes nothing, one token aggregating across two
+  remainder boxes, and the swapped pair returning
+  the other side's box.
 - **Unsigned-form extractor** — takes one serialized
   transaction and returns the unsigned form its
   transaction ID is computed over: every input's

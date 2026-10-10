@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 86 tools on one page it beats scrolling.
+headers) — with 87 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1831,6 +1831,30 @@ headers) — with 86 tools on one page it beats scrolling.
   conflicted common pair, a disjoint
   pair, linked-chain and fork subsets,
   and a gapped subset.
+- **Block header set symmetric difference** — two
+  sets of serialized headers differenced
+  by header ID: only what exactly one set
+  holds, the differing headers sorted by
+  height then ID and split into
+  only-in-the-first and only-in-the-second,
+  their bytes handed back in that order
+  for tools 65, 72, 73 or 76, and the exact
+  differing difficulty total (tool 73's own
+  total for the difference bytes,
+  cross-checked before anything is shown).
+  The differing set is judged as a chain —
+  conflict heights (a fork inside the
+  disagreement itself), missing heights in
+  the differing span counted with the first
+  ten named, broken parent links reported.
+  Identical sets are an answer with zero
+  totals, not an error. Duplicates inside
+  one side are refused. Verified against
+  an independent Python oracle over a
+  gapped overlap, identical reordered
+  sides, a disjoint pair, a single-header
+  subset difference, a forked differing
+  pair, and a linked differing pair.
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

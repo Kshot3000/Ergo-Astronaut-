@@ -1781,6 +1781,28 @@ headers) — with 79 tools on one page it beats scrolling.
   split chained pair, a fork, an
   overlapping gapped merge, a disjoint
   merge and identical sides.
+- **Block header set intersection** — two
+  sets of serialized headers intersected
+  by header ID: the common headers sorted
+  by height then ID, their bytes handed
+  back in that order for tools 65, 72, 73
+  or 76, and the exact common difficulty
+  total (tool 73's own total for the
+  common bytes, cross-checked before
+  anything is shown). The common set is
+  judged as a chain — conflict heights a
+  fork both sets hold, missing heights in
+  the common span counted with the first
+  ten named, broken parent links
+  reported. Disjoint sets are an answer
+  with zero totals, not an error.
+  Duplicates inside one side are refused.
+  Verified against an independent Python
+  oracle over a one-header overlap,
+  identical reordered sides with a
+  conflicted common pair, a disjoint
+  pair, linked-chain and fork subsets,
+  and a gapped subset.
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

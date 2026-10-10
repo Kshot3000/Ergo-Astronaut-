@@ -8170,6 +8170,136 @@ function mergeHeaderSets(aText, bText) {
   };
 }
 
+/* Tool 84: block header set intersection — two sets of headers →
+   what both sets hold. Tool 77 unions two header sets; this one
+   keeps only what BOTH hold — the overlap that matters when two
+   sources disagree (which headers do two nodes agree on? which
+   part of a sync do two explorers both report?): paste both sets
+   and the common headers come back — the intersection by header
+   ID, sorted by height then ID like tool 77's union, with the
+   common bytes handed back in that sorted order so the result can
+   be pasted straight into tools 65, 72, 73 or 76. Sorting by
+   height then ID makes the common order a property of the SET,
+   never of paste order. The totals are exact sums over the COMMON
+   headers only — each common header counted once however many
+   sets carried it — and they are tool 73's own totals for the
+   common bytes: when two or more headers are common, the common
+   hex is summarized by tool 73 itself before anything is shown
+   and this tool must agree with it, so the two tools can never
+   disagree; a single common header's total is its own nBits
+   difficulty, re-decoded inside its side parse. The common set
+   also keeps the chain judgement tool 77 makes over its union: a
+   height the COMMON set carries under more than one ID is a fork
+   both sets agree on — agreement about a conflict is still a
+   conflict, reported, never hidden — missing heights inside the
+   common span are counted (with the first ten named), and
+   height-adjacent common pairs are checked for parent linkage.
+   The chain verdict is "empty" when nothing is common,
+   "single-header" for one common header, "single-chain" only
+   when there are no conflicts, no missing heights and every
+   height-adjacent pair links, else "not-a-single-chain". The
+   set verdict is "disjoint" when nothing is common (a valid
+   answer, reported with zero totals and null heights, never
+   refused — the empty case is short-circuited BEFORE any
+   re-summarizing, because tool 73 refuses a one-header set, let
+   alone an empty one), "identical-sets" when the common set is
+   each side exactly, "subset-first" / "subset-second" when the
+   common set is one whole side but not the other, and "overlap"
+   otherwise. Each side is a set in its own right, so a single
+   header is a valid side, and a header pasted twice inside one
+   side is refused, not counted twice. The accounting must close
+   before anything is shown (common + only-in-first = first
+   count, common + only-in-second = second count). The honesty
+   boundary: this intersects the bytes you pasted — it fetches
+   nothing, proves neither set sits on the main chain, and
+   agreement between two pasted sets proves neither is the
+   chain's real state. Verified BEFORE coding against an
+   independent Python oracle (oracle-headerintersect.py, exec'ing
+   oracle-headerset.py's entries): a one-header overlap, identical
+   sides pasted in different orders whose common pair conflicts
+   at one height, a disjoint pair, a subset whose common pair is
+   a linked chain, a subset whose common pair is a fork both sets
+   hold, and a subset spanning a huge height gap. */
+function intersectHeaderSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, chainVerdict: null, headerCountA: null, headerCountB: null, commonCount: null, onlyACount: null, onlyBCount: null, commonIds: null, commonHex: null, conflictHeights: null, minHeight: null, maxHeight: null, missingHeightCount: null, firstMissingHeights: null, adjacentPairs: null, linkedPairs: null, brokenLinks: null, totalDifficulty: null };
+  };
+  var a = parseHeaderSetSideFull(aText, "FIRST");
+  if (!a.valid) return fail("The FIRST set is refused: " + a.reason);
+  var b = parseHeaderSetSideFull(bText, "SECOND");
+  if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
+  var inB = {};
+  b.entries.forEach(function (e) { inB[e.headerId] = true; });
+  var byId = {};
+  a.entries.forEach(function (e) { byId[e.headerId] = e; });
+  var common = a.entries.filter(function (e) { return !!inB[e.headerId]; }).sort(function (x, y) {
+    if (x.height !== y.height) return x.height - y.height;
+    return x.headerId < y.headerId ? -1 : 1;
+  });
+  var onlyACount = a.entries.length - common.length;
+  var onlyBCount = b.entries.length - common.length;
+  if (common.length + onlyACount !== a.entries.length || common.length + onlyBCount !== b.entries.length) return fail("Internal error: the intersection accounting does not close — nothing was shown rather than an unverified intersection.");
+  var commonIds = common.map(function (e) { return e.headerId; });
+  var commonHex = common.map(function (e) { return e.headerHex; }).join("\n");
+  var conflictHeights = [], minHeight = null, maxHeight = null, missingHeightCount = 0, firstMissingHeights = [];
+  var adjacentPairs = 0, linkedPairs = 0, brokenLinks = [];
+  var totalDifficulty = "0";
+  if (common.length) {
+    var byHeight = {};
+    common.forEach(function (e) { if (!byHeight[e.height]) byHeight[e.height] = []; byHeight[e.height].push(e.headerId); });
+    conflictHeights = Object.keys(byHeight).filter(function (k) { return byHeight[k].length > 1; }).map(function (k) {
+      return { height: Number(k), ids: byHeight[k].slice().sort() };
+    }).sort(function (x, y) { return x.height - y.height; });
+    minHeight = common[0].height;
+    maxHeight = common[common.length - 1].height;
+    var distinctHeights = Object.keys(byHeight).map(Number).sort(function (x, y) { return x - y; });
+    missingHeightCount = (maxHeight - minHeight + 1) - distinctHeights.length;
+    for (var di = 0; di + 1 < distinctHeights.length && firstMissingHeights.length < 10; di++) {
+      for (var mh = distinctHeights[di] + 1; mh < distinctHeights[di + 1] && firstMissingHeights.length < 10; mh++) firstMissingHeights.push(mh);
+    }
+    if (firstMissingHeights.length !== Math.min(10, missingHeightCount)) return fail("Internal error: the missing-height sample does not match the missing-height count — nothing was shown rather than an unverified intersection.");
+    for (var i = 0; i + 1 < common.length; i++) {
+      if (common[i + 1].height - common[i].height === 1) {
+        adjacentPairs += 1;
+        if (common[i + 1].parentId === common[i].headerId) linkedPairs += 1;
+        else brokenLinks.push({ height: common[i + 1].height, expectedParent: common[i].headerId, actualParent: common[i + 1].parentId });
+      }
+    }
+    totalDifficulty = common.reduce(function (s, e) { return s + BigInt(e.difficulty); }, 0n).toString();
+    if (common.length >= 2) {
+      var s = summarizeHeaderSet(commonHex);
+      if (!s.valid || s.headerCount !== common.length) return fail("Internal error: the common set does not re-summarize as itself — nothing was shown rather than an unverified intersection.");
+      if (s.totalDifficulty !== totalDifficulty || s.minHeight !== minHeight || s.maxHeight !== maxHeight || s.missingHeights !== missingHeightCount) return fail("Internal error: tool 73's summary of the common set disagrees with this intersection — nothing was shown rather than an unverified intersection.");
+      if (s.adjacentPairs !== adjacentPairs || s.linkedPairs !== linkedPairs) return fail("Internal error: tool 73's adjacency count for the common set disagrees with this intersection — nothing was shown rather than an unverified intersection.");
+      var sForks = s.forkHeights.map(function (f) { return f.height; });
+      if (JSON.stringify(sForks) !== JSON.stringify(conflictHeights.map(function (c) { return c.height; }))) return fail("Internal error: tool 73's fork heights for the common set disagree with this intersection — nothing was shown rather than an unverified intersection.");
+    }
+  }
+  var chainVerdict;
+  if (common.length === 0) chainVerdict = "empty";
+  else if (common.length === 1) chainVerdict = "single-header";
+  else if (conflictHeights.length === 0 && missingHeightCount === 0 && adjacentPairs > 0 && adjacentPairs === linkedPairs) chainVerdict = "single-chain";
+  else chainVerdict = "not-a-single-chain";
+  var verdict;
+  if (common.length === 0) verdict = "disjoint";
+  else if (common.length === a.entries.length && common.length === b.entries.length) verdict = "identical-sets";
+  else if (common.length === a.entries.length) verdict = "subset-first";
+  else if (common.length === b.entries.length) verdict = "subset-second";
+  else verdict = "overlap";
+  return {
+    valid: true, reason: null,
+    verdict: verdict, chainVerdict: chainVerdict,
+    headerCountA: a.entries.length, headerCountB: b.entries.length,
+    commonCount: common.length, onlyACount: onlyACount, onlyBCount: onlyBCount,
+    commonIds: commonIds, commonHex: commonHex,
+    conflictHeights: conflictHeights,
+    minHeight: minHeight, maxHeight: maxHeight,
+    missingHeightCount: missingHeightCount, firstMissingHeights: firstMissingHeights,
+    adjacentPairs: adjacentPairs, linkedPairs: linkedPairs, brokenLinks: brokenLinks,
+    totalDifficulty: totalDifficulty
+  };
+}
+
 function inspectBlockHeader(headerHex, expectedStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, headerId: null, idMatches: null, expectedId: null, version: null, autolykosVersion: null, parentId: null, adProofsRoot: null, transactionsRoot: null, stateRoot: null, extensionRoot: null, timestampMs: null, timestampIso: null, nBits: null, nBitsHex: null, difficulty: null, height: null, votesHex: null, votes: null, unparsedHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null, byteLength: null, withoutPowLength: null, solutionLength: null };
@@ -9054,7 +9184,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -9805,6 +9935,37 @@ if (typeof document !== "undefined") {
         if (res.adjacentPairs === 0 && res.conflictHeights.length === 0) msg += "No two merged headers sit at adjacent heights, so no parent link could be checked at all. ";
       }
       msg += "Merged headers, in height order, ready to paste into tools 65, 72, 73 or 76: " + res.mergedHex + " Merge only, over the bytes you pasted: it fetches nothing, proves the merged set sits on the main chain nowhere, and when the two sets conflict at a height both headers are kept and flagged. Merged locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("headerintersect-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("headerintersect-result");
+      var res = intersectHeaderSets(document.getElementById("headerintersect-a").value, document.getElementById("headerintersect-b").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not intersect those sets. Nothing was intersected.";
+        return;
+      }
+      var msg;
+      if (res.verdict === "disjoint") {
+        msg = "✓ The two sets share no header at all — " + res.headerCountA + " header(s) in the first set, " + res.headerCountB + " in the second, and not one header ID appears in both, so the common set is empty and its total difficulty is exactly 0. Disjoint is an answer, not an error: two sets of headers either share a header ID or they do not. Intersection only, over the bytes you pasted: it fetches nothing, proves neither set sits on the main chain. Intersected locally; nothing was fetched, signed or sent.";
+        out.textContent = msg;
+        return;
+      }
+      var rel = res.verdict === "identical-sets" ? "The two sets are identical — every header is common" : res.verdict === "subset-first" ? "The first set sits entirely inside the second" : res.verdict === "subset-second" ? "The second set sits entirely inside the first" : "The sets overlap";
+      msg = rel + ": " + res.commonCount + " common header(s) (" + res.onlyACount + " only in the first set, " + res.onlyBCount + " only in the second), covering heights " + res.minHeight + "–" + res.maxHeight + " with total difficulty " + res.totalDifficulty + " (exact, each common header counted once). ";
+      if (res.chainVerdict === "single-chain") {
+        msg += "✓ The common set is itself a single chain: no height is carried by two headers, no height in the span is missing, and all " + res.adjacentPairs + " height-adjacent pair(s) link parent-to-child. ";
+      } else if (res.chainVerdict === "single-header") {
+        msg += "The common set is that one header. ";
+      } else {
+        msg += "⚠ The common set is not a single chain. ";
+        res.conflictHeights.forEach(function (c) { msg += "⚠ Height " + c.height + " is carried by " + c.ids.length + " different common headers (" + c.ids.join(", ") + ") — a fork BOTH sets hold; agreement about a conflict is still a conflict. "; });
+        if (res.missingHeightCount > 0) msg += res.missingHeightCount + " height(s) in the common span have no common header (first missing: " + res.firstMissingHeights.join(", ") + "). ";
+        res.brokenLinks.forEach(function (bl) { msg += "⚠ The common header at height " + bl.height + " names parent " + bl.actualParent + ", not the common header at height " + (bl.height - 1) + " (" + bl.expectedParent + ") — that link does not stitch. "; });
+        if (res.adjacentPairs === 0 && res.conflictHeights.length === 0) msg += "No two common headers sit at adjacent heights, so no parent link could be checked at all. ";
+      }
+      msg += "Common headers, in height order, ready to paste into tools 65, 72, 73 or 76: " + res.commonHex + " Intersection only, over the bytes you pasted: it fetches nothing, proves neither set sits on the main chain, and agreement between two pasted sets proves neither is the chain's real state. Intersected locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

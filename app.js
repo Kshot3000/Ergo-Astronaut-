@@ -7235,6 +7235,132 @@ function intersectTxSets(aText, bText) {
   };
 }
 
+/* Tool 86: transaction set symmetric difference — two sets of
+   transactions → what only one set holds. Tools 80 and 83 union
+   and intersect two transaction sets; tool 79 names the differing
+   transactions inside a comparison but never hands them back as
+   a set — this one keeps only what EXACTLY ONE set holds, the
+   disagreement itself, as a set: which transactions does one
+   source report that the other does not? Paste both sets and the
+   differing transactions come back, sorted by transaction ID,
+   split into only-in-first and only-in-second, with their bytes
+   handed back in that order so the difference set can be pasted
+   straight into tools 78 or 79. Sorting by transaction ID makes
+   the difference order a property of the SET, never of paste
+   order. Identity is the transaction ID, so a signed form on one
+   side and the unsigned form on the other are the SAME
+   transaction — held by both, never differing. The totals are
+   exact sums over the DIFFERING transactions only — each
+   differing transaction counted once — and they are tool 78's
+   own totals for the difference bytes: when two or more
+   transactions differ, the difference hex is summarized by tool
+   78 itself before anything is shown and this tool must agree
+   with it (including its shared-input list), so the two tools
+   can never disagree; a single differing transaction's totals
+   are re-derived from its own parse. The differing set also
+   keeps tool 78's set-level judgement: a box spent by more than
+   one DIFFERING transaction is a shared input inside the
+   differing set — the two sets disagree, and the transactions
+   they disagree about themselves spend the same box, so at most
+   one of them can ever confirm. Data inputs are read, not spent,
+   so they never count. The verdict is "identical-sets" when
+   nothing differs (a valid answer, reported with zero totals,
+   never refused), "disjoint" when nothing is common either (the
+   difference is everything), "subset-first" / "subset-second"
+   when one side is wholly inside the other (the difference is
+   the larger side's extra transactions), and "overlap"
+   otherwise. Each side is a set in its own right, so a single
+   transaction is a valid side, and a transaction pasted twice
+   inside one side — including its signed and unsigned forms,
+   which share one ID — is refused, not counted twice. The
+   accounting must close before anything is shown (difference =
+   only-in-first + only-in-second, common + only-in-first =
+   first count, common + only-in-second = second count, and
+   difference + common = the union count). The honesty boundary:
+   this differences the bytes you pasted — it fetches nothing,
+   proves neither set is confirmed or broadcastable, and a
+   difference between two pasted sets proves neither is the
+   chain's real state. Verified BEFORE coding against an
+   independent Python oracle (oracle-txxor.py, exec'ing
+   oracle-txset.py's member walker): a one-common-transaction
+   overlap whose differing pair shares inputs, identical sides
+   pasted in different orders, a disjoint pair, a subset whose
+   differing pair spends the same two boxes, and token totals
+   aggregating across two differing transactions. */
+function xorTxSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, txCountA: null, txCountB: null, diffCount: null, onlyACount: null, onlyBCount: null, commonCount: null, diffIds: null, onlyAIds: null, onlyBIds: null, diffHex: null, totalOutputNano: null, totalOutputErg: null, totalBytes: null, sharedInputs: null, tokenTotals: null, distinctTokens: null };
+  };
+  var a = parseTxSetSideFull(aText, "FIRST");
+  if (!a.valid) return fail("The FIRST set is refused: " + a.reason);
+  var b = parseTxSetSideFull(bText, "SECOND");
+  if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
+  var inA = {}, inB = {};
+  a.entries.forEach(function (e) { inA[e.txId] = true; });
+  b.entries.forEach(function (e) { inB[e.txId] = true; });
+  var onlyAIds = a.entries.map(function (e) { return e.txId; }).filter(function (id) { return !inB[id]; }).sort();
+  var onlyBIds = b.entries.map(function (e) { return e.txId; }).filter(function (id) { return !inA[id]; }).sort();
+  var diffIds = onlyAIds.concat(onlyBIds).sort();
+  var commonCount = a.entries.length - onlyAIds.length;
+  if (diffIds.length !== onlyAIds.length + onlyBIds.length || commonCount + onlyAIds.length !== a.entries.length || commonCount + onlyBIds.length !== b.entries.length || commonCount < 0 || diffIds.length + commonCount !== a.entries.length + b.entries.length - commonCount) return fail("Internal error: the difference accounting does not close — nothing was shown rather than an unverified difference.");
+  var byIdA = {}, byIdB = {};
+  a.entries.forEach(function (e) { byIdA[e.txId] = e; });
+  b.entries.forEach(function (e) { byIdB[e.txId] = e; });
+  var diff = diffIds.map(function (id) { return byIdA[id] !== undefined && onlyAIds.indexOf(id) !== -1 ? byIdA[id] : byIdB[id]; });
+  var diffHex = diff.map(function (e) { return e.txHex; }).join("\n");
+  var totalOutputNano = "0", totalOutputErg = "0", totalBytes = 0, sharedInputs = [], tokenTotals = [], distinctTokens = 0;
+  if (diff.length) {
+    var inMap = {};
+    diff.forEach(function (e) { e.inputBoxIds.forEach(function (box) { if (!inMap[box]) inMap[box] = []; inMap[box].push(e.txId); }); });
+    sharedInputs = Object.keys(inMap).filter(function (k) { return inMap[k].length > 1; }).map(function (k) { return { boxId: k, txIds: inMap[k].slice().sort() }; }).sort(function (x, y) { return x.boxId < y.boxId ? -1 : 1; });
+    var tokMap = {};
+    var nanoSum = 0n;
+    for (var ci = 0; ci < diff.length; ci++) {
+      var tx = parseErgoTransaction(diff[ci].txHex);
+      if (!tx.valid || tx.txId !== diff[ci].txId) return fail("Internal error: a differing transaction does not re-parse as itself — nothing was shown rather than an unverified difference.");
+      nanoSum += BigInt(tx.totalOutputNano);
+      tx.tokenTotals.forEach(function (t) {
+        if (!tokMap[t.tokenId]) tokMap[t.tokenId] = { tokenId: t.tokenId, amount: 0n, txCount: 0 };
+        tokMap[t.tokenId].amount += BigInt(t.amount);
+        tokMap[t.tokenId].txCount++;
+      });
+    }
+    tokenTotals = Object.keys(tokMap).map(function (k) { return { tokenId: k, amount: tokMap[k].amount.toString(), txCount: tokMap[k].txCount }; }).sort(function (x, y) { return x.tokenId < y.tokenId ? -1 : 1; });
+    distinctTokens = tokenTotals.length;
+    totalBytes = diff.reduce(function (s, e) { return s + e.byteLength; }, 0);
+    var entrySum = diff.reduce(function (s, e) { return s + BigInt(e.totalOutputNano); }, 0n);
+    if (nanoSum !== entrySum) return fail("Internal error: the differing transactions' output values do not re-sum from their own parses — nothing was shown rather than an unverified difference.");
+    totalOutputNano = nanoSum.toString();
+    totalOutputErg = nanoToErg(totalOutputNano);
+    if (diff.length >= 2) {
+      var s = summarizeTxSet(diffHex);
+      if (!s.valid || s.txCount !== diff.length) return fail("Internal error: the difference set does not re-summarize as itself — nothing was shown rather than an unverified difference.");
+      if (s.totalOutputNano !== totalOutputNano || s.totalBytes !== totalBytes) return fail("Internal error: tool 78's totals for the difference set disagree with this difference — nothing was shown rather than an unverified difference.");
+      var sToks = s.tokenTotals.map(function (t) { return t.tokenId + ":" + t.amount; }).join(",");
+      var myToks = tokenTotals.map(function (t) { return t.tokenId + ":" + t.amount; }).join(",");
+      if (sToks !== myToks) return fail("Internal error: tool 78's token totals for the difference set disagree with this difference — nothing was shown rather than an unverified difference.");
+      var sShared = s.sharedInputs.map(function (sh) { return { boxId: sh.boxId, txIds: sh.txIndexes.map(function (ix) { return diffIds[ix]; }).sort() }; }).sort(function (x, y) { return x.boxId < y.boxId ? -1 : 1; });
+      if (JSON.stringify(sShared) !== JSON.stringify(sharedInputs)) return fail("Internal error: tool 78's shared-input list for the difference set disagrees with this difference — nothing was shown rather than an unverified difference.");
+    }
+  }
+  var verdict;
+  if (diffIds.length === 0) verdict = "identical-sets";
+  else if (commonCount === 0) verdict = "disjoint";
+  else if (onlyAIds.length === 0) verdict = "subset-first";
+  else if (onlyBIds.length === 0) verdict = "subset-second";
+  else verdict = "overlap";
+  return {
+    valid: true, reason: null,
+    verdict: verdict,
+    txCountA: a.entries.length, txCountB: b.entries.length,
+    diffCount: diffIds.length, onlyACount: onlyAIds.length, onlyBCount: onlyBIds.length, commonCount: commonCount,
+    diffIds: diffIds, onlyAIds: onlyAIds, onlyBIds: onlyBIds, diffHex: diffHex,
+    totalOutputNano: totalOutputNano, totalOutputErg: totalOutputErg, totalBytes: totalBytes,
+    sharedInputs: sharedInputs,
+    tokenTotals: tokenTotals, distinctTokens: distinctTokens
+  };
+}
+
 /* Tool 62: block header inspector. Every other tool on this hub
    works below the header — boxes, transactions, trees. This one
    opens the header itself: the ~220 bytes that head every Ergo
@@ -9275,7 +9401,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -10172,6 +10298,47 @@ if (typeof document !== "undefined") {
         msg += "No tokens in any common transaction. ";
       }
       msg += "Common transactions, in transaction-ID order, ready to paste into tools 78 or 79: " + res.commonHex + " Intersection only, over the bytes you pasted: it fetches nothing, proves neither set is confirmed or broadcastable, and agreement between two pasted sets proves neither is the chain's real state. Intersected locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("txxor-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("txxor-result");
+      var res = xorTxSets(document.getElementById("txxor-a").value, document.getElementById("txxor-b").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not difference those sets. Nothing was differenced.";
+        return;
+      }
+      var short = function (id) { return id.slice(0, 16) + "…"; };
+      var msg;
+      if (res.verdict === "identical-sets") {
+        msg = "✓ The two sets hold exactly the same transactions — " + res.txCountA + " transaction(s) on each side and not one transaction ID appears on only one side, so the difference set is empty and its total output value is exactly 0 nanoERG. Identical is an answer, not an error: two sets of serialized transactions either differ somewhere or they do not. Difference only, over the bytes you pasted: it fetches nothing, proves neither set is confirmed or broadcastable. Differenced locally; nothing was fetched, signed or sent.";
+        out.textContent = msg;
+        return;
+      }
+      msg = "Of " + res.txCountA + " transaction(s) in the first set and " + res.txCountB + " in the second, " + res.commonCount + " transaction(s) are in both and " + res.diffCount + " differ — " + res.onlyACount + " only in the first, " + res.onlyBCount + " only in the second. The differing transactions' total output value is exactly " + res.totalOutputNano + " nanoERG (" + res.totalOutputErg + " ERG; outputs only — a fee needs the input boxes' values, which the serialized bytes do not carry) in " + res.totalBytes + " bytes in total. ";
+      if (res.verdict === "disjoint") {
+        msg = "✓ " + msg + "The two sets share no transaction at all — the difference is everything both sets hold. ";
+      } else if (res.verdict === "subset-first") {
+        msg = "✓ " + msg + "The first set is wholly inside the second — the difference is the second set's extra transactions exactly. ";
+      } else if (res.verdict === "subset-second") {
+        msg = "✓ " + msg + "The second set is wholly inside the first — the difference is the first set's extra transactions exactly. ";
+      } else {
+        msg = "✓ " + msg;
+      }
+      if (res.onlyAIds.length) msg += "Only in the first set: " + res.onlyAIds.join(", ") + ". ";
+      if (res.onlyBIds.length) msg += "Only in the second set: " + res.onlyBIds.join(", ") + ". ";
+      if (res.sharedInputs.length) {
+        res.sharedInputs.forEach(function (c) { msg += "⚠ Box " + c.boxId + " is spent by " + c.txIds.map(short).join(", ") + " inside the differing set — the transactions these sets disagree about themselves spend the same box, so at most one of them can ever confirm. "; });
+      } else {
+        msg += "No box is spent by more than one differing transaction. ";
+      }
+      if (res.tokenTotals.length) {
+        msg += "Tokens across the differing transactions: " + res.tokenTotals.map(function (t) { return t.amount + " raw of " + t.tokenId + " (in " + t.txCount + " transaction(s))"; }).join("; ") + " — raw on-chain integers; tool 6 converts them once you know each token's decimals. ";
+      } else {
+        msg += "No tokens in any differing transaction. ";
+      }
+      msg += "Differing transactions, in transaction-ID order, ready to paste into tools 78 or 79: " + res.diffHex + " Difference only, over the bytes you pasted: it fetches nothing, proves neither set is confirmed or broadcastable, and a difference between two pasted sets proves neither is the chain's real state. Differenced locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

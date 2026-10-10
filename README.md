@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 85 tools on one page it beats scrolling.
+headers) — with 86 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1936,6 +1936,41 @@ headers) — with 85 tools on one page it beats scrolling.
   pair spends the same two boxes, and
   token totals aggregating across two
   common transactions.
+- **Transaction set symmetric difference** — keeps
+  only what exactly one of two sets of serialized
+  transactions (one transaction per line
+  in each) holds: the disagreement
+  itself, handed back as a set. The differing
+  transactions are keyed by transaction ID and
+  sorted by transaction ID, split
+  into only-in-the-first and only-in-the-second, and
+  their bytes come back in that order ready to paste
+  into the transaction set summarizer or
+  differ. The
+  differing total output value, byte total and per-token
+  totals are exact sums over the differing
+  transactions only, taken from the
+  transaction set summarizer itself run over the difference bytes,
+  so the two tools can never disagree — and the summarizer's
+  shared-input judgement comes with them:
+  a box spent by more than one differing
+  transaction is reported, because the
+  transactions two sets disagree about can
+  themselves spend the same box. Two identical
+  sets are reported plainly as identical, with an
+  empty difference and zero totals — an answer, not an error.
+  A single transaction is a valid side; an
+  unparseable line or a duplicated transaction inside one
+  side (including signed/unsigned twins)
+  refuses the whole difference with the side
+  and line named. It fetches nothing, proves neither set is
+  confirmed or broadcastable, and a difference between two
+  pasted sets proves neither is the chain's real state. Verified against an independent Python
+  oracle over a one-common-transaction
+  overlap whose differing pair shares inputs, identical sides in different orders, a
+  disjoint pair, a subset whose differing
+  pair spends the same two boxes, and one token aggregating across two
+  differing transactions.
 
 ## Cross-chain integration
 

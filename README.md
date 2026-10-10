@@ -738,6 +738,32 @@ headers) — with 79 tools on one page it beats scrolling.
   identical sides in different orders, disjoint,
   identical single boxes collapsing, and one token
   aggregating across the two sides.
+- **Box set intersection** — keeps only what two sets
+  of serialized boxes (one box per line in each) both
+  hold: the common boxes keyed by box ID and sorted by
+  box ID, so the common order is a property of the set,
+  never of paste order, and the common bytes come back
+  in that order ready to paste into the box set
+  summarizer or differ. The common ERG total, byte
+  total, combined size minimum and per-token totals
+  are exact sums over the common boxes only, taken
+  from the box set summarizer itself run over the
+  common bytes, so the two tools can never disagree.
+  Two sets that share nothing are reported plainly as
+  disjoint, with zero totals — an answer, not an
+  error. A single box is a valid side; an unparseable
+  line or a duplicated box inside one side refuses
+  the whole intersection with the side and line
+  named. It fetches nothing and is not a live wallet
+  balance, and agreement between two pasted sets
+  proves neither is the chain's real UTXO set.
+  Verified against an independent Python oracle over
+  fleet-sdk's published box vectors plus a
+  from-scratch token-amount variant: a one-box
+  overlap, identical sides in different orders, a
+  disjoint pair, a first set wholly inside the
+  second, and one token aggregating across two
+  common boxes.
 - **Unsigned-form extractor** — takes one serialized
   transaction and returns the unsigned form its
   transaction ID is computed over: every input's

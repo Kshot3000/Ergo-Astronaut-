@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>81 tools and counting — find the one you need:</p>
+    <p>82 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -777,6 +777,17 @@
         <p id="boxmerge-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="boxintersect-calc" data-family="boxes">
+        <h3>82 · Box set intersection (two sets of boxes → what both sets hold)</h3>
+        <p>Tool 81 unions two sets of boxes; this keeps only what both sets hold — the overlap that matters when two sources disagree: which boxes do an explorer and a node both report, which of a snapshot's boxes are still in a later set? Paste both sets, one full serialized box per line in each, and the common boxes come back: sorted by box ID, with their bytes handed back in that order, ready to paste into tools 33 or 44. Sorting by box ID makes the common order a property of the set, never of paste order. The common ERG total, byte total, combined size minimum and per-token totals are exact sums over the common boxes only, and they are tool 33's own totals for the common bytes — the common set is re-summarized by tool 33 itself before anything is shown, so the two tools can never disagree. Two sets that share nothing are reported plainly as disjoint, with zero totals — an answer, not an error. Each side is a set in its own right, so a single box is a valid side; an unparseable line, or the same box listed twice inside one side, refuses the whole intersection with the side and line named. The honesty boundary is stated plainly: this intersects the bytes you pasted — it fetches nothing and is not a live wallet balance, and agreement between two pasted sets proves neither is the chain's real UTXO set. Intersection only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="boxintersect-a">First set — serialized boxes (hex, one full box per line, as tool 33 takes them)</label>
+        <textarea id="boxintersect-a" rows="5" spellcheck="false" placeholder="e.g. c0843d00… (one box's full serialized bytes per line)" autocomplete="off"></textarea>
+        <label for="boxintersect-b">Second set — serialized boxes (hex, one full box per line)</label>
+        <textarea id="boxintersect-b" rows="5" spellcheck="false" placeholder="e.g. c0843d00… (one box's full serialized bytes per line)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Intersect the box sets</button>
+        <p id="boxintersect-result" role="status" aria-live="polite"></p>
+      </form>
+
       <form class="tool" id="txstrip-calc" data-family="transactions">
         <h3>45 · Unsigned-form extractor (transaction bytes → the unsigned form its ID is computed over)</h3>
         <p>Tool 29 reports a transaction's ID and tool 42 reports its unsigned size, but neither shows the unsigned bytes themselves — the exact form the transaction ID is the Blake2b-256 of: every input's spending proof replaced by a single zero length byte, everything else verbatim. Tool 36 refuses signed bytes rather than drop proofs silently; this tool makes that drop explicit and hands you the unsigned hex itself, ready to paste into the parser, the JSON converter or the differ. The extraction is verified before it is shown: the result must hash to the transaction's own ID and re-parse as the same transaction, unsigned — a proof longer than 127 bytes has a multi-byte length VLQ, so stripping can remove more than the proof bytes themselves, and the report counts the whole difference. The honesty boundary is stated plainly: the unsigned form cannot be spent and the removed proofs are gone from this copy, so keep the original if you need them — and no proof that was present was verified here, only removed. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
@@ -1245,6 +1256,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=82"></script>
+<script src="app.js?v=83"></script>
 </body>
 </html>

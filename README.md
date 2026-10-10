@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 75 tools on one page it beats scrolling.
+headers) — with 76 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1698,6 +1698,22 @@ headers) — with 75 tools on one page it beats scrolling.
   mutation, a version 3 synthetic with
   extra-fields bytes and a version 1
   synthetic whose distance is 0.
+- **Block header set differ** — two sets
+  of serialized headers compared by
+  header ID: the headers in both, the ones
+  only in each set, the exact difficulty
+  totals with their signed delta, and the
+  divergent heights — heights carried by
+  both sets where they disagree about
+  which header sits there — with both
+  sides' IDs, plus the highest height the
+  two sets provably share. A single header
+  is a valid side; duplicates inside one
+  side are refused. Verified against an
+  independent Python oracle over
+  identical, reordered, fork-compared,
+  subset, disjoint and partially-forked
+  set pairs.
 
 ## Cross-chain integration
 

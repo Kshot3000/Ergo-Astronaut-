@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>75 tools and counting — find the one you need:</p>
+    <p>76 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -1136,6 +1136,17 @@
         <p id="headersize-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="headersetdiff-calc" data-family="headers">
+        <h3>76 · Block header set differ (two sets of headers → which headers changed, and where the sets diverge?)</h3>
+        <p>Tool 44 does this for box sets; tool 73 summarizes one header set but never compares two. Paste <strong>two sets</strong> of serialized headers — one complete header per line in each box; a single header is a valid set — and this tool compares them by header ID: the headers in both, the ones only in the first set, the ones only in the second, and the exact difficulty totals of each set with their signed delta. The comparison a single-set summary cannot make is the <strong>divergent height</strong>: a height carried by <em>both</em> sets where they disagree about which header sits there — the point where two header collections stop describing the same chain — reported with both sides' header IDs at that height. A height carried by only one set is a coverage difference, not a divergence, and it already shows in the only-in lists. The tool also reports the highest height the two sets provably share (or that they share no header at all). A header pasted twice inside one set is refused, not counted twice, and every header's difficulty is re-decoded from its own nBits before anything is shown. Comparison only, over the bytes you pasted: it fetches nothing, proves neither set sits on the main chain, and which set is the right one is not a question bytes alone answer. Compared locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="headersetdiff-a">First set of serialized block headers (one per line)</label>
+        <textarea id="headersetdiff-a" rows="4" spellcheck="false" placeholder="e.g. the headers from one source, one complete header per line" autocomplete="off"></textarea>
+        <label for="headersetdiff-b">Second set of serialized block headers (one per line)</label>
+        <textarea id="headersetdiff-b" rows="4" spellcheck="false" placeholder="e.g. the headers from another source, one complete header per line" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Compare the sets</button>
+        <p id="headersetdiff-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1181,6 +1192,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=76"></script>
+<script src="app.js?v=77"></script>
 </body>
 </html>

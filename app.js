@@ -7344,6 +7344,99 @@ function analyzeHeaderSize(headerHex) {
   };
 }
 
+/* Tool 76: block header set differ — two sets of headers → what
+   actually differs between them, the header family's analogue of
+   tool 44's box set differ (the transactions got their single-tx
+   differ at tool 43 and the headers theirs at tool 64; a SET of
+   headers had no comparison). Membership is by header ID: common
+   (in both, first-set order), removed (only in the first set) and
+   added (only in the second), each non-common entry carrying its
+   height. The comparison a box differ never needs is the fork
+   view: a DIVERGENT height is one carried by BOTH sets whose ID
+   set at that height differs between them — the height where two
+   header collections stop agreeing about the chain — reported
+   with both sides' IDs at that height. A height carried by only
+   one set is a coverage difference, not a divergence: it already
+   shows in added/removed. maxCommonHeight is the greatest height
+   among the common headers (the highest point the two sets
+   provably share), or null when they share no header at all.
+   Totals are the exact BigInt sums of each header's own
+   nBits-decoded difficulty, with the signed delta. Each side is a
+   set in its own right, so a single header is a valid side (tool
+   73's two-header minimum is a summarizer rule, not a set rule),
+   and a header pasted twice inside one side is refused, not
+   counted twice. Verified before anything is shown: every header
+   on both sides is inspected by tool 62, its difficulty
+   re-decodes from its nBits through tool 69, and the accounting
+   must close (common + removed = first count, common + added =
+   second count). The honesty boundary: this compares the bytes
+   you pasted — it fetches nothing, proves neither set sits on the
+   main chain, and which set is the right one is not a question
+   bytes alone answer. Verified BEFORE coding against an
+   independent Python oracle (oracle-headersetdiff.py): identical,
+   reordered, fork-compared, subset, disjoint and partially-forked
+   set pairs. */
+function parseHeaderSetSide(text, sideLabel) {
+  var fail = function (reason) { return { valid: false, reason: reason, entries: null }; };
+  if (typeof text !== "string") return fail("Paste the " + sideLabel + " set of serialized block headers first — one complete header per line, exactly as tool 62 takes them.");
+  var lines = text.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  if (lines.length < 1) return fail("The " + sideLabel + " set is empty — paste at least one complete serialized header, one per line.");
+  var seen = {};
+  var entries = [];
+  for (var i = 0; i < lines.length; i++) {
+    var h = inspectBlockHeader(lines[i], "");
+    if (!h.valid) return fail("Header " + (i + 1) + " of " + lines.length + " does not inspect: " + h.reason);
+    if (seen[h.headerId]) return fail("Header " + (i + 1) + " of " + lines.length + " is the same header as header " + seen[h.headerId] + " (ID " + h.headerId + ") — a header counted twice would corrupt the comparison, so duplicates inside one set are refused rather than compared.");
+    seen[h.headerId] = i + 1;
+    if (decodeCompactBits(h.nBits).toString() !== h.difficulty) return fail("Internal error: header " + (i + 1) + "'s difficulty does not re-decode from its own nBits — nothing was shown rather than an unverified comparison.");
+    entries.push({ headerId: h.headerId, height: h.height, difficulty: h.difficulty });
+  }
+  return { valid: true, reason: null, entries: entries };
+}
+
+function compareHeaderSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, headerCountA: null, headerCountB: null, countDelta: null, common: null, added: null, removed: null, sameOrder: null, divergentHeights: null, maxCommonHeight: null, totalDifficultyA: null, totalDifficultyB: null, difficultyDelta: null };
+  };
+  var a = parseHeaderSetSide(aText, "FIRST");
+  if (!a.valid) return fail("The FIRST set is refused: " + a.reason);
+  var b = parseHeaderSetSide(bText, "SECOND");
+  if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
+  var idsA = a.entries.map(function (e) { return e.headerId; });
+  var idsB = b.entries.map(function (e) { return e.headerId; });
+  var inA = {}, inB = {};
+  idsA.forEach(function (id) { inA[id] = true; });
+  idsB.forEach(function (id) { inB[id] = true; });
+  var common = idsA.filter(function (id) { return !!inB[id]; });
+  var removed = a.entries.filter(function (e) { return !inB[e.headerId]; }).map(function (e) { return { headerId: e.headerId, height: e.height }; });
+  var added = b.entries.filter(function (e) { return !inA[e.headerId]; }).map(function (e) { return { headerId: e.headerId, height: e.height }; });
+  if (common.length + removed.length !== a.entries.length || common.length + added.length !== b.entries.length) return fail("Internal error: the membership accounting does not close — nothing was shown rather than an unverified comparison.");
+  var sameOrder = idsA.length === idsB.length && idsA.every(function (id, i) { return id === idsB[i]; });
+  var byHeightA = {}, byHeightB = {};
+  a.entries.forEach(function (e) { if (!byHeightA[e.height]) byHeightA[e.height] = []; byHeightA[e.height].push(e.headerId); });
+  b.entries.forEach(function (e) { if (!byHeightB[e.height]) byHeightB[e.height] = []; byHeightB[e.height].push(e.headerId); });
+  var divergentHeights = Object.keys(byHeightA).filter(function (k) { return !!byHeightB[k]; }).map(function (k) {
+    var setA = {}, setB = {};
+    byHeightA[k].forEach(function (id) { setA[id] = true; });
+    byHeightB[k].forEach(function (id) { setB[id] = true; });
+    var differ = byHeightA[k].length !== byHeightB[k].length || byHeightA[k].some(function (id) { return !setB[id]; }) || byHeightB[k].some(function (id) { return !setA[id]; });
+    return differ ? { height: Number(k), idsA: byHeightA[k], idsB: byHeightB[k] } : null;
+  }).filter(function (d) { return d !== null; }).sort(function (x, y) { return x.height - y.height; });
+  var maxCommonHeight = null;
+  a.entries.forEach(function (e) { if (inB[e.headerId] && (maxCommonHeight === null || e.height > maxCommonHeight)) maxCommonHeight = e.height; });
+  var totalA = a.entries.reduce(function (s, e) { return s + BigInt(e.difficulty); }, 0n);
+  var totalB = b.entries.reduce(function (s, e) { return s + BigInt(e.difficulty); }, 0n);
+  return {
+    valid: true, reason: null,
+    verdict: added.length === 0 && removed.length === 0 ? "same-set" : "changed",
+    headerCountA: a.entries.length, headerCountB: b.entries.length, countDelta: b.entries.length - a.entries.length,
+    common: common, added: added, removed: removed, sameOrder: sameOrder,
+    divergentHeights: divergentHeights, maxCommonHeight: maxCommonHeight,
+    totalDifficultyA: totalA.toString(), totalDifficultyB: totalB.toString(),
+    difficultyDelta: (totalB - totalA).toString()
+  };
+}
+
 function inspectBlockHeader(headerHex, expectedStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, headerId: null, idMatches: null, expectedId: null, version: null, autolykosVersion: null, parentId: null, adProofsRoot: null, transactionsRoot: null, stateRoot: null, extensionRoot: null, timestampMs: null, timestampIso: null, nBits: null, nBitsHex: null, difficulty: null, height: null, votesHex: null, votes: null, unparsedHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null, byteLength: null, withoutPowLength: null, solutionLength: null };
@@ -8228,7 +8321,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -8928,6 +9021,33 @@ if (typeof document !== "undefined") {
       msg += "The largest field is " + res.fields.filter(function (f) { return f.key === res.largestField; })[0].label + " at " + res.largestFieldBytes + " bytes. ";
       if (absent.length) msg += "Not carried by this header's version (0 bytes, listed so the account is complete): " + absent.join("; ") + ". ";
       msg += "The field sizes sum exactly to the serialized length, and the header was inspected by tool 62 and rebuilt identically by tool 63 before the breakdown was shown. Measurement only, over the bytes you pasted — a header's size is a fact about its bytes, not a verdict on it. Broken down locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("headersetdiff-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("headersetdiff-result");
+      var res = compareHeaderSets(document.getElementById("headersetdiff-a").value, document.getElementById("headersetdiff-b").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not compare those sets. Nothing was compared.";
+        return;
+      }
+      var msg;
+      if (res.verdict === "same-set") {
+        msg = "✓ The two sets hold the same headers — " + res.headerCountA + " header(s), total difficulty " + res.totalDifficultyA + " (exact, from each header's nBits)" + (res.sameOrder ? ", pasted in the same order." : ", pasted in a different order — membership is what a set comparison judges, so the order difference is reported, not treated as a change.") + " The highest height they share is " + res.maxCommonHeight + ", and no height diverges. ";
+      } else {
+        msg = "⚠ The sets differ — " + res.headerCountA + " → " + res.headerCountB + " header(s) (" + (res.countDelta >= 0 ? "+" : "") + res.countDelta + "), " + res.common.length + " header(s) in both. ";
+        res.removed.forEach(function (e) { msg += "Only in the first set: header " + e.headerId + " at height " + e.height + ". "; });
+        res.added.forEach(function (e) { msg += "Only in the second set: header " + e.headerId + " at height " + e.height + ". "; });
+        if (res.divergentHeights.length) {
+          msg += "⚠ Divergent height(s) — carried by both sets, but the sets disagree about the header there: " + res.divergentHeights.map(function (d) { return "height " + d.height + " (first set: " + d.idsA.join(", ") + "; second set: " + d.idsB.join(", ") + ")"; }).join("; ") + ". ";
+        }
+        msg += res.maxCommonHeight !== null
+          ? "The highest height the two sets provably share is " + res.maxCommonHeight + ". "
+          : "The two sets share no header at all. ";
+        msg += "Total difficulty " + res.totalDifficultyA + " → " + res.totalDifficultyB + " (" + (res.difficultyDelta.charAt(0) === "-" ? "" : "+") + res.difficultyDelta + ", exact). ";
+      }
+      msg += "Comparison only, over the bytes you pasted: it fetches nothing, proves neither set sits on the main chain, and which set is the right one is not a question bytes alone answer. Compared locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

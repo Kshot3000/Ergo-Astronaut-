@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 70 tools on one page it beats scrolling.
+headers) — with 71 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1606,6 +1606,26 @@ headers) — with 70 tools on one page it beats scrolling.
   (both clamps bind), 843,777 and 842,753
   reproduce the difficulties those blocks
   actually carry.
+- **Block header votes decoder** — what a
+  header's three miner-vote bytes actually
+  propose: each byte is signed, a positive
+  id votes to increase that chain
+  parameter, its negative to decrease it,
+  120 votes for a soft-fork and 0 for
+  nothing (ids 1-9, from the reference
+  node's Parameters table — storage fee
+  factor through sub-blocks per block).
+  Unknown bytes are flagged, never
+  interpreted, and the tally context is
+  stated honestly: a parameter change
+  needs at least 513 of a 1,024-block
+  voting epoch's votes, a soft-fork at
+  least 29,492 over 32 epochs — one header
+  is one miner's ballot, not an outcome.
+  Verified against an independent Python
+  oracle implementing the same source:
+  the real version-2 header's 040000 is a
+  vote to increase the maximum block cost.
 
 ## Cross-chain integration
 

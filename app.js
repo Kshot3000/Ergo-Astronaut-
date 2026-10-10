@@ -6864,6 +6864,105 @@ function analyzeNextDifficulty(inputStr) {
   });
 }
 
+/* --- Tool 71: block header votes decoder ---
+   Every header carries three miner-vote bytes, and every hub
+   tool so far has shown them only as raw hex (tool 62's
+   votesHex). Their meaning lives in the reference node's
+   Parameters (ergoplatform/ergo, ergo-core settings, read from
+   source this run): a vote byte is a SIGNED byte — a positive
+   value is a vote to increase the parameter with that id, the
+   negative of an id is a vote to decrease it, 0 votes for
+   nothing (NoParameter), and 120 is a vote for a soft-fork.
+   Parameter ids: 1 storage fee factor, 2 minimum value per
+   byte, 3 maximum block size, 4 maximum block cost, 5 token
+   access cost, 6 input cost, 7 data input cost, 8 output cost,
+   9 sub-blocks per block (added with block version 4). Any
+   other signed value is not a vote the reference defines —
+   ids 121-124, for example, exist only as keys in the
+   parameter TABLE (votes collected, fork starting height,
+   block version, disabling rules), never as votes — so such
+   bytes are reported as unknown, never dressed up. A miner
+   casts at most two parameter votes per header
+   (ParamVotesCount = 2); the array's third slot is where a
+   soft-fork vote rides (Parameters.padVotes / suggestVotes).
+   Votes are tallied per voting epoch (mainnet: 1,024 blocks):
+   a parameter change is approved with more than half the
+   epoch's votes (513 or more), a soft-fork with more than
+   90% over 32 voting epochs (29,492 or more of 32,768) —
+   VotingSettings.changeApproved / softForkApproved over the
+   published mainnet settings. This tool decodes ONE header's
+   three bytes; it does not tally an epoch, and a vote cast is
+   not a change approved. Verified before anything is shown:
+   the header is inspected by tool 62, the signed values must
+   re-encode to the exact unsigned bytes tool 62 read, and
+   tool 63 must rebuild the identical header (same ID) from
+   tool 62's fields, votes included. Verified BEFORE coding
+   against an independent Python oracle (oracle-headervotes.py)
+   implementing the same source: the three real mainnet
+   headers (the version-2 header votes 040000 — an increase of
+   the maximum block cost), the mutation, and synthetics
+   spliced into the real tip header carrying a soft-fork vote,
+   a full +1/-2/soft-fork house, sub-blocks, a decrease and
+   unknown bytes. */
+var VOTE_PARAM_NAMES = {
+  1: "Storage fee factor (per byte per storage period)",
+  2: "Minimum monetary value of a box",
+  3: "Maximum block size",
+  4: "Maximum cumulative computational cost of a block",
+  5: "Token access cost",
+  6: "Cost per one transaction input",
+  7: "Cost per one data input",
+  8: "Cost per one transaction output",
+  9: "Sub-blocks per block"
+};
+var VOTE_SOFT_FORK_ID = 120;
+var VOTE_MAX_PARAM_VOTES = 2;
+var VOTING_EPOCH_LENGTH = 1024;
+var VOTE_PARAM_APPROVAL_MIN = 513;
+var VOTE_SOFT_FORK_APPROVAL_MIN = 29492;
+
+function decodeHeaderVotes(headerHex) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, headerId: null, height: null, version: null, votesHex: null, bytes: null, paramVoteCount: null, softFork: null, unknownCount: null };
+  };
+  var h = inspectBlockHeader(headerHex, "");
+  if (!h.valid) return fail("The header does not inspect: " + h.reason);
+  var bytes = h.votes.map(function (unsigned, index) {
+    var signed = unsigned > 127 ? unsigned - 256 : unsigned;
+    var kind, paramId = null, paramName = null;
+    if (signed === 0) kind = "none";
+    else if (signed === VOTE_SOFT_FORK_ID) { kind = "soft-fork"; paramId = VOTE_SOFT_FORK_ID; paramName = "Soft-fork (increasing version of a block)"; }
+    else if (signed >= 1 && signed <= 9) { kind = "increase"; paramId = signed; paramName = VOTE_PARAM_NAMES[signed]; }
+    else if (signed >= -9 && signed <= -1) { kind = "decrease"; paramId = -signed; paramName = VOTE_PARAM_NAMES[-signed]; }
+    else kind = "unknown";
+    return { index: index, unsigned: unsigned, signed: signed, kind: kind, paramId: paramId, paramName: paramName };
+  });
+  /* The signed reading must re-encode to the exact bytes read. */
+  var reEncoded = bytes.map(function (b) { return b.signed < 0 ? b.signed + 256 : b.signed; });
+  if (reEncoded.some(function (u, i) { return u !== h.votes[i]; })) return fail("Internal error: the signed vote bytes do not re-encode to the bytes in the header — nothing was shown rather than an unverified decode.");
+  /* Tool 63 must rebuild the identical header, votes included. */
+  var rebuilt = buildBlockHeader({
+    version: String(h.version), parentId: h.parentId, adProofsRoot: h.adProofsRoot,
+    transactionsRoot: h.transactionsRoot, stateRoot: h.stateRoot, timestampMs: h.timestampMs,
+    extensionRoot: h.extensionRoot, nBits: String(h.nBits), height: String(h.height),
+    votesHex: h.votesHex, unparsedHex: h.unparsedHex === null ? "" : h.unparsedHex,
+    minerPk: h.minerPk, nonce: h.nonce,
+    onetimePk: h.onetimePk === null ? "" : h.onetimePk,
+    powDistance: h.powDistance === null ? "" : h.powDistance
+  });
+  if (!rebuilt.valid || rebuilt.headerId !== h.headerId) return fail("Internal error: the header does not rebuild with its votes intact — nothing was shown rather than an unverified decode.");
+  var paramVoteCount = bytes.filter(function (b) { return b.kind === "increase" || b.kind === "decrease"; }).length;
+  return {
+    valid: true, reason: null,
+    verdict: bytes.every(function (b) { return b.kind === "none"; }) ? "no-votes" : "cast",
+    headerId: h.headerId, height: h.height, version: h.version,
+    votesHex: h.votesHex, bytes: bytes,
+    paramVoteCount: paramVoteCount,
+    softFork: bytes.some(function (b) { return b.kind === "soft-fork"; }),
+    unknownCount: bytes.filter(function (b) { return b.kind === "unknown"; }).length
+  };
+}
+
 function inspectBlockHeader(headerHex, expectedStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, headerId: null, idMatches: null, expectedId: null, version: null, autolykosVersion: null, parentId: null, adProofsRoot: null, transactionsRoot: null, stateRoot: null, extensionRoot: null, timestampMs: null, timestampIso: null, nBits: null, nBitsHex: null, difficulty: null, height: null, votesHex: null, votes: null, unparsedHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null, byteLength: null, withoutPowLength: null, solutionLength: null };
@@ -7748,7 +7847,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -8328,6 +8427,34 @@ if (typeof document !== "undefined") {
         msg += "At that difficulty a miner's Autolykos hit must fall below b = q / difficulty = " + res.target + ". ";
       }
       msg += "This is the difficulty a block must carry to be valid — arithmetic over the blocks you pasted, not a hashrate forecast. Calculated locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("headervotes-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("headervotes-result");
+      var res = decodeHeaderVotes(document.getElementById("headervotes-bytes").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not decode those votes. Nothing was decoded.";
+        return;
+      }
+      var describeByte = function (b) {
+        var head = "byte " + (b.index + 1) + " = " + b.unsigned + " (0x" + b.unsigned.toString(16).padStart(2, "0") + ", signed " + b.signed + ")";
+        if (b.kind === "none") return head + ": no vote";
+        if (b.kind === "soft-fork") return head + ": a vote FOR a soft-fork — " + b.paramName.toLowerCase();
+        if (b.kind === "increase") return head + ": a vote to INCREASE parameter " + b.paramId + " — " + b.paramName;
+        if (b.kind === "decrease") return head + ": a vote to DECREASE parameter " + b.paramId + " — " + b.paramName;
+        return head + ": not a vote the reference node defines — reported as unknown, not interpreted";
+      };
+      var msg;
+      if (res.verdict === "no-votes") {
+        msg = "✓ Header " + res.headerId + " (height " + res.height + ", version " + res.version + ") votes for nothing: all three vote bytes (" + res.votesHex + ") are zero. Its miner backed no parameter change and no soft-fork in this block. ";
+      } else {
+        msg = "✓ Header " + res.headerId + " (height " + res.height + ", version " + res.version + ") casts votes " + res.votesHex + " — " + res.bytes.map(describeByte).join("; ") + ". ";
+        msg += "That is " + res.paramVoteCount + " parameter vote(s)" + (res.softFork ? " plus a soft-fork vote" : ", no soft-fork vote") + ". ";
+        if (res.unknownCount) msg += "⚠ " + res.unknownCount + " byte(s) are not votes the reference node defines, so they change nothing. ";
+      }
+      msg += "Votes are tallied over 1,024-block voting epochs: a parameter change needs more than half an epoch's votes (at least " + VOTE_PARAM_APPROVAL_MIN + "), and a soft-fork needs more than 90% over 32 epochs (at least " + VOTE_SOFT_FORK_APPROVAL_MIN + " of 32,768). One header's bytes are one miner's ballot in that tally — a vote cast here is not a change approved. Decoded locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

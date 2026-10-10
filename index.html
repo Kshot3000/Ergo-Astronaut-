@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>70 tools and counting — find the one you need:</p>
+    <p>71 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -1071,6 +1071,15 @@
         <p id="diffcalc-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="headervotes-calc" data-family="headers">
+        <h3>71 · Block header votes decoder (serialized header → what its three miner-vote bytes actually propose)</h3>
+        <p>Every header carries three <strong>miner-vote bytes</strong> — tool 62 shows them as raw hex and stops there. They are how Ergo's chain parameters govern themselves: each byte is a <em>signed</em> number, where a positive value votes to increase the parameter with that id, the negative of an id votes to decrease it, zero votes for nothing, and 120 votes for a soft-fork. The ids: 1 storage fee factor, 2 minimum value per byte, 3 maximum block size, 4 maximum block cost, 5 token access cost, 6 input cost, 7 data input cost, 8 output cost, and 9 sub-blocks per block (added with block version 4). A miner casts at most two parameter votes per header; the third slot is where a soft-fork vote rides. Paste a serialized header and this tool decodes all three bytes — signed value, parameter, direction — straight from the reference node's own Parameters table. Bytes outside the defined ids are reported as unknown, never interpreted: ids 121–124 exist only as keys inside the parameter table, not as votes. Votes are tallied over 1,024-block voting epochs — a parameter change needs more than half an epoch's votes (at least 513), a soft-fork more than 90% across 32 epochs (at least 29,492 of 32,768) — so one header is one miner's ballot, and this tool decodes the ballot; it does not tally the epoch, and a vote cast is not a change approved. The header is inspected by tool 62 and rebuilt by tool 63 with its votes intact before anything is shown. Decoding only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="headervotes-bytes">Serialized block header (hex, as tool 62 takes it)</label>
+        <textarea id="headervotes-bytes" rows="3" spellcheck="false" placeholder="e.g. 04069e46… (the full serialized header, solution included)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Decode the votes</button>
+        <p id="headervotes-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1116,6 +1125,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=71"></script>
+<script src="app.js?v=72"></script>
 </body>
 </html>

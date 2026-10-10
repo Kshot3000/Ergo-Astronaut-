@@ -66,6 +66,11 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 
 ## Tools on the hub (local only, no wallet needed)
 
+A **tool finder** sits at the top of the tools section on the hub:
+search by name or keyword, or filter by family (amounts & mining,
+addresses & trees, boxes, codecs & constants, transactions, block
+headers) — with 68 tools on one page it beats scrolling.
+
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
 - **Ergo address checker** — Base58-decodes an address in your browser,

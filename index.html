@@ -10,7 +10,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://kshot3000.github.io/Ergo-Astronaut-/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23050810'/%3E%3Ccircle cx='16' cy='13' r='7' fill='%23fbbf24'/%3E%3Crect x='7' y='19' width='18' height='6' rx='3' fill='%237dd3fc'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=3">
+<link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
 <a class="skip" href="#main">Skip to main content</a>
@@ -155,8 +155,24 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
+    <p>68 tools and counting — find the one you need:</p>
+    <div class="filter-row" role="group" aria-label="Find a flight tool">
+      <label for="tool-q">Find a tool</label>
+      <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
+      <div class="chips" role="group" aria-label="Filter tools by family">
+        <button type="button" class="tchip active" data-tfilter="all">All tools</button>
+        <button type="button" class="tchip" data-tfilter="amounts">Amounts &amp; mining</button>
+        <button type="button" class="tchip" data-tfilter="addresses">Addresses &amp; trees</button>
+        <button type="button" class="tchip" data-tfilter="boxes">Boxes</button>
+        <button type="button" class="tchip" data-tfilter="codecs">Codecs &amp; constants</button>
+        <button type="button" class="tchip" data-tfilter="transactions">Transactions</button>
+        <button type="button" class="tchip" data-tfilter="headers">Block headers</button>
+      </div>
+      <p id="tool-filter-status" class="sr-status" role="status" aria-live="polite"></p>
+      <p id="tool-no-results" hidden>No tool matches that — try a shorter word, or pick a different family.</p>
+    </div>
     <div class="tool-grid">
-      <form class="tool" id="converter">
+      <form class="tool" id="converter" data-family="amounts">
         <h3>1 · ERG ⇄ nanoERG converter</h3>
         <p>1 ERG is exactly 1,000,000,000 nanoERG. Fill in one side and convert — exact BigInt maths, no floating-point drift, done locally.</p>
         <label for="erg">ERG</label>
@@ -167,7 +183,7 @@
         <p id="convert-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="address-checker">
+      <form class="tool" id="address-checker" data-family="addresses">
         <h3>2 · Ergo address checker</h3>
         <p>Paste any Ergo address. I Base58-decode it locally, verify its real checksum — the first 4 bytes of Blake2b-256 over the address bytes, stored as the last 4 bytes — and read its network and type byte. Try it with the donation address below.</p>
         <label for="addr-in">Ergo address</label>
@@ -176,7 +192,7 @@
         <p id="addr-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="rent-calc">
+      <form class="tool" id="rent-calc" data-family="amounts">
         <h3>3 · Storage rent estimator</h3>
         <p>Ergo charges rent on boxes left unspent for 1,051,200 blocks (about 4 years): the fee is the box's serialized size × the storage fee factor — currently 1,250,000 nanoERG per byte on mainnet, a votable chain parameter I verified against live network params. A simple ERG-only box is roughly 100 bytes serialized; boxes carrying tokens or register data are larger. Tokens cannot pay rent — only the box's ERG can.</p>
         <label for="rent-bytes">Box size (serialized bytes)</label>
@@ -187,7 +203,7 @@
         <p id="rent-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="mining-calc">
+      <form class="tool" id="mining-calc" data-family="amounts">
         <h3>4 · Autolykos mining-share estimator</h3>
         <p>What share of Ergo's blocks should your rig expect? Your expected share of blocks equals your share of the network's Autolykos hashrate, at Ergo's 2-minute block target (~720 blocks/day). You supply every figure — this tool fetches nothing and claims no live network data, and the block reward steps down over time, so read the current one off a block explorer.</p>
         <label for="mine-hash">Your hashrate</label>
@@ -208,7 +224,7 @@
         <p id="mine-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="minbox-calc">
+      <form class="tool" id="minbox-calc" data-family="amounts">
         <h3>5 · Minimum box value checker</h3>
         <p>Ergo rejects a box whose value is below its serialized size × the minimum value per byte — 360 nanoERG per byte, the rate set at launch and still the live mainnet parameter (a votable chain parameter I verified against live network params). A simple ERG-only box is roughly 100 bytes serialized; boxes carrying tokens or register data are larger. When the exact size is unknown, wallets use a recommended safe minimum of 0.001 ERG per box.</p>
         <label for="minbox-bytes">Box size (serialized bytes)</label>
@@ -219,7 +235,7 @@
         <p id="minbox-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="token-calc">
+      <form class="tool" id="token-calc" data-family="amounts">
         <h3>6 · Token amount converter (raw ⇄ display)</h3>
         <p>On-chain, Ergo token amounts are whole integers — no decimals. Each token's metadata declares its decimal places (ERG itself is the 9-decimal case from tool 1: nanoERG is the raw unit), and wallets divide the raw integer by 10<sup>decimals</sup> to show it. Enter the decimals exactly as the token's explorer listing shows them, then convert either way — exact BigInt maths, and a display amount smaller than one raw unit is rejected, because it cannot exist on-chain.</p>
         <label for="token-decimals">Token decimals (from its explorer listing)</label>
@@ -232,7 +248,7 @@
         <p id="token-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="rent-clock-calc">
+      <form class="tool" id="rent-clock-calc" data-family="amounts">
         <h3>7 · Storage rent countdown</h3>
         <p>When does a box's rent clock run out? A box becomes eligible for storage rent (tool 3) once the chain reaches its creation height + 1,051,200 blocks — about 4 years at the 2-minute block target. You supply both heights from a block explorer (a box's creation height is on its explorer page) — this tool fetches nothing and claims no live chain data.</p>
         <label for="rentclock-created">Box creation height</label>
@@ -243,7 +259,7 @@
         <p id="rent-clock-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="p2pk-calc">
+      <form class="tool" id="p2pk-calc" data-family="addresses">
         <h3>8 · P2PK address builder (public key → address)</h3>
         <p>The other direction from tool 2: give me a compressed public key (33 bytes, 66 hex characters, starting 02 or 03) and I build its P2PK address locally — prefix byte for the network, your key, and the Blake2b-256 checksum over both, Base58-encoded, exactly as Ergo defines it. Public keys only — never type a private key or seed phrase into any website, this one included.</p>
         <label for="p2pk-pubkey">Compressed public key (hex)</label>
@@ -256,7 +272,7 @@
         <p id="p2pk-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="payplan-calc">
+      <form class="tool" id="payplan-calc" data-family="amounts">
         <h3>9 · UTXO payment planner (box selection + change)</h3>
         <p>Ergo spends boxes whole: to pay, a wallet selects input boxes until their total covers the payment plus the transaction fee, and the leftover comes back as a change box. List your boxes' ERG values in order and I walk them in that order — exact BigInt maths, done locally, nothing signed or sent. A leftover above zero but below the recommended 0.001 ERG safe minimum per box (tool 5) is dust, and the planner flags it: real wallets usually fold dust into the fee instead of creating a near-worthless change box.</p>
         <label for="payplan-boxes">Your box values (ERG, comma or space separated)</label>
@@ -269,7 +285,7 @@
         <p id="payplan-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="tree-calc">
+      <form class="tool" id="tree-calc" data-family="addresses">
         <h3>10 · ErgoTree inspector (script hex → address)</h3>
         <p>Every box is guarded by an ErgoTree script, and its address commits to that script's proposition — the tree bytes after the header byte (and the VLQ size, when the header's size flag is set). Paste a box's ErgoTree hex from its explorer page and I read the header locally, spot the standard P2PK script and its key, and derive the script's P2SH address: the first 24 bytes of Blake2b-256 over the proposition bytes. Hashing the whole tree instead is the fleet-sdk bug I reported as issue #219 — it produced addresses whose boxes can never be spent. An ErgoTree carries no network, so pick the one you want the address for. Constant-segregated trees are reported honestly, not guessed at: their hash needs the constants substituted back in, which raw bytes alone cannot do.</p>
         <label for="tree-hex">ErgoTree (hex)</label>
@@ -282,7 +298,7 @@
         <p id="tree-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="addrtree-calc">
+      <form class="tool" id="addrtree-calc" data-family="addresses">
         <h3>11 · Address → ErgoTree decoder (what an address carries)</h3>
         <p>The reverse of tools 8 and 10: paste any Ergo address and I decode it locally — the network is read from the address itself, the checksum verified exactly as in tool 2 — and show what its content actually is. A P2PK address carries its 33-byte public key, so its ErgoTree (header 00 + the 08cd ProveDlog proposition + the key) comes straight back. A P2S address carries the script itself, so its content <em>is</em> its ErgoTree. A P2SH address carries only the 24-byte script hash, and a hash is one-way — the script cannot be recovered from it, so I show the hash and say so instead of inventing a script.</p>
         <label for="addrtree-in">Ergo address</label>
@@ -291,7 +307,7 @@
         <p id="addrtree-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="babel-calc">
+      <form class="tool" id="babel-calc" data-family="amounts">
         <h3>12 · Babel fee calculator (pay the fee in a token)</h3>
         <p>No ERG for the transaction fee? A babel box solves that: it is a box holding ERG whose contract lets you swap a native token for ERG at a stated price — the price sits in the box's R5 register, in nanoERG per raw token unit (read it off the box's explorer page). Enter the ERG amount you need, that price, and the token's decimals, and I work out the smallest whole number of raw tokens whose swap covers it — exact ceiling maths with BigInt, done locally. This tool fetches nothing and claims no live babel-box data.</p>
         <label for="babel-fee">ERG amount you need (fee, plus any ERG the transaction must carry)</label>
@@ -304,7 +320,7 @@
         <p id="babel-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="netconv-calc">
+      <form class="tool" id="netconv-calc" data-family="addresses">
         <h3>13 · Address network converter (mainnet ⇄ testnet)</h3>
         <p>Testing a contract or an app and need the same address on the other network? An Ergo address is a prefix byte, its content, and a checksum (tool 2) — and only the prefix byte's high nibble carries the network: 0x0 mainnet, 0x1 testnet. The content is byte-for-byte identical on both networks, so I verify the checksum, swap the network nibble, and recompute the checksum over the new prefix. One warning that matters: the two networks are separate worlds — the converted address guards boxes on that network only, and sending mainnet ERG to a testnet address (or testnet ERG to a mainnet one) loses it.</p>
         <label for="netconv-in">Ergo address (either network)</label>
@@ -313,7 +329,7 @@
         <p id="netconv-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="boxid-calc">
+      <form class="tool" id="boxid-calc" data-family="boxes">
         <h3>14 · Box ID calculator (box bytes → box ID)</h3>
         <p>Every box has an ID, and it is not assigned or stored inside the box — it is derived: a box ID is the Blake2b-256 of the box's serialized bytes, meaning the full serialization (value, script, creation height, tokens and registers, followed by the creating transaction's ID and the box's index in it). Paste those full serialized bytes — SDKs and node APIs produce them, and explorers link them from a box's page — and I hash them locally and show the ID. Hashing only the candidate bytes gives a different value that is not the box ID. The same derivation names tokens: a token minted in a transaction takes the box ID of that transaction's first input as its token ID. Optionally paste an expected ID and I will tell you plainly whether the bytes match it.</p>
         <label for="boxid-bytes">Serialized box bytes (hex)</label>
@@ -324,7 +340,7 @@
         <p id="boxid-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="boxparse-calc">
+      <form class="tool" id="boxparse-calc" data-family="boxes">
         <h3>15 · Serialized box parser (box bytes → every field)</h3>
         <p>The full read-back of tool 14: paste a box's full serialized bytes and I take them apart locally, field by field, in the exact layout Ergo serializes a box — the value (a VLQ integer), the ErgoTree, the creation height, each token's 32-byte ID and raw amount, the non-mandatory registers R4–R9 decoded as the Sigma constants they hold, then the creating transaction's ID and the box's output index — and I recompute the box ID from the same bytes, so it always agrees with tool 14. Two honest limits, the same ones fleet-sdk's own box deserializer has: a script with no size field that is not the standard P2PK tree or the miner fee contract cannot be delimited without parsing the full script, and a register holding an exotic constant type (an Option, Box or AvlTree constant) stops the parse — both are reported plainly rather than guessed past, because a wrong field boundary would silently corrupt every field after it. Integer registers decode at the same widths fleet-sdk's reader uses — Short and Int through its 32-bit zigzag, Long through its 64-bit one — so even an SInt sitting at a 32-bit extreme reads back as the value that was actually written.</p>
         <label for="boxparse-bytes">Serialized box bytes (hex)</label>
@@ -333,7 +349,7 @@
         <p id="boxparse-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="p2s-calc">
+      <form class="tool" id="p2s-calc" data-family="addresses">
         <h3>16 · P2S address builder (ErgoTree → pay-to-script address)</h3>
         <p>The encode-side inverse of tool 11: a P2S address carries the script itself — its content is the full ErgoTree bytes verbatim, under a prefix byte (0x03 mainnet, 0x13 testnet) plus the Blake2b-256 checksum from tool 2, Base58-encoded. That is the opposite trade from P2SH in tool 10, which carries only the script's 24-byte hash: a P2S address is exactly as long as the script and reveals it to anyone who sees the address, while a P2SH address stays short and hides the script until a box is spent. Paste a script's ErgoTree hex — from tool 15's parser, an explorer, or tool 11 — and I parse it with tool 10's parser first, refuse anything that does not parse, build the address locally, and round-trip it through tool 11's decoder before showing it. P2S also carries constant-segregated trees exactly, the case tool 10 honestly declines to hash. Building an address proves nothing about who can spend a box it guards — that depends on the script itself.</p>
         <label for="p2s-hex">ErgoTree (hex)</label>
@@ -346,7 +362,7 @@
         <p id="p2s-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="boxbuild-calc">
+      <form class="tool" id="boxbuild-calc" data-family="boxes">
         <h3>17 · Serialized box builder (fields → box bytes + box ID)</h3>
         <p>The encode-side inverse of tool 15: give me a box's fields and I assemble its serialized bytes locally, in the exact layout Ergo writes a box — value as a VLQ integer, the ErgoTree verbatim, creation height, each token's 32-byte ID and raw amount, the non-mandatory registers R4–R9 as the Sigma constants they hold, then the creating transaction's ID and the output index — and I hash the result with tool 14's derivation to show the box ID. Registers are typed values, one per line in R4, R5, … order: <code>bool:true</code>, <code>byte:-5</code>, <code>short:17</code>, <code>int:852574</code>, <code>long:430550309</code>, <code>bigint:1039</code>, <code>group:&lt;66 hex chars&gt;</code>, <code>dlog:&lt;66 hex chars&gt;</code> (a ProveDlog SigmaProp), <code>bytes:&lt;hex&gt;</code> (a Coll[SByte]), <code>ints:1,2,3</code> or <code>longs:1,2,3</code>. The assembled bytes are round-tripped through tool 15's parser before they are shown — every field must read back exactly, so a script the parser cannot delimit is refused rather than emitted unverified. Construction only: a box exists on-chain only once a signed transaction creating it is accepted, and this tool signs and sends nothing.</p>
         <label for="boxbuild-value">Value (nanoERG, whole number)</label>
@@ -367,7 +383,7 @@
         <p id="boxbuild-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="sigma-calc">
+      <form class="tool" id="sigma-calc" data-family="codecs">
         <h3>18 · Sigma constant inspector (one register ⇄ its hex)</h3>
         <p>A box's registers R4–R9 each hold one <strong>Sigma constant</strong> — a type byte plus the value's bytes — and that is exactly how explorers and node APIs show a register on its own (a babel box's R5 price in tool 12, for example). Until now the only way to read one here was to embed it in a whole box for tool 15. Paste one constant's hex and I decode it locally with the same reader tool 15 uses — the same integer widths too, Short and Int through the 32-bit zigzag, Long through the 64-bit one, so even an SInt at a 32-bit extreme reads back as the value that was written. Or go the other way: enter a typed value in tool 17's register form — <code>bool:true</code>, <code>byte:-5</code>, <code>short:17</code>, <code>int:852574</code>, <code>long:430550309</code>, <code>bigint:1039</code>, <code>group:&lt;66 hex chars&gt;</code>, <code>dlog:&lt;66 hex chars&gt;</code>, <code>bytes:&lt;hex&gt;</code>, <code>ints:1,2,3</code> or <code>longs:1,2,3</code> — and I encode it and round-trip the hex through the decoder before showing it. Two honest limits, the same ones tool 15 states: a constant whose type is outside the decoded set (an Option, Box or AvlTree constant), and a SigmaProp that is not the ProveDlog form, stop plainly rather than being guessed at, and trailing bytes after one constant are reported instead of silently ignored.</p>
         <label for="sigma-hex">Constant hex (from an explorer or node API)</label>
@@ -378,7 +394,7 @@
         <p id="sigma-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="treebuild-calc">
+      <form class="tool" id="treebuild-calc" data-family="addresses">
         <h3>19 · P2PK ErgoTree builder (public key → ErgoTree)</h3>
         <p>The one encode direction this hub was missing: tools 8, 10, 11 and 16 go key → address, tree → address, address → tree and tree → P2S, but nothing turned a public key into the ErgoTree itself — the hex explorers and SDKs show for every P2PK box, and the input tools 15, 16 and 17 expect. The standard P2PK tree is a header byte 00 (version 0, no size field, no constant segregation) followed by the ProveDlog proposition — 08 cd — plus your 33-byte compressed public key, exactly the script Ergo builds for a P2PK box and the one tool 11's decoder reverses. The tree itself carries no network, so it is the same on both; the network only picks which addresses I derive alongside it — the P2PK address from tool 8 and the P2SH address from tool 10. The built tree is round-tripped through tool 10's parser and the address through tool 11's decoder before either is shown. Public keys only — never type a private key or seed phrase into any website, this one included.</p>
         <label for="treebuild-pubkey">Compressed public key (hex)</label>
@@ -391,7 +407,7 @@
         <p id="treebuild-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="p2shbuild-calc">
+      <form class="tool" id="p2shbuild-calc" data-family="addresses">
         <h3>20 · P2SH address builder (ErgoTree → pay-to-script-hash address)</h3>
         <p>Tool 10 derives a script's P2SH address as one line of its inspection; this is that derivation as a builder in its own right, with the round-trip check up front. A P2SH address carries only the script hash: a prefix byte (02 mainnet / 12 testnet), then the first 24 bytes of Blake2b-256 over the script's <strong>proposition</strong> — the ErgoTree without its header byte, and without the VLQ size field when the header carries one — plus the usual checksum. Hashing the full tree bytes instead was a real funds-at-risk bug (fleet-sdk/fleet#219): a node re-derives the hash from the proposition when it checks a spend, so boxes sent to a full-tree-hash address can never be spent. One honest refusal, the same one my fleet fix makes: a constant-segregated tree gets no P2SH address here, because its reference hash needs the constants substituted back in, which raw tree bytes alone cannot reconstruct — tool 16's P2S builder carries those trees exactly instead. The built address is round-tripped through tool 11's decoder before it is shown: it must decode back to this exact script hash.</p>
         <label for="p2shbuild-hex">ErgoTree (hex)</label>
@@ -404,7 +420,7 @@
         <p id="p2shbuild-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="hash-calc">
+      <form class="tool" id="hash-calc" data-family="codecs">
         <h3>21 · Blake2b-256 hash calculator (the hash behind box IDs)</h3>
         <p>One hash sits underneath almost everything on this page: a box ID is the Blake2b-256 of the box's serialized bytes (tool 14), an address checksum is the first 4 bytes of Blake2b-256 over the address prefix and content (tools 2 and 8), and a P2SH script hash is its first 24 bytes over the script's proposition (tools 10 and 20). This tool is that primitive on its own: paste bytes as hex — a box, a script proposition, anything — or type plain text (hashed as its UTF-8 bytes), and get the full 32-byte digest plus the 24-byte hash192 form. Empty input is hashed, not rejected: the digest of zero bytes is a well-defined value. An optional expected digest reports a match or a mismatch plainly. Verified against Python's hashlib before it shipped here. Hashing is not encryption and proves no ownership — it signs and sends nothing.</p>
         <label for="hash-input">Input (hex bytes or text)</label>
@@ -419,7 +435,7 @@
         <p id="hash-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="b58-calc">
+      <form class="tool" id="b58-calc" data-family="codecs">
         <h3>22 · Base58 codec (the encoding every address is written in)</h3>
         <p>Every Ergo address on this page is Base58 text over raw bytes — tools 2, 8, 11, 13, 16 and 20 all encode or decode it behind the scenes. This tool is that codec on its own: turn hex bytes into Base58, or a Base58 string back into the exact bytes it carries, leading zero bytes and all (each one is a leading “1”). The alphabet is the one Ergo uses — it has no 0, O, I or l, so those four characters are rejected on decode. This is plain Base58, not Base58Check: it adds no checksum and verifies none — an address decoded here comes out as prefix + content + its stored checksum bytes verbatim, and tool 2 is the one that verifies that checksum. Empty input converts to the empty result, not an error. Verified against an independent Python build before it shipped here. Encoding is not encryption and proves no ownership — it signs and sends nothing.</p>
         <label for="b58-input">Input (hex bytes to encode, or a Base58 string to decode)</label>
@@ -432,7 +448,7 @@
         <p id="b58-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="vlq-calc">
+      <form class="tool" id="vlq-calc" data-family="codecs">
         <h3>23 · VLQ codec (how integers are written inside a box)</h3>
         <p>Almost every integer inside a serialized box is written as a <strong>VLQ</strong> — a variable-length quantity: the box's value, its creation height, each token amount, the counts and the output index in tools 15 and 17, and the proposition size in a size-flagged ErgoTree (tool 10). The encoding is unsigned LEB128, exactly as fleet-sdk writes it: 7 bits per byte, least-significant group first, the high bit set on every byte except the last — so 0 is <code>00</code>, 128 is <code>8001</code>, and the storage-rent period of 1,051,200 blocks is <code>c09440</code>. There is no negative or fractional VLQ. Decode here is strict, the way a box parser must be: the bytes must be exactly one VLQ — a truncated encoding and trailing bytes are refused — and the spelling must be canonical, so an overlong form like <code>8000</code> for zero is rejected instead of read as a second spelling of the same number. Exact BigInt maths at any size, verified against fleet-sdk's published VLQ vectors and an independent Python build before it shipped here. Encoding only — it signs and sends nothing.</p>
         <label for="vlq-input">Input (a whole non-negative number to encode, or VLQ hex to decode)</label>
@@ -445,7 +461,7 @@
         <p id="vlq-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="zigzag-calc">
+      <form class="tool" id="zigzag-calc" data-family="codecs">
         <h3>24 · ZigZag codec (how signed integers are written inside a box)</h3>
         <p>Tool 23's VLQ has no negatives — so a signed integer is first <strong>zig-zagged</strong>: 0 → 0, −1 → 1, 1 → 2, −2 → 3, folding the negatives into the odd numbers so small magnitudes of either sign stay small, and only then written as a VLQ. That two-step form is how every signed value inside a box or register is stored — an SLong through the 64-bit zig-zag, an SShort or SInt through fleet-sdk's 32-bit one. Pick the width and go either way here: a signed number to its unsigned zig-zag value and exact VLQ hex, or VLQ hex back to the signed number. The widths genuinely differ, and the extremes show why: 2147483647 zig-zags at 64-bit width to 4294967294 (<code>feffffff0f</code>), but at 32-bit width fleet zig-zags in signed 32-bit space and writes a negative result widened to its unsigned 64-bit form, so the same number comes out as 18446744073709551614 (<code>feffffffffffffffff01</code>) — the exact spelling tools 15, 17 and 18 read and write at the 32-bit extremes. Decode is strict, the way a box parser must be: exactly one canonical VLQ, and re-encoding the decoded value at the chosen width must reproduce the input byte-for-byte, so an over-wide VLQ whose bits the width would truncate or wrap is refused instead of read as a different number. Exact BigInt maths, verified against fleet-sdk's published ZigZag vectors and an independent Python build before it shipped here. Encoding only — it signs and sends nothing.</p>
         <label for="zigzag-input">Input (a signed whole number to encode, or ZigZag VLQ hex to decode)</label>
@@ -462,7 +478,7 @@
         <p id="zigzag-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="health-calc">
+      <form class="tool" id="health-calc" data-family="boxes">
         <h3>25 · Box health checker (minimum, rent and age in one verdict)</h3>
         <p>Tools 3, 5 and 7 each answer one question about a box — here they are answered together. Give me a box's serialized size, the ERG it holds, and its creation and current block heights (all on the box's explorer page), and I check it against the two size-based protocol rules and the rent clock at once: the protocol minimum for its size (serialized bytes × 360 nanoERG per byte, tool 5), one storage-rent payment for its size (bytes × 1,250,000 nanoERG per byte, tool 3), and whether it has reached rent eligibility at creation height + 1,051,200 blocks (tool 7). Both per-byte rates are votable chain parameters, verified against live mainnet network params before this shipped. The verdict is plain about the worst case: a box below its minimum could never have been created at that size; an eligible box holding at most one rent payment can be spent whole by a miner, ERG and tokens alike; an underfunded box gets its eligibility date so you can top it up or move it in time; a funded box is told how many full rent payments it covers. You supply every figure — this tool fetches nothing and claims no live chain data, and the days figure is approximate at the 2-minute block target because real block intervals vary. Exact BigInt maths, computed by composing tools 3, 5 and 7 themselves, so the verdict can never disagree with them. Analysis only — it signs and sends nothing.</p>
         <label for="health-bytes">Box size (serialized bytes)</label>
@@ -477,7 +493,7 @@
         <p id="health-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="emission-calc">
+      <form class="tool" id="emission-calc" data-family="amounts">
         <h3>26 · Emission &amp; supply calculator (block height → new coins + total issued)</h3>
         <p>Ergo's issuance is written into the protocol, so any block height has an exact answer. Give me a height and I work it out with the chain's own monetary rules — the monetary settings in the reference node's configuration, run through its EmissionRules: a flat 75 ERG per block below height 525,600, then 3 ERG less every 64,800-block epoch (72, 69, 66, …) until the rate reaches 0 at block 2,080,800 and the full 97,739,925 ERG maximum supply stands issued. The foundation's share is 7.5 ERG in the fixed era, then 4.5 and 1.5 ERG over the next two epochs, then nothing; the miner receives the rest — except that since block 777,217, EIP-27 diverts 12 ERG of each reward of 15 ERG or more (or all but 3 ERG of a smaller one) into a re-emission contract, and from block 2,080,800 that contract pays the miner 3 ERG a block in recycled coins, no new issuance at all. The schedule is protocol-fixed, so this tool fetches nothing and claims no live chain data — you supply the height, and the arithmetic is exact BigInt throughout. Schedule only — it signs and sends nothing.</p>
         <label for="emission-height">Block height</label>
@@ -486,7 +502,7 @@
         <p id="emission-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="eip4-calc">
+      <form class="tool" id="eip4-calc" data-family="codecs">
         <h3>27 · EIP-4 token metadata codec (token name, description, decimals ⇄ issuance registers)</h3>
         <p>Every Ergo token describes itself in its issuance box, and EIP-4 — the ecosystem's asset standard — fixes the format: R4 holds the token name, R5 the description and R6 the number of decimals, each as a Coll[Byte] constant carrying the UTF-8 <em>text</em> of the value: the byte <code>0e</code>, a VLQ byte-length, then the bytes. That includes the decimals — EIP-4's own worked example (the "USD" token issued back in block 98,288) encodes 2 decimals as the one-character string "2", hex <code>0e0132</code>, not as a number; some tokens in the wild do use an Int constant for R6 instead, and my decoder accepts that form too and tells you which one it found. R7 can add a 1–2 byte asset type — NFT picture/audio/video/collection/file-attachments, or a membership token — also as Coll[Byte]. Encode your metadata into the exact register hex an issuance box needs, or paste registers from an explorer to read them back. Everything runs locally on what you type; the token's ID is a separate chain fact (the box ID of the issuing transaction's first input) that no register contains. Registers only — this builds no transaction, signs nothing and mints nothing.</p>
         <label for="eip4-direction">Direction</label>
@@ -523,7 +539,7 @@
         <p id="eip4-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="adh-calc">
+      <form class="tool" id="adh-calc" data-family="codecs">
         <h3>28 · EIP-44 data-hash codec (arbitrary data ⇄ its ADH representation)</h3>
         <p>Ergo addresses are a prefix byte, some content and a Blake2b-256 checksum, Base58-written — and EIP-44, the ecosystem's proposed arbitrary-data signing standard, points that exact machinery at data instead of a key: it adds address type 4, ADH (arbitrary data hash), whose content is simply the Blake2b-256 hash of your data. The result is a short, checksummed string that stands for the data — for proving ownership or stamping a document, a wallet signs the bytes <code>00</code> + network byte + that hash, and the leading <code>00</code> matters: a serialized transaction begins with its input count, never 0, so a data signature can never be tricked into doubling as a transaction signature, and the network byte stops a testnet signature replaying on mainnet. Two honest warnings. First, EIP-44 is a <em>proposed</em> standard, not an adopted one — Ergo's spendable address types today are 1 (P2PK), 2 (P2SH) and 3 (P2S), so this string is a data representation for message signing, <strong>not a payment address: never send ERG to it</strong>. Second, the hash is one-way — decoding a representation gives the hash back, never the original data. Everything runs locally on what you type; this tool holds no keys, signs nothing and sends nothing.</p>
         <label for="adh-direction">Direction</label>
@@ -549,7 +565,7 @@
         <p id="adh-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txparse-calc">
+      <form class="tool" id="txparse-calc" data-family="transactions">
         <h3>29 · Serialized transaction parser (transaction bytes → inputs, outputs, ID)</h3>
         <p>Tools 15 and 17 take a single box apart and put one back together — this one takes the whole transaction. Paste a transaction's serialized bytes and I read them locally in the exact layout Ergo serializes a transaction: the inputs (each spent box's ID, its spending proof — empty in an unsigned transaction — and any context extension constants), the data inputs (boxes the scripts read but do not spend), the distinct token IDs the outputs use, and the outputs themselves as embedded boxes whose tokens are named by index into that ID list. I recompute the transaction ID the way the chain defines it — the Blake2b-256 of the <em>unsigned</em> serialization, proofs stripped and extensions kept, so a signed and an unsigned copy share one ID — and each output's box ID from its standalone serialization, the same rule as tool 14, with the outputs' ERG and token totals added up exactly. Two honest limits, both shared with fleet-sdk's own transaction deserializer, which keeps a separate, shorter list of "deserializable" vectors for exactly this reason: an output whose script carries no size field and is not the standard P2PK tree or the miner fee contract cannot be delimited without parsing the full script, and a register or extension constant of an exotic type (an Option, Box or AvlTree constant) stops the parse — both reported plainly rather than guessed past. And no fee is shown, ever: a fee is inputs minus outputs, and the input boxes' values are not in a transaction's bytes, only their IDs. Verified against fleet-sdk's published transaction vectors before it shipped here. Parsing only — it signs and sends nothing.</p>
         <label for="txparse-bytes">Serialized transaction bytes (hex)</label>
@@ -558,7 +574,7 @@
         <p id="txparse-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txbuild-calc">
+      <form class="tool" id="txbuild-calc" data-family="transactions">
         <h3>30 · Serialized transaction builder (fields → transaction bytes + ID)</h3>
         <p>The encode-side inverse of tool 29, and the whole-transaction counterpart of tool 17's box builder: give me the fields and I assemble the serialized bytes in the exact layout Ergo writes them — the inputs (each spent box's ID, an optional spending proof pasted as hex, and any context extension constants), the data inputs, the distinct token ID list built from the outputs' tokens in order of first appearance, and the outputs as embedded boxes whose tokens are written as indexes into that list. A register or extension constant is either a typed spec like tool 18's (<code>long:100</code>) or the constant's raw hex exactly as tool 15 shows it — the hex form also carries types the specs cannot express, like tuples, which real transactions use. The transaction ID is computed the way the chain defines it, as the Blake2b-256 of the unsigned serialization (proofs stripped, extensions kept), and every output's box ID comes from its standalone serialization. The assembled bytes are round-tripped through tool 29's parser field-for-field before they are shown, so an output whose script that parser cannot delimit — no size field, and not the standard P2PK tree or the miner fee contract, the same subset fleet-sdk itself round-trips in its deserializable vectors — is refused rather than emitted unverified. Verified against fleet-sdk's published transaction vectors — including its signed raffle transaction — before it shipped here. A proof field here is data you paste, never a signature this tool makes: building is not signing, and nothing is broadcast or spent.</p>
         <label for="txbuild-inputs">Inputs — one per line: box ID, then optionally a proof hex (or -), then extension entries as key=constant separated by ;</label>
@@ -571,7 +587,7 @@
         <p id="txbuild-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="hd-calc">
+      <form class="tool" id="hd-calc" data-family="addresses">
         <h3>31 · HD address derivation (seed → your wallet's addresses, EIP-3)</h3>
         <p>Every Ergo wallet address comes from one seed by a fixed recipe, and until now this hub could check addresses but not show where they come from. The recipe is BIP32 with Ergo's EIP-3 path: the master key is HMAC-SHA512 (keyed with the words "Bitcoin seed") over the seed, split into a key and a chain code; each step down the path <code>m/44'/429'/account'/change/index</code> — 429 is Ergo's registered coin type — is another HMAC-SHA512 whose left half is added to the parent key modulo the secp256k1 group order, hardened steps (the ones with a ′) hashing the private key and normal steps hashing the public key, exactly as ergo-wallet's ExtendedSecretKey does it, including its retry-with-the-next-index rule for the astronomically rare invalid child. The last key's public key becomes a P2PK address through tool 8's construction, and every address shown is round-tripped through tool 11's decoder first. Paste a seed as hex — a BIP39 seed is 64 bytes, 128 hex characters; this tool takes no mnemonic words, because turning words into a seed is a wallet's job on a device you trust. Only public keys and addresses are ever displayed — no private key is shown — and the seed is not stored, logged or sent anywhere. Honest warning, in plain words: <strong>a seed is the master secret of a whole wallet. Never type a real one into any website, this one included</strong> — use a throwaway test seed here, and do real derivation inside your wallet.</p>
         <label for="hd-seed">Seed (hex — 16 to 64 bytes; a BIP39 seed is 64 bytes / 128 hex characters)</label>
@@ -589,7 +605,7 @@
         <p id="hd-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="pubkey-calc">
+      <form class="tool" id="pubkey-calc" data-family="addresses">
         <h3>32 · Public key inspector (compressed key → the point behind it)</h3>
         <p>Every P2PK address and ProveDlog script on Ergo carries a compressed secp256k1 public key — 33 bytes: a prefix (02 for even y, 03 for odd y) and an x-coordinate. But the prefix and length are all tools 8 and 19 check, and they are not enough: a compressed key is only a real key if its x names a point actually on the curve, where y² = x³ + 7 modulo the field prime p. Roughly half of all x values have no point at all — x³ + 7 is a quadratic non-residue for them — and any x ≥ p is outside the field entirely; an address formatted around such bytes guards a key nobody can ever hold. This inspector does the real check: because p is 3 modulo 4, a square root of x³ + 7, when one exists, is (x³ + 7)^((p+1)/4) mod p — it recovers y, pins the parity the prefix claims (the other root, p − y, is the point's negation, so the same x under the other prefix is a different, also valid point), re-verifies the curve equation, and re-compresses the point before showing anything. It then shows the full point (x and y), the uncompressed form (04 + x + y), the SGroupElement Sigma constant (07 + the compressed key) that tool 18 reads and writes, and the key's P2PK addresses on both networks, round-tripped through tool 11's decoder. A public key is public — inspecting one proves no ownership of it, and no private key can be found from the point. Public keys only: never type a private key or seed into any website, this one included.</p>
         <label for="pubkey-in">Compressed public key (hex — 66 characters, starting 02 or 03)</label>
@@ -598,7 +614,7 @@
         <p id="pubkey-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="boxset-calc">
+      <form class="tool" id="boxset-calc" data-family="boxes">
         <h3>33 · Box set summarizer (many boxes → totals for the whole set)</h3>
         <p>Tool 15 reads one box, but a wallet holds many — so paste a whole set, one full serialized box per line, and this tool answers for the set: the exact total ERG (BigInt sums, never rounded), each token's total raw amount aggregated across every box that carries it, and whether every box meets its size-based protocol minimum under tool 5's rule (serialized bytes × 360 nanoERG). Give a current chain height and it also applies tool 7's storage-rent rule per box — creation height + 1,051,200 blocks — and totals the ERG sitting in boxes old enough for rent. The set is strict, on purpose: a line that does not parse stops the whole summary with that line named, because a silently skipped box would understate every total with no sign it had happened, and the same box listed twice is refused, because its box ID would double-count one on-chain box. The summary is a statement about the bytes you pasted, not a live wallet balance — a pasted box may since have been spent, and only the chain can tell you that; this tool fetches nothing, signs nothing and sends nothing.</p>
         <label for="boxset-boxes">Serialized boxes (hex — one full box per line, up to 100)</label>
@@ -609,7 +625,7 @@
         <p id="boxset-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txfee-calc">
+      <form class="tool" id="txfee-calc" data-family="transactions">
         <h3>34 · Transaction fee &amp; balance checker (transaction + its input boxes → the fee, and whether it balances)</h3>
         <p>Tool 29 reads a transaction's outputs, but a transaction's bytes never carry its input values — so the fee it paid is invisible from the transaction alone. Paste the transaction <em>and</em> the boxes it spends (one full serialized box per line, the same bytes tool 15 reads — an explorer links each input's box from the transaction's page), and this tool matches every pasted box's ID against the transaction's input list, then does the accounting exactly, in BigInt. Ergo creates no ERG inside a transaction, so inputs minus outputs must be exactly 0 — anything else is reported plainly as proof the pasted boxes are not this transaction's inputs, or the bytes are not a valid transaction. The fee itself is not a field and not a remainder: it is the ERG locked in the outputs guarded by the miner fee contract, the way real transactions pay it. Tokens are accounted per token ID: what came in, what went out, what was burned — and a token appearing only in outputs is a mint, whose ID the protocol fixes as the first input's box ID (flagged if it is anything else). Data inputs are read, not spent: their value never enters the sums, and pasting one among the inputs is refused with that stated. The match is strict both ways — a missing input box or an extra pasted box stops the check, because a partial accounting would print a confident, wrong fee. This is arithmetic over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txfee-tx">Serialized transaction (hex — the full bytes, as tool 29 takes them)</label>
@@ -620,7 +636,7 @@
         <p id="txfee-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="tokenplan-calc">
+      <form class="tool" id="tokenplan-calc" data-family="transactions">
         <h3>35 · Token-aware payment planner (your boxes + a payment that needs ERG and tokens → which boxes to spend)</h3>
         <p>Tool 9 plans an ERG-only payment over box values you type — but real payments often need tokens too, and tokens live inside specific boxes, so a value-only plan cannot say which boxes carry them. Paste your boxes (one full serialized box per line, the same bytes tool 15 reads), the ERG payment and fee, and any token requirements (one per line: token ID, then the raw amount — raw on-chain integers; tool 6 converts a display amount once you know the token's decimals). Ergo spends boxes whole, so this planner selects deterministically in two phases: first, walking your boxes in the order listed, it takes any box holding a token whose need is still open, until every token need is covered; then it walks the remaining boxes in order until the selected ERG covers payment + fee. The report accounts for change completely — the ERG change, each requested token's leftover, and any token the selected boxes carry that you never requested: unrequested tokens do not vanish when their box is spent, they ride into the change box, and a plan that hid them would lose them on paper. Two traps are flagged plainly: ERG change above zero but below the recommended safe user minimum is dust, and leftover tokens with an ERG change of exactly zero have nothing to carry them, because a change output holding tokens must itself hold ERG. Shortfalls are reported per token and for ERG, never averaged away. Planning only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing, and a box may since have been spent, which only the chain can tell you.</p>
         <label for="tokenplan-boxes">Your boxes (hex — one full serialized box per line)</label>
@@ -635,7 +651,7 @@
         <p id="tokenplan-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txjson-calc">
+      <form class="tool" id="txjson-calc" data-family="transactions">
         <h3>36 · Transaction JSON converter (EIP-12 / fleet JSON ⇄ the serialized bytes)</h3>
         <p>Tools 29 and 30 work in serialized bytes, but dApps, wallets and fleet-sdk speak JSON — the EIP-12 unsigned-transaction form: <code>{inputs: [{boxId, extension?}], dataInputs?, outputs: [{value, ergoTree, creationHeight, assets?, additionalRegisters?}]}</code>, with values and amounts as decimal strings and registers and extension values as Sigma constants in hex, exactly as tools 15 and 18 display them. This converts between the two notations, in either direction, locally. The JSON form is unsigned by definition — it has no place for spending proofs — so a signed transaction is refused in both directions rather than have its proofs silently dropped: tool 29 shows a signed transaction's full contents, and tool 30 rebuilds signed bytes from pasted proofs. Amounts are never rounded to fit: a value given as a JSON number is accepted only when it is a safe integer, and is re-emitted as a string. Registers are positional, so additionalRegisters must start at R4 with no gaps — R5 written without R4 would be read back as R4, and that is refused instead of converted. If the pasted JSON carries an <code>id</code> that disagrees with the computed transaction ID, the mismatch is reported, never hidden. Conversion is just a change of notation: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txjson-direction">Direction</label>
@@ -651,7 +667,7 @@
         <textarea id="txjson-output" rows="6" readonly spellcheck="false" placeholder="The converted form appears here"></textarea>
       </form>
 
-      <form class="tool" id="mintplan-calc">
+      <form class="tool" id="mintplan-calc" data-family="transactions">
         <h3>37 · Token mint planner (first input + metadata → the token ID and its issuance box content)</h3>
         <p>A new Ergo token gets its ID from the chain, not from its metadata: the token ID is the box ID of the <em>first input</em> of the minting transaction — the rule EIP-4 states and fleet-sdk's builder follows. That is what makes the ID unique: a box can be spent only once, so no second mint can ever reuse it. Tool 27 encodes a token's metadata into its EIP-4 registers, and tool 34 checks a finished transaction's mint against this same rule; this planner puts the pieces together before anything is built. Give it the first input's box ID (tools 15 and 33 show a box's ID; tool 29 lists a transaction's inputs), the token's name, description, decimals and optional asset type, and the raw amount to issue, and it returns the token ID, the issuance registers, the display amount, and the exact field text the builders take for the issuance box — the token line and raw register hexes for tool 30's transaction builder, and the registers as typed <code>bytes:</code> specs for tool 17's box builder. Planning only: it builds no transaction, signs nothing and mints nothing — the token exists only once a real minting transaction spending that first input confirms, and whether that box is still unspent is a chain fact only an explorer can tell you.</p>
         <label for="mintplan-first-input">First input's box ID (64 hex characters — this becomes the token ID)</label>
@@ -679,7 +695,7 @@
         <p id="mintplan-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txaudit-calc">
+      <form class="tool" id="txaudit-calc" data-family="transactions">
         <h3>38 · Transaction output auditor (transaction bytes → a pre-sign audit of everything it creates)</h3>
         <p>Tool 34 checks a transaction's fee and balance, but it needs the input boxes pasted alongside — a transaction's bytes never carry its input values. A wallet, a reviewer or a counterparty often holds only the transaction itself, and everything on the output side is fully determined by those bytes, so this audits exactly that side, with nothing else needed. For every output it reports the box's standalone serialized size and the protocol minimum value for that size (360 nanoERG per byte, tool 5's figure): a below-minimum output can never be created on-chain, so one sitting in a transaction you are about to sign is worth spotting first, with its exact shortfall. The outputs guarded by the miner fee contract are summed as the fee the outputs themselves pay — and a transaction with no fee-contract output is flagged plainly, because nothing in its outputs pays a miner, whatever its inputs hold. A token whose ID equals the first input's box ID is a mint (the protocol fixes a new token's ID that way — tools 34 and 37), reported with its amount and output, and differing creation heights across outputs are reported as a fact. What this audit cannot see is stated plainly: whether the inputs cover the outputs — that needs the input boxes, and it is tool 34. Audit only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txaudit-tx">Serialized transaction (hex — the full bytes, as tool 29 takes them)</label>
@@ -688,7 +704,7 @@
         <p id="txaudit-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txinput-calc">
+      <form class="tool" id="txinput-calc" data-family="transactions">
         <h3>39 · Transaction input auditor (transaction bytes → a pre-sign audit of everything it spends)</h3>
         <p>The input-side counterpart to tool 38's output audit, again from the transaction's bytes alone. For every spent input it reports whether a spending proof is present and how long it is, and decodes the input's context extension — the constants a script may read while its box is being spent — entry by entry (key, type, value). Three structural faults are flagged plainly, because each is visible in the bytes and each matters before signing: the same box listed as a spent input twice (a box can be spent only once, so such a transaction can never be accepted); a context extension repeating a key on one input (one key holds one constant — a second entry under the same key makes what the script reads ambiguous, and tool 30's builder refuses to assemble one); and the data-input list — the boxes the scripts read but do not spend — repeating a box, or naming a box the transaction also spends, both reported as facts. The honesty boundary is stated plainly: a proof being present is all the bytes show — whether a proof is valid is a question about the spent box's script and the Sigma protocol, which no byte count answers, and what the inputs are worth lives in the input boxes, not the transaction (tool 34 checks fee and balance with them). Audit only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txinput-tx">Serialized transaction (hex — the full bytes, as tool 29 takes them)</label>
@@ -697,7 +713,7 @@
         <p id="txinput-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txsign-calc">
+      <form class="tool" id="txsign-calc" data-family="transactions">
         <h3>40 · Signing round-trip checker (transaction bytes before signing ⇄ after signing → did anything but the proofs change?)</h3>
         <p>Tools 38 and 39 audit one transaction; this one compares two. Paste the serialized transaction a dApp or builder showed you <em>before</em> signing, and the serialization the wallet hands back <em>after</em> — signing may legitimately change exactly one thing, the spending proofs, and everything else is pinned by the transaction ID, which is computed over the unsigned form (proofs zeroed, context extensions and every later byte verbatim). So equal IDs prove the spent boxes, extensions, data inputs, token list and outputs are byte-identical outside the proofs, and the report lists exactly which inputs gained, replaced or — the case the ID itself cannot see — <strong>lost</strong> a proof. Different IDs mean something besides proofs moved, and the report says where: a spent box swapped, an extension constant changed, data inputs added or dropped, or outputs differing, with the before/after output counts and totals. This is the check to run when a wallet returns a transaction you did not build: if the after version is not the transaction you approved, do not let it be treated as one. The honesty boundary is stated plainly: the comparison is over bytes — whether a change is legitimate, or a present proof is valid, is not a question bytes alone answer (tool 39 makes the same point about proofs). Comparison only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txsign-before">Before signing — serialized transaction (hex, as tool 29 takes it)</label>
@@ -708,7 +724,7 @@
         <p id="txsign-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="boxdiff-calc">
+      <form class="tool" id="boxdiff-calc" data-family="boxes">
         <h3>41 · Box differ (serialized box ⇄ serialized box → which fields changed?)</h3>
         <p>Tool 40 compares two serializations of one transaction; this is the same question one level down, for the box itself. Paste two serialized boxes — two versions of what should be the same box, a box before and after a tool rebuilt it, or two boxes an explorer and an SDK disagree about — and the report names exactly which fields moved: the value, with the signed nanoERG delta; the ErgoTree; the creation height, with the signed block delta; the tokens, per token ID (added, removed, or amount changed); the registers R4–R9, compared by their raw constant bytes and reported with type and decoded value (added, removed, or changed); and the claimed provenance — the creating transaction ID and output index — so it also says whether the two boxes claim the same origin at all. The box ID is reported for both but deliberately not diffed as a field: it is the Blake2b-256 of the whole serialization (tool 14), so any field change makes a different ID, and diffing by it would report everything changed whenever anything did. The honesty boundary is stated plainly: the comparison is over bytes — whether the second box is the right version of the first is not a question bytes alone answer. Comparison only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="boxdiff-a">First box — serialized box (hex, as tool 15 takes it)</label>
@@ -719,7 +735,7 @@
         <p id="boxdiff-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txsize-calc">
+      <form class="tool" id="txsize-calc" data-family="transactions">
         <h3>42 · Transaction size breakdown (transaction bytes → where does the size go?)</h3>
         <p>Tool 29 reads a transaction's contents and tool 38 sizes its outputs standing alone, but neither says where the transaction's own bytes go. Paste one serialized transaction and this breaks its size into the four sections the serialization actually carries, each with its share of the total: the inputs (per input: the 32-byte box ID, the proof and the context extension, count bytes included), the data inputs and the distinct token IDs (32 bytes each, plus their counts), and the outputs in their embedded form — which is smaller than tool 38's standalone form by exactly what standing alone adds: the creating transaction ID, the output index, and a full 32-byte ID per token instead of a short index into the transaction's token list. The four sections are checked to sum to the transaction's byte length before anything is shown. Also reported: the total proof bytes and their share, and the unsigned size — the length of the form the transaction ID is computed over, with every proof replaced by a single zero length byte; for an unsigned transaction the two sizes are equal. The honesty boundary is stated plainly: size is a fact about the bytes, not a verdict — this tool states no protocol size limit and no cost figure, because neither is a constant the bytes alone carry. Measurement only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txsize-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -728,7 +744,7 @@
         <p id="txsize-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txdiff-calc">
+      <form class="tool" id="txdiff-calc" data-family="transactions">
         <h3>43 · Transaction differ (transaction ⇄ transaction → which fields changed?)</h3>
         <p>Tool 40 compares a transaction before and after signing and names the sections that moved; tool 41 diffs two boxes field by field. Paste two serialized transactions and this diffs them field by field: inputs and outputs are paired by position — the order the serialization carries them — and one that exists on only one side is reported as added or removed at its position. Per input it reports the spent box, the proof classified exactly as tool 40 classifies it (added, removed, changed, unchanged) and the context extension diffed per key by its raw constant bytes. The data inputs and the distinct token IDs are diffed both as sequences and as sets, so a pure reordering is named as one — it still changes the transaction ID, because both lists sit in the ID's verbatim tail and the token list re-points every output's token indexes. Per output it reports the value with its signed nanoERG delta, the ErgoTree, the creation height with its signed block delta, the tokens per token ID and the registers R4–R9 by their raw constant bytes — compared as written, never by the outputs' box IDs, which embed the transaction ID itself. The verdict follows tool 40: identical bytes, signing-only (same transaction ID, so only the proofs can differ), or changed, with the changed sections named. The honesty boundary is stated plainly: this compares the bytes you pasted — which of the two transactions is the right one is not a question bytes alone answer, and a present proof is not a verified one. Comparison only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txdiff-a">First serialized transaction (hex, as tool 29 takes it)</label>
@@ -739,7 +755,7 @@
         <p id="txdiff-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="boxsetdiff-calc">
+      <form class="tool" id="boxsetdiff-calc" data-family="boxes">
         <h3>44 · Box set differ (two sets of boxes → which boxes changed?)</h3>
         <p>Tool 33 totals one set of boxes and tool 41 diffs two single boxes field by field. Paste two sets of serialized boxes — a wallet's boxes before and after, a snapshot against a later one, one box per line in each — and this diffs the sets: which boxes are in both, which left, which arrived, and how the sets' ERG and per-token totals moved. A box's identity is its box ID, the Blake2b-256 hash of its full serialization, so a box whose contents changed at all is a different box: it shows here as one removed plus one added, never as an in-place edit — the field-by-field story of two single boxes is tool 41's job. Membership ignores the order the lines are pasted in, but the order is still reported, because a re-pasted set in a different order is a fact worth naming, not an error. Both sides are totalled by tool 33 itself, with its strictness carried over: an unparseable line, or the same box listed twice on one side, refuses the whole comparison with the side and line named, because a silently skipped or double-counted box would corrupt every delta. The honesty boundary is stated plainly: this compares the bytes you pasted — it fetches nothing and is not a live wallet balance, and which set is the right one is not a question bytes alone answer. Comparison only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="boxsetdiff-a">First set — serialized boxes (hex, one full box per line, as tool 33 takes them)</label>
@@ -750,7 +766,7 @@
         <p id="boxsetdiff-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txstrip-calc">
+      <form class="tool" id="txstrip-calc" data-family="transactions">
         <h3>45 · Unsigned-form extractor (transaction bytes → the unsigned form its ID is computed over)</h3>
         <p>Tool 29 reports a transaction's ID and tool 42 reports its unsigned size, but neither shows the unsigned bytes themselves — the exact form the transaction ID is the Blake2b-256 of: every input's spending proof replaced by a single zero length byte, everything else verbatim. Tool 36 refuses signed bytes rather than drop proofs silently; this tool makes that drop explicit and hands you the unsigned hex itself, ready to paste into the parser, the JSON converter or the differ. The extraction is verified before it is shown: the result must hash to the transaction's own ID and re-parse as the same transaction, unsigned — a proof longer than 127 bytes has a multi-byte length VLQ, so stripping can remove more than the proof bytes themselves, and the report counts the whole difference. The honesty boundary is stated plainly: the unsigned form cannot be spent and the removed proofs are gone from this copy, so keep the original if you need them — and no proof that was present was verified here, only removed. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txstrip-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -759,7 +775,7 @@
         <p id="txstrip-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txattach-calc">
+      <form class="tool" id="txattach-calc" data-family="transactions">
         <h3>46 · Transaction proof attacher (unsigned transaction bytes + proofs → the signed form)</h3>
         <p>Tool 45 extracts a transaction's unsigned form; this is its exact inverse. An offline signer, a prover service or a second device hands back one spending proof per input — paste the unsigned transaction and one proof per input, in input order (a single dash leaves that input unsigned), and this splices each proof in as its VLQ length plus bytes, keeping the box IDs, the context extensions and every remaining byte verbatim. Attaching a proof never changes the transaction ID, because the ID is computed over the unsigned form (tool 45) — and that is exactly how the result is verified before it is shown: it must re-parse with the same transaction ID, every pasted proof must read back on its own input, every context extension must be unchanged, and tool 40 must agree the pair differs by signing only. A transaction that already carries a proof is refused plainly — replacing proofs silently is how a reviewed transaction stops being the one that was reviewed; strip it with tool 45 first if replacement is really intended. The honesty boundary is stated plainly: the proofs are spliced, never verified — a present proof is not a valid one, and only the chain can say whether these proofs actually spend these boxes. Assembly only, over the bytes you pasted: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txattach-bytes">Unsigned serialized transaction (hex, as tool 29 takes it)</label>
@@ -770,7 +786,7 @@
         <p id="txattach-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txoutbox-calc">
+      <form class="tool" id="txoutbox-calc" data-family="transactions">
         <h3>47 · Transaction output box extractor (transaction bytes + an output number → that output as a standalone box)</h3>
         <p>Inside a transaction, an output is not yet a box the box tools can read: it travels in an embedded form with no creating transaction ID and no output index, and each of its tokens is named by a small index into the transaction's distinct-token-ID list instead of by its full 32-byte ID. Tool 29 reports such an output's box ID, but not its box bytes — so until now an output could not be pasted into the box parser, the box differ or a box set. This tool rebuilds one chosen output in the standalone serialization: the value, ErgoTree and creation height verbatim, each token's full ID restored from the list alongside its amount, the registers verbatim, then the creating transaction's ID and the output index appended — exactly the byte string whose Blake2b-256 is the box ID. The rebuild is verified before it is shown: the standalone bytes must re-parse through tool 15 with that same box ID, the right transaction ID and index in their tail, and every field — value, tree, height, tokens, registers by raw bytes — equal to the embedded output. The honesty boundary is stated plainly: the extracted box is the box this transaction creates if it is the one on chain — a pasted transaction may never have been submitted, and bytes alone do not prove a box exists or is still unspent. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txoutbox-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -781,7 +797,7 @@
         <p id="txoutbox-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txinproof-calc">
+      <form class="tool" id="txinproof-calc" data-family="transactions">
         <h3>48 · Transaction input proof extractor (transaction bytes + an input number → that input's spending proof)</h3>
         <p>Tool 47 lifts a transaction's output out as a standalone box; this is the input-side companion. Tool 29 reports an input's proof length but not the proof itself, and tool 45 lists every proof only as a side table of the unsigned form — so until now a single input's proof could not be lifted out on its own, for example to carry into tool 46 or to compare against what a wallet produced when it signed. This tool returns one chosen input's spending proof as hex — or, when that input is unsigned, the single dash (-) that tool 46 takes as its proof line — together with the box the input spends and its context extension constants. The proof is verified before it is shown: it is located twice, once by the transaction parser and once by an independent re-walk of the input section, and the two must agree byte-for-byte, as must the box ID and every extension entry; on top of that, re-attaching every input's extracted proof line to the unsigned form through tool 46 must reproduce the pasted transaction exactly. The honesty boundary is stated plainly: a proof is copied, never verified — extraction copies the bytes, and bytes alone do not prove the proof satisfies the spent box's script. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txinproof-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -792,7 +808,7 @@
         <p id="txinproof-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txdatainput-calc">
+      <form class="tool" id="txdatainput-calc" data-family="transactions">
         <h3>49 · Transaction data-input extractor (transaction bytes + a data-input number → that data input's box ID)</h3>
         <p>Tools 47 and 48 lift out a transaction's outputs and its inputs' proofs; this completes the set with the section in between. A data input is a box a transaction's scripts read but never spent — it carries no proof, and its ERG and tokens do not enter the balance — yet tools 29 and 39 only show the data inputs as an inline list, so a single one could not be lifted out with its position, checked for the odd case of also being spent by the same transaction, or carried into another tool on its own. This tool returns one chosen data input's box ID, flags that also-spent case, and gives the full list in order — the lines tool 30's data-inputs field takes, one box ID per line. The box ID is verified before it is shown: it is located twice, once by the transaction parser and once by an independent re-walk that must skip every input exactly (box ID, proof, context extension constants) to reach the data-input section at all, and the two must agree byte-for-byte on the count and every ID; on top of that, the unsigned form (tool 45) must re-parse to the same transaction ID with the same data inputs in the same order, because data inputs are signed over verbatim and signing can never change them. The honesty boundary is stated plainly: a data input is a reference, never content — extraction reads the ID from the bytes you paste, and does not prove the named box exists on chain, is unspent, or holds what a script expects. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txdatainput-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -803,7 +819,7 @@
         <p id="txdatainput-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txtoken-calc">
+      <form class="tool" id="txtoken-calc" data-family="transactions">
         <h3>50 · Transaction token extractor (transaction bytes + a token number → that token's ID, where it is carried, and whether this transaction mints it)</h3>
         <p>Tools 47–49 lift out a transaction's outputs, its inputs' proofs and its data inputs; this completes the section set with the distinct-token-ID list. Every output names its tokens by a small index into that list, so the list is what gives every other token figure in the transaction its meaning — yet tools 29 and 39 only show it inline, and a single listed token could not be lifted out with its position, the outputs that carry it and their amounts, or its minting flag. A token whose ID equals the transaction's first input's box ID is minted by this transaction — exactly how a new token's ID is defined — and every other listed token must have come in with the inputs. This tool returns one chosen token's ID, its carrying outputs and exact total, that flag, and the full list in order. The token ID is verified before it is shown: it is located twice, once by the transaction parser and once by an independent re-walk that must skip every input exactly (box ID, proof, context extension constants) and every data input to reach the token section at all, and the two must agree byte-for-byte on the count and every ID; on top of that, the unsigned form (tool 45) must re-parse to the same transaction ID with the same token list in the same order, because the list is signed over verbatim, and the chosen token's per-output amounts must sum exactly to the parser's total for it. The honesty boundary is stated plainly: an ID is an identifier, never a token — extraction reads it from the bytes you paste, and does not prove the token exists on chain, what its name or decimals are, or that the inputs actually carried a non-minted token. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txtoken-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -814,7 +830,7 @@
         <p id="txtoken-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txreg-calc">
+      <form class="tool" id="txreg-calc" data-family="transactions">
         <h3>51 · Transaction register extractor (transaction bytes + an output number + a register → that register's type, value and raw constant)</h3>
         <p>Tools 47–50 lift out a transaction's output boxes, its inputs' proofs, its data inputs and its listed tokens; the one section none of them can lift out on its own is a single register of a single output. Registers R4–R9 are where a box keeps its data — a minting output's EIP-4 name, description and decimals live in R4, R5 and R6, oracle boxes keep their values there, contracts read them — yet tools 29 and 38 only show them inline inside a whole output, so one chosen register could not be lifted out with its output's box ID, its Sigma type, its decoded value and its raw constant bytes, or carried into tool 18 (which decodes exactly one constant) on its own. This tool returns one chosen register of one chosen output, and also shows the register's text when it is a Coll[SByte] holding printable UTF-8 — the EIP-4 case. The register is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every input, data input, listed token ID and earlier output exactly to reach this output's register section at all, and once by tool 47's standalone box for the same output re-parsed with the box parser, and all three must agree on the register's type, value and raw bytes byte-for-byte; on top of that, the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same register, because registers are signed over verbatim and signing can never change them. The honesty boundary is stated plainly: a register is content, never proof — extraction reads it from the bytes you paste, and does not prove the output exists on chain as a box, that bytes shown as text were meant as text, or that any script will read the value the way you expect. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txreg-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -827,7 +843,7 @@
         <p id="txreg-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txext-calc">
+      <form class="tool" id="txext-calc" data-family="transactions">
         <h3>52 · Transaction context-extension extractor (transaction bytes + an input number + a key → that entry's type, value and raw constant)</h3>
         <p>Tools 47–51 lift out a transaction's output boxes, its inputs' proofs, its data inputs, its listed tokens and a single output register; the one per-item section none of them can lift out on its own is a single entry of a single input's context extension. A context extension is the small key → constant map an input carries alongside its proof — the spent box's script reads those values by key when it runs, which is how oracle and dApp contracts receive their parameters — yet tools 29 and 39 only show the entries inline inside a whole input, and tool 48 returns the whole extension only as a side dish to the proof, so one chosen entry could not be lifted out with its Sigma type, its decoded value and its raw constant bytes, or carried into tool 18 (which decodes exactly one constant) on its own. This tool returns one chosen entry of one chosen input, the keys the input carries in total, and the entry's text when it is a Coll[SByte] holding printable UTF-8. The entry is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every earlier input exactly (box ID, proof, extension constants) and decodes this input's whole extension again, and once by tool 48's extraction of the same input, and all three must agree on every entry's key, type, value and raw bytes byte-for-byte; on top of that, the entry's raw constant must decode standalone through tool 18 to the same type and value, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same entry, because extensions are kept verbatim in the unsigned form and signing can never change them. A key an input carries twice — a malformed but parseable case tool 39 flags — extracts its first entry, and the result says so. The honesty boundary is stated plainly: an extension value is content, never proof — extraction reads it from the bytes you paste, and does not prove the spent box's script reads this key, or reads it as this type. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txext-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -840,7 +856,7 @@
         <p id="txext-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txtree-calc">
+      <form class="tool" id="txtree-calc" data-family="transactions">
         <h3>53 · Transaction ErgoTree extractor (transaction bytes + an output number + a network → that output's guarding script, its header analysis and its pay-to addresses)</h3>
         <p>Tools 47–52 lift out a transaction's output boxes, its inputs' proofs, its data inputs, its listed tokens, a single output register and a single extension entry; the one per-item section none of them can lift out on its own is a single output's ErgoTree — the script that guards that output and decides who can spend it. Tools 29 and 38 show the tree only inline inside a whole output, tool 47 only inside a whole standalone box, and tool 10 inspects a tree only when it is pasted on its own, so one chosen output's tree could not be lifted out in the exact form tool 10 takes, with its header analysis (version, size flag, constant segregation, declared size, proposition length) and the addresses it corresponds to. This tool returns one chosen output's tree, its box ID and value, and — for the network you pick, because an ErgoTree carries no network of its own and only the addresses depend on it — the P2PK address when the proposition is the standard ProveDlog form, the P2SH address tool 10 derives, and the P2S address that carries the tree verbatim. A constant-segregated tree gets no P2SH address: its reference hash is taken over the proposition with its constants substituted back in, which raw tree bytes cannot reconstruct, so none is derived rather than risk a wrong one. The tree is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every input (proof and extension constants), data input, listed token ID and earlier output exactly and delimits this output's tree the same three ways the parser does (the miner fee contract, the plain P2PK shortcut, header + VLQ size), and once by tool 47's standalone box for this output re-parsed with the box parser, and all three must agree byte-for-byte; the extracted tree must also analyse through tool 10 with agreeing header fields, its P2S form must build through tool 13, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same tree, because signing can never change an output. The honesty boundary is stated plainly: an ErgoTree is the guard, never the proof — extraction reads it from the bytes you paste, and does not prove the output exists on chain as a box or that anyone can satisfy this script. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txtree-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -855,7 +871,7 @@
         <p id="txtree-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txouttoken-calc">
+      <form class="tool" id="txouttoken-calc" data-family="transactions">
         <h3>54 · Transaction output token extractor (transaction bytes + an output number + a token number → that one token entry, expanded)</h3>
         <p>Tools 47–53 lift out a transaction's output boxes, its inputs' proofs, its data inputs, its listed tokens as a whole, a single output register, a single extension entry and a single output's ErgoTree; the one per-item view none of them gives is a single token entry inside a single output. Tool 50 answers at the level of the transaction's distinct-token list — every output that carries a token and the total — and tools 29 and 47 show an output's tokens only inline inside a whole transaction or a whole standalone box, where the embedded form names each token only by its index into the distinct-token list. This tool returns one chosen token of one chosen output expanded: its full 32-byte token ID, its exact raw amount, its position inside the output and its index in the distinct-token list, the output's box ID and ERG value, the output's full token list in order, and whether this transaction mints the token (its ID equals the transaction's first input's box ID — the same rule tools 37, 38 and 50 use). The token is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every input (proof and extension constants), data input, listed token ID and earlier output exactly and expands this output's token index through the distinct-token list it re-read, and once by tool 47's standalone box for this output re-parsed with the box parser, and all three must agree; tool 50's view of the same token must place the same amount in this output, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same token in the same position, because signing can never change an output. The honesty boundary is stated plainly: a token entry is copied from the bytes you paste, never verified against the chain — extraction does not prove the output exists on chain as a box. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txouttoken-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -868,7 +884,7 @@
         <p id="txouttoken-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txregset-calc">
+      <form class="tool" id="txregset-calc" data-family="transactions">
         <h3>55 · Transaction output register-set extractor (transaction bytes + an output number → that output's complete register set, in order)</h3>
         <p>Tool 51 lifts one register out of one output, which is the right grain for checking a single value — but a box's data is usually a set: a minting output's EIP-4 name, description and decimals (R4, R5 and R6) only mean anything together, and an oracle box's registers are one record. Tools 29 and 47 show a register set only inline inside a whole transaction or a whole standalone box, so one chosen output's complete set could not be lifted out on its own. This tool returns every register the output carries, in order from R4, each with its Sigma type, its decoded value and its raw constant bytes (exactly what tool 18 decodes on its own), plus the register's text when it is a Coll[SByte] holding printable UTF-8 — the EIP-4 case — alongside the output's box ID, ERG value and creation height, and the raw register-section hex exactly as serialized, register-count byte included, so the whole set can be carried or compared as one string. An output carrying no registers is refused plainly rather than shown an empty set as if it were a result. The set is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every input (proof and context extension constants), data input, listed token ID and earlier output exactly to reach this output's register section at all, and once by tool 47's standalone box for the same output re-parsed with the box parser, and all three must agree on every register's name, type, value and raw bytes; every register must also extract on its own through tool 51, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same set, because registers are signed over verbatim and signing can never change them. The honesty boundary is stated plainly: a register set is content, never proof — extraction reads it from the bytes you paste, and does not prove the output exists on chain as a box, that bytes shown as text were meant as text, or that any script will read the values the way you expect. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txregset-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -879,7 +895,7 @@
         <p id="txregset-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txextset-calc">
+      <form class="tool" id="txextset-calc" data-family="transactions">
         <h3>56 · Transaction input extension-set extractor (transaction bytes + an input number → that input's complete context extension, in order)</h3>
         <p>Tool 52 lifts one entry out of one input's context extension, which is the right grain for checking a single parameter — but an extension is usually a set: an oracle or dApp input passes several keyed values that the spent box's script reads together when it runs. Tools 29 and 39 show a set only inline inside a whole transaction or a whole input audit, and tool 48 returns the whole extension only as a side dish to an input's proof, so one chosen input's complete set could not be lifted out on its own. This tool returns every entry the input carries, in order, each with its key, its Sigma type, its decoded value and its raw constant bytes (exactly what tool 18 decodes on its own), plus the entry's text when it is a Coll[SByte] holding printable UTF-8, alongside the spent box's ID, the input's key list, and the raw extension-section hex exactly as serialized, entry-count byte included, so the whole set can be carried or compared as one string. A key an input carries twice — the malformed case tool 39 flags — is reported as a duplicate and the set is shown exactly as serialized, never merged or deduplicated. An input carrying no entries is refused plainly rather than shown an empty set as if it were a result. The set is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every earlier input exactly (box ID, proof, extension constants) and decodes this input's whole extension again capturing its section bytes, and once by tool 48's extraction of the same input, and all three must agree on every entry's key, type, value and raw bytes; every entry's raw constant must also decode standalone through tool 18, every distinct key must extract on its own through tool 52, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same set, because extensions are kept verbatim in the unsigned form and signing can never change them. The honesty boundary is stated plainly: an extension set is content, never proof — extraction reads it from the bytes you paste, and does not prove the spent box's script reads these keys, reads them as these types, or that the box exists on chain. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txextset-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -890,7 +906,7 @@
         <p id="txextset-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txtokset-calc">
+      <form class="tool" id="txtokset-calc" data-family="transactions">
         <h3>57 · Transaction output token-set extractor (transaction bytes + an output number → that output's complete token set, in order)</h3>
         <p>Tool 54 lifts one token entry out of one output, expanded from its index into the transaction's distinct-token list — but an output's tokens are usually a set: a payment output carries several assets that move together, and a minting output's set is the issuance itself. Tools 29 and 47 show a token set only inline inside a whole transaction or a whole standalone box, and tool 50 answers at the level of the whole transaction's distinct-token list, so one chosen output's complete set could not be lifted out on its own. This tool returns every token the output carries, in order, each expanded to its full 32-byte token ID with its position inside the output, its index in the distinct-token list, its exact raw amount and whether this transaction mints it (its ID equals the transaction's first input's box ID), alongside the output's box ID, ERG value and creation height, and the raw token-section hex exactly as serialized inside the output, token-count byte included — the section names tokens by index, so the hex is the compact form, not the expanded IDs. An output carrying no tokens is refused plainly rather than shown an empty set as if it were a result. The set is verified before it is shown: it is located three times, once by the transaction parser, once by an independent re-walk that must skip every input (proof and context extension constants), data input and earlier output exactly, re-reads the distinct-token list itself and expands this output's token indexes through that re-read list, and once by tool 47's standalone box for the same output re-parsed with the box parser, and all three must agree on every token's ID and amount in order; every token must also extract on its own through tool 54, tool 50's view of each token must place the same amount in this output with the same minted flag, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same set, because signing can never change an output. The honesty boundary is stated plainly: a token set is content, never proof — extraction reads it from the bytes you paste, and does not prove the output exists on chain as a box or that the tokens are genuine instances of the assets their IDs name. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txtokset-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -900,7 +916,7 @@
         <button type="submit" class="btn primary">Extract the token set</button>
         <p id="txtokset-result" role="status" aria-live="polite"></p>
       </form>
-      <form class="tool" id="txdiset-calc">
+      <form class="tool" id="txdiset-calc" data-family="transactions">
         <h3>58 · Transaction data-input-set extractor (transaction bytes → that transaction's complete data-input set, in order)</h3>
         <p>Tool 49 lifts one data input out of a transaction — but a transaction's scripts read the data inputs as a set: an oracle feed, a pool state box, a bridge watcher box, in an order that is itself part of the signed bytes. Tools 29 and 39 show the set only inline inside a whole transaction, so the complete set could not be lifted out as one record, checked entry by entry for the odd case of a referenced box also being spent by the same transaction, or carried into tool 30's data-inputs field in one step. This tool returns every data input in order, each flagged when the same transaction also spends that box, alongside the raw data-input-section hex exactly as serialized (count byte included) and the set in tool 30's one-box-ID-per-line form. A transaction carrying no data inputs is refused plainly rather than shown an empty set as if it were a result. The set is verified before it is shown: it is located twice, once by the transaction parser and once by an independent re-walk that must skip every input exactly (box ID, proof, context extension constants) to reach the data-input section at all, and the two must agree on the count and every ID byte-for-byte; every entry must also extract on its own through tool 49 with the same box ID and also-spent flag, tool 39's input audit must list the same set, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same set in the same order, because data inputs are signed over verbatim and signing can never change them. The honesty boundary is stated plainly: a data-input set is a list of references, never content — extraction reads the IDs from the bytes you paste, and does not prove the named boxes exist on chain, are unspent, or hold what a script expects. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txdiset-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -909,7 +925,7 @@
         <p id="txdiset-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txinset-calc">
+      <form class="tool" id="txinset-calc" data-family="transactions">
         <h3>59 · Transaction input-set extractor (transaction bytes → that transaction's complete input set, in order)</h3>
         <p>Tools 48, 52 and 56 lift one input's proof, one extension entry and one input's whole context extension — but a transaction spends its inputs as a set: the boxes it consumes, in an order that is itself part of the signed bytes, with the first input's box ID doubling as the ID of any token the transaction mints. Tools 29 and 39 show the set only inline inside a whole transaction or a whole input audit, so the complete set could not be lifted out as one record. This tool returns every input in order, each with its spent box's ID, its proof length and proof bytes (or plainly none), its context extension's entry count, key list and every entry's Sigma type, decoded value and raw constant bytes, and the input's own raw serialized slice, alongside the signed-input count, the total proof bytes, the total extension entries, the raw input-section hex exactly as serialized (count byte included) and the spent box IDs one per line. The set is verified before it is shown: it is located twice, once by the transaction parser and once by an independent re-walk of the input section that captures the section bytes as it goes, and the two must agree on every input's box ID, proof and extension byte-for-byte; every input must also extract on its own through tool 48 with the same proof and extension, every extension-carrying input's set must extract through tool 56, tool 39's input audit must list the same inputs with the same totals, the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same box IDs and extensions with every proof stripped, and re-attaching every extracted proof line to that unsigned form through tool 46 must reproduce this transaction exactly. The honesty boundary is stated plainly: an input set names boxes and carries their proofs and parameters, never the boxes' contents — extraction reads it from the bytes you paste, and does not prove the named boxes exist on chain, are unspent, hold enough ERG or tokens, or that a present proof satisfies a box's script. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txinset-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -918,7 +934,7 @@
         <p id="txinset-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txoutset-calc">
+      <form class="tool" id="txoutset-calc" data-family="transactions">
         <h3>60 · Transaction output-set extractor (transaction bytes → that transaction's complete output set, in order)</h3>
         <p>Tools 47, 54, 55 and 57 lift one output as a standalone box, one token of one output, one output's register set and one output's token set — but a transaction creates its outputs as a set: the boxes it brings into existence, in an order that is itself part of the signed bytes (each box's ID embeds its output index), holding the transaction's whole value, its change, its fee output and any tokens it mints (a minted token's ID is the first input's box ID). Tools 29 and 38 show the set only inline inside a whole transaction or a whole output audit, so the complete set could not be lifted out as one record. This tool returns every output in order, each with its box ID, value, ErgoTree, creation height, its complete token list (expanded token ID, amount, distinct-list index and minted flag per token), its complete register list, a fee-contract flag, its own raw serialized slice in the transaction's compact token-index form and its standalone box bytes from tool 47, alongside the total output value, the total token and register entries, the minted-token count, the fee-output count, the raw output-section hex exactly as serialized (count byte included — the section is the transaction's suffix, so it can be checked against the pasted bytes directly), the created box IDs one per line and the standalone boxes one per line for tool 15 or a box-set tool. The set is verified before it is shown: it is located twice, once by the transaction parser and once by an independent re-walk that must skip every input, data input and distinct token ID exactly to reach the output section at all, expanding each output's token indexes through the re-walked distinct list, and the two must agree on every output's value, tree, height, tokens and registers byte-for-byte; every output must also extract on its own through tool 47 as a standalone box that re-parses with the same box ID and fields, every token-carrying output's token set must extract through tool 57, every register-carrying output's register set must extract through tool 55, tool 38's output audit must list the same outputs with the same total and the same fee outputs, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same output set, because outputs are signed over verbatim and signing can never change them. The honesty boundary is stated plainly: an output set is what the pasted bytes would create if the transaction were accepted — extraction does not prove the transaction is valid, will be accepted, or that the created boxes exist on chain yet. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txoutset-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -927,7 +943,7 @@
         <p id="txoutset-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="txdtokset-calc">
+      <form class="tool" id="txdtokset-calc" data-family="transactions">
         <h3>61 · Transaction distinct-token-set extractor (transaction bytes → that transaction's complete distinct-token list, in order)</h3>
         <p>Tool 50 lifts one listed token, tool 54 one token of one output and tool 57 one output's token set — but a transaction names its tokens as a set first: the distinct-token list, written once between the data inputs and the outputs, which every output's compact token entries then reference by index. The list's order is itself part of the signed bytes, and it is the transaction's own table of contents for everything token it moves or mints. Tools 29 and 50 show it only inline inside a whole transaction or alongside one chosen token, so the complete set could not be lifted out as one record with each token's footprint across the whole transaction aggregated. This tool returns every distinct token in list order, each with its full token ID, its minted flag (a token whose ID equals the transaction's first input's box ID is minted by this transaction), the total raw amount of it the outputs carry, and every output that carries it with that output's amount, alongside the minted-token count, the total token entries across all outputs, the raw distinct-token-section hex exactly as serialized (count byte included) and the token IDs one per line. A transaction listing no distinct token IDs is refused plainly rather than shown an empty set as if it were a result. The set is verified before it is shown: it is located twice, once by the transaction parser and once by an independent re-walk that must skip every input exactly (box ID, proof, context extension constants) and every data input to reach the token section at all, capturing the section hex from that walk, and the two must agree on the count and every listed ID byte-for-byte; every listed token must also extract on its own through tool 50 with the same ID, total amount, minted flag and carrying outputs, the parser's independently accumulated per-token totals must match the sums over the outputs, tool 38's output audit must carry the same per-token totals and the same minted set, and the unsigned form (tool 45) must re-parse to the same transaction ID carrying the same list in the same order, because the list is signed over verbatim and signing can never change it. The honesty boundary is stated plainly: a token ID is an identifier, never a token — extraction reads the list from the bytes you paste, and does not prove a listed token exists on chain, what its name or decimals are, or that the inputs actually carried a non-minted token in. Extraction only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="txdtokset-bytes">Serialized transaction (hex, as tool 29 takes it)</label>
@@ -936,7 +952,7 @@
         <p id="txdtokset-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="header-calc">
+      <form class="tool" id="header-calc" data-family="headers">
         <h3>62 · Block header inspector (serialized header bytes → every header field, with the header ID recomputed and checked)</h3>
         <p>Every other tool here works below the header — boxes, transactions, trees. This one opens the header itself: the ~220 bytes that head every Ergo block, whose Blake2b-256 hash is the block's ID. Paste a serialized block header — the bytes a node or sigma-rust holds for a block, Autolykos solution included — and I walk the reference layout exactly: version byte, parent ID, AD-proofs root, transactions root, the 33-byte state root (the AVL digest carries one extra byte; note the transactions root precedes it on the wire), the timestamp as a VLQ, the extension root, nBits as the header's one fixed-width number (4 big-endian bytes, not a VLQ), the height as a VLQ, the 3 miner-vote bytes, and, for version 2 and up, one length byte for any not-yet-defined extra fields. Then the Autolykos solution: version 1 headers carry miner key, one-time key, nonce and a length-prefixed distance; version 2 and up serialize only miner key and nonce, whatever JSON displays show. The tool returns every field, the difficulty decoded from nBits with the exact compact-bits algorithm, and the header ID recomputed as Blake2b-256 over the full serialized bytes — the reference definition — and if you supply the ID you expect, it is compared. The header is verified before anything is shown: it is located twice, once by the field parser and once by an independent offset-only re-walk, the parsed fields must re-serialize byte-for-byte to the bytes you pasted, and the walk must end exactly at the last byte. The honesty boundary is stated plainly: this recomputes the ID and decodes the fields — it does not verify the Autolykos proof-of-work hit against the difficulty target, and an ID is only a hash of these bytes, not proof the block sits on the main chain; that verdict belongs to a full node. Inspection only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="header-bytes">Serialized block header (hex, solution included)</label>
@@ -947,7 +963,7 @@
         <p id="header-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="headerbuild-calc">
+      <form class="tool" id="headerbuild-calc" data-family="headers">
         <h3>63 · Block header builder (header fields → serialized header bytes + header ID)</h3>
         <p>Tool 62 opens a serialized header; this one assembles one — the exact inverse. Give it the header fields (the values an explorer JSON or a node API shows for a block: version, the parent ID, the AD-proofs, transactions, state and extension roots, the timestamp in milliseconds, nBits, the height, the 3 vote bytes and the Autolykos solution values) and it serializes them in the reference layout — version byte, parent ID, AD-proofs root, transactions root, the 33-byte state root, the timestamp as a VLQ, extension root, nBits as 4 big-endian bytes (the header's one fixed-width number, decimal or 0x hex both accepted), the height as a VLQ, the votes, and on version 2 and up the extra-fields length byte plus those bytes — then the solution: version 1 carries miner key, one-time key, nonce and the length-prefixed distance d (serialized as its minimal big-endian bytes, 0 as the single byte 0x00); version 2 and up carry only miner key and nonce, so version-1-only values are refused rather than silently dropped, exactly as extra-fields bytes are refused on version 1. The tool returns the serialized header, its length split at the solution boundary, the difficulty decoded from nBits, and the header ID — Blake2b-256 over the assembled bytes. The build is verified before anything is shown: the assembled bytes are re-inspected by tool 62's parser and every field must come back identical. The honesty boundary is stated plainly: assembling a header proves nothing about proof-of-work — a built header carries whatever solution values you supplied, valid hit or not, and it is a block only if a node accepts it; this is a serialization tool for study, testing and cross-checking explorer data, not a mining tool. Building only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="hb-version">Block version (1–255; mainnet today is 4)</label>
@@ -984,7 +1000,7 @@
         <p id="headerbuild-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="headerdiff-calc">
+      <form class="tool" id="headerdiff-calc" data-family="headers">
         <h3>64 · Block header differ (serialized header ⇄ serialized header → which fields changed, and does one follow the other?)</h3>
         <p>Tools 62 and 63 open and assemble one header; this one puts two side by side — the header family's differ, in the line of the box, transaction and box-set differs. Paste two serialized headers and it reports exactly which fields changed, in wire order: version, parent ID, AD-proofs root, transactions root, state root, timestamp, extension root, nBits, the difficulty decoded from it, height, votes, extra-fields bytes, and the Autolykos solution fields. Cross-version pairs are compared honestly: a field one layout does not serialize — extra fields exist only on version 2 and up, the one-time key and distance only on version 1 — reads as absent on that side, never as a fabricated value. It also answers the chain question a field list alone cannot: whether the second header's parent ID names the first header's recomputed ID (the second follows the first), the reverse, the same header, or no link at all — the parent/ID link is the chain's own stitching. Deltas are exact: height as an integer, timestamp and difficulty as exact integers, plus the first byte offset at which the two serializations diverge. Both headers are verified before anything is shown: each is inspected by tool 62, which locates it twice and re-serializes it byte-for-byte, and an identical-bytes pair must come back with zero changed fields and equal IDs. The honesty boundary is stated plainly: a parent link proves only that the second names the first as its parent — it does not prove either header sits on the main chain, and neither header's proof-of-work hit is verified; those verdicts belong to a full node. Comparison only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="headerdiff-a">First serialized block header (hex, solution included)</label>
@@ -995,7 +1011,7 @@
         <p id="headerdiff-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="headerchain-calc">
+      <form class="tool" id="headerchain-calc" data-family="headers">
         <h3>65 · Block header chain checker (serialized headers, one per line → does this run of headers stitch together in order?)</h3>
         <p>Tools 62–64 open, assemble and compare single headers and pairs; this one checks a whole run — the header family's set tool, in the line of the box-set and transaction-set tools. Paste serialized headers, one per line in chain order, and it checks the stitching across every step: does each header's parent ID name the previous header's recomputed ID (the parent/ID link tool 64 checks for one pair), does its height advance by exactly one, and does its timestamp move forward? It reports every step with its exact height and timestamp deltas, the steps where the chain breaks, the linked steps whose height skips — a gap, meaning headers between them are missing from your list or a height disagrees with its link — the steps whose timestamp goes backwards, and any header that appears more than once. Only a run where every step is linked and every height advances by exactly one earns the fully-sequential verdict; linked-with-gaps and broken are reported as exactly what they are. Every header is verified before anything is shown: each is inspected by tool 62, which locates it twice and re-serializes it byte-for-byte, every step is cross-checked against tool 64's differ, and the per-step deltas must sum to the first-to-last totals. The honesty boundary is stated plainly: a sequential run proves only that these headers stitch together in this order — it does not prove any of them sits on the main chain, and no header's proof-of-work hit is verified; those verdicts belong to a full node. Chain checking only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="headerchain-headers">Serialized block headers (hex, one per line, in chain order, solutions included)</label>
@@ -1004,7 +1020,7 @@
         <p id="headerchain-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="headerpow-calc">
+      <form class="tool" id="headerpow-calc" data-family="headers">
         <h3>66 · Block header PoW extractor (serialized header → its header-without-PoW bytes + its Autolykos solution)</h3>
         <p>Tools 62–65 open, assemble, compare and chain whole headers — but a header is two things stitched together: the header without proof-of-work (every field up to the solution — the bytes a miner iterates over while searching, and the first half of the header ID's pre-image) and the Autolykos solution that was found for it. This tool — the header family's strip tool, in the line of tool 45's unsigned-form extractor for transactions — splits one serialized header at exactly that seam and returns each half as its own hex record, alongside every solution field: on version 2 and up the solution is the miner public key and the nonce (41 bytes); on version 1 it is the miner key, the one-time key, the nonce and the length-prefixed distance d. Tool 62 reports the two lengths but never the bytes themselves, so neither half could be lifted out on its own until now — for handing the without-PoW bytes to a mining or header-sync tool, or for comparing two solutions found for the same header content. The split is verified before it is shown: the header is inspected by tool 62, the solution bytes are re-parsed on their own from the split offset and must reproduce every solution field while ending exactly at the last byte, the two halves must concatenate back to the header you pasted, tool 63 must rebuild the identical header with the identical split, and the without-PoW half alone must not inspect as a header — it is a prefix, not a header. The honesty boundary is stated plainly: the without-PoW bytes alone have no header ID — the ID is Blake2b-256 over both halves together — and splitting a header does not verify its proof-of-work hit against the difficulty target; that verdict belongs to a full node. Splitting only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="headerpow-bytes">Serialized block header (hex, as tool 62 takes it)</label>
@@ -1013,7 +1029,7 @@
         <p id="headerpow-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="headerjoin-calc">
+      <form class="tool" id="headerjoin-calc" data-family="headers">
         <h3>67 · Block header PoW attacher (header-without-PoW bytes + Autolykos solution → the full serialized header)</h3>
         <p>Tool 66 splits a header into its two halves; this one — the exact inverse, in the line of tool 46's transaction proof attacher — joins them back. Paste the header-without-PoW bytes and an Autolykos solution as separate hex records and it reassembles the full serialized header and recomputes its ID. The halves are parsed separately before they ever meet: the without-PoW field walk (version, the four roots, VLQ timestamp, extension root, fixed-width nBits, VLQ height, votes, and on version 2+ the extra-fields section) must end exactly at its last byte — a full header, which carries a solution already, or a truncated prefix is refused, never trimmed — and the solution walk, read against the version the prefix declares (version 2+: miner key and nonce, 41 bytes; version 1: miner key, one-time key, nonce and the length-prefixed distance), must end exactly at its last byte too, so a version 1 solution can never be silently attached to a version 2+ prefix or the reverse. A well-formed solution from a different header joins cleanly and is reported as exactly what it is — a new header carrying that solution, with the ID the joined bytes hash to. The join is verified before anything is shown: the prefix fields re-serialize to the bytes you pasted, tool 62 inspects the joined bytes with every field matching the two separate parses, tool 66 splits them back into exactly the halves you supplied, and tool 63 rebuilds the identical header. The honesty boundary is stated plainly: joining proves only that these bytes reassemble — it does not verify the solution's proof-of-work hit against the difficulty target, and a joined header is a block only if a node accepts it. Joining only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="headerjoin-without">Header without proof-of-work (hex, the first half tool 66 splits off)</label>
@@ -1024,7 +1040,7 @@
         <p id="headerjoin-result" role="status" aria-live="polite"></p>
       </form>
 
-      <form class="tool" id="headerpowcheck-calc">
+      <form class="tool" id="headerpowcheck-calc" data-family="headers">
         <h3>68 · Block header PoW verifier (serialized header → does its Autolykos solution actually meet its declared difficulty?)</h3>
         <p>Every earlier header tool ends at the same boundary — "no proof-of-work hit was verified; that verdict belongs to a full node". This tool computes that verdict locally, exactly as a node does, from the reference Autolykos definition. Paste a serialized header and it recomputes the whole puzzle: the message (Blake2b-256 of the without-PoW bytes tool 66 splits off), the target b = q / difficulty (q the secp256k1 group order, the difficulty decoded from the header's own nBits), and the table size N for the header's height — 2^26 below height 614,400, then grown 5% every 51,200 blocks. On version 2 and up it derives the 32 table indexes, sums the 32 elements and hashes the sum into the solution's hit: valid exactly when hit &lt; target. On version 1 it checks the non-outsourceability equation instead — the carried distance d below the target, both keys real curve points, and w^f == g^d · pk. Nothing is trusted on the way in: the header is inspected by tool 62 and split by tool 66 first, the difficulty is re-derived from nBits, and on version 1 both keys are decompressed and checked against the curve equation, because a 02/03 prefix alone does not make a point. The boundary that remains is stated plainly: a valid verdict proves this header's solution meets its declared difficulty — it does not prove the header sits on the main chain; chain selection still belongs to a full node. Verifying only: it fetches nothing, signs nothing and sends nothing.</p>
         <label for="headerpowcheck-bytes">Serialized block header (hex, as tool 62 takes it)</label>
@@ -1078,6 +1094,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=68"></script>
+<script src="app.js?v=69"></script>
 </body>
 </html>

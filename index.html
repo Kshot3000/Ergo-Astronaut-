@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>69 tools and counting — find the one you need:</p>
+    <p>70 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -1062,6 +1062,15 @@
         <p id="nbits-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="diffcalc-calc" data-family="headers">
+        <h3>70 · Next-epoch difficulty calculator (epoch-boundary blocks → the difficulty the next block must carry)</h3>
+        <p>Ergo difficulty is not set per block: it holds for a whole epoch and is recalculated only for the epoch's first block, from the last blocks of the epochs behind it — and a block whose difficulty differs from what this calculation gives is invalid, however good its proof-of-work is. Paste those boundary blocks, one per line as <strong>height, timestamp (milliseconds), difficulty</strong> — tool 62 reads all three off any serialized header, and explorers list them per block. The calculator works out the rest from the chain's own rules. If the next block is mid-epoch it simply inherits its parent's difficulty, and that is the answer. At an epoch start the target interval is 120 seconds and the lookback is 8 epochs: each past epoch implies a classic adjustment (its difficulty × 120,000 ms × epoch length ÷ its actual duration), a least-squares line through those points extrapolates one epoch ahead, and before EIP-37 that prediction — round-tripped through the nBits of tool 69 — was the new difficulty over 1,024-block epochs. Since EIP-37 (height 844,673, 128-block epochs) the prediction is clamped into [last ÷ 2, last × 3/2], averaged with the classic adjustment of just the last epoch, clamped again, and only then normalized. The one exception is the Autolykos version-2 activation at height 417,792, whose difficulty the mainnet settings fix outright. This computes the difficulty a block must carry — arithmetic over the blocks you paste, not a forecast of hashrate or price. Calculating only: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="diffcalc-input">Epoch-boundary blocks, one per line: height, timestamp (ms), difficulty — the last line is the parent of the block to calculate</label>
+        <textarea id="diffcalc-input" rows="5" spellcheck="false" placeholder="e.g. 1890176, 1791469170990, 68778045997056 — then the following boundary blocks, ending with the parent block" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Calculate the next difficulty</button>
+        <p id="diffcalc-result" role="status" aria-live="polite"></p>
+      </form>
+
     </div>
   </section>
 
@@ -1107,6 +1116,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=70"></script>
+<script src="app.js?v=71"></script>
 </body>
 </html>

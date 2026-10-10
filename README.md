@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 69 tools on one page it beats scrolling.
+headers) — with 70 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1582,6 +1582,30 @@ headers) — with 69 tools on one page it beats scrolling.
   the same code: the three real headers
   round-trip and 2,000 random difficulties
   satisfy the encode fixed point.
+- **Next-epoch difficulty calculator** —
+  the difficulty the next block must
+  carry, calculated from the epoch-boundary
+  blocks behind it (height, timestamp,
+  difficulty per line): mid-epoch blocks
+  inherit their parent's difficulty; at an
+  epoch start a least-squares prediction
+  over the last 8 epochs' classic
+  adjustments sets it (1,024-block epochs
+  before EIP-37; from height 844,673 the
+  128-block EIP-37 form clamps the
+  prediction into [last ÷ 2, last × 3/2],
+  averages it with the last epoch's
+  classic adjustment, clamps again, then
+  normalizes through nBits), and the
+  version-2 activation height carries its
+  fixed settings difficulty. Verified
+  against an independent Python
+  implementation fed with live mainnet
+  data: the recalculated difficulties for
+  blocks 1,891,201, 1,891,073, 844,673
+  (both clamps bind), 843,777 and 842,753
+  reproduce the difficulties those blocks
+  actually carry.
 
 ## Cross-chain integration
 

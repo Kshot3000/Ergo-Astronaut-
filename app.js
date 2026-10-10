@@ -6688,6 +6688,182 @@ function analyzeCompactBits(inputStr, directionStr) {
   };
 }
 
+/* --- Tool 70: next-epoch difficulty calculator ---
+   Ergo difficulty is not per-block: it is fixed for a whole
+   epoch and recalculated only for the first block of the next
+   one, from the last blocks of the epochs behind it. This is an
+   independent implementation of that adjustment arithmetic,
+   following the reference node's published rules
+   (DifficultyAdjustment in ergoplatform/ergo, mainnet chain
+   settings): the target interval is 120,000 ms, the lookback
+   is 8 epochs, the pre-EIP-37 epoch is 1,024 blocks and the
+   EIP-37 epoch (from height 844,673) is 128 blocks.
+   The predictive half fits a least-squares line (integer maths
+   with a 1e9 precision constant, divisions truncating toward
+   zero exactly as BigInt division does) through one point per
+   epoch — that epoch's own classic adjustment, difficulty *
+   interval * epochLength / the epoch's actual duration —
+   extrapolated one epoch ahead. Before EIP-37 that prediction,
+   run through the nBits round trip of tool 69, IS the next
+   difficulty. EIP-37 instead averages the prediction (first
+   clamped into [last/2, last*3/2]) with the classic last-epoch
+   adjustment, clamps the average into the same band, and only
+   then round-trips through nBits. Every other block simply
+   inherits its parent's difficulty, and the version-2
+   activation heights 417,792/417,793 carry a fixed difficulty
+   set in the mainnet settings instead. Verified BEFORE coding
+   against an independent Python implementation of the same
+   rules (oracle-diff.py) fed with live mainnet data from the
+   public explorer: the recalculated difficulties for blocks
+   1,891,201, 1,891,073 (EIP-37), 844,673 (the activation block
+   itself, where both clamps bind), 843,777 and 842,753
+   (legacy) all reproduce the difficulties those blocks
+   actually carry, and mid-epoch blocks inherit exactly. */
+var DIFF_DESIRED_MS = 120000n;
+var DIFF_PRECISION = 1000000000n;
+var DIFF_INITIAL = 1199990374400n;
+var DIFF_INITIAL_V2 = 122702199259136n;
+var DIFF_V2_HEIGHT = 417792;
+var DIFF_EIP37_HEIGHT = 844673;
+
+function diffInterpolate(data, epochLength) {
+  var size = BigInt(data.length);
+  if (data.length === 1) return data[0].diff;
+  var xySum = 0n, xSum = 0n, x2Sum = 0n, ySum = 0n, maxH = 0;
+  data.forEach(function (d) {
+    var x = BigInt(d.height);
+    xySum += x * d.diff; xSum += x; x2Sum += x * x; ySum += d.diff;
+    if (d.height > maxH) maxH = d.height;
+  });
+  var b = (xySum * size - xSum * ySum) * DIFF_PRECISION / (x2Sum * size - xSum * xSum);
+  var a = (ySum * DIFF_PRECISION - b * xSum) / size / DIFF_PRECISION;
+  return a + b * BigInt(maxH + epochLength) / DIFF_PRECISION;
+}
+
+/* The predictive adjustment shared by both eras. headers are
+   the ascending epoch-boundary blocks; returns the nBits-
+   normalized prediction plus the un-normalized value and the
+   per-epoch classic adjustments it was fitted from. */
+function diffPredictive(headers, epochLength) {
+  var perEpoch = [];
+  var uncompressed;
+  var fallback = null;
+  if (headers.length === 1 || headers[0].timestampMs >= headers[headers.length - 1].timestampMs) {
+    uncompressed = headers[0].difficulty;
+    fallback = headers.length === 1 ? "single" : "flat-timestamps";
+  } else {
+    var data = [];
+    for (var i = 0; i + 1 < headers.length; i++) {
+      var end = headers[i + 1];
+      var d = end.difficulty * DIFF_DESIRED_MS * BigInt(epochLength) / (end.timestampMs - headers[i].timestampMs);
+      data.push({ height: end.height, diff: d });
+      perEpoch.push(d.toString());
+    }
+    var interp = diffInterpolate(data, epochLength);
+    uncompressed = interp >= 1n ? interp : DIFF_INITIAL;
+  }
+  return {
+    difficulty: decodeCompactBits(encodeCompactBits(uncompressed)),
+    uncompressed: uncompressed.toString(),
+    perEpoch: perEpoch,
+    fallback: fallback
+  };
+}
+
+function analyzeNextDifficulty(inputStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, mode: null, targetHeight: null, epochLength: null, boundaryHeights: null, parentDifficulty: null, predictive: null, predictiveUncompressed: null, perEpoch: null, fallback: null, limitedPredictive: null, classic: null, average: null, uncompressed: null, clampedPredictive: null, clampedFinal: null, difficulty: null, nBits: null, nBitsHex: null, target: null, targetHex: null, nextEpochStart: null };
+  };
+  if (typeof inputStr !== "string") return fail("Paste the epoch-boundary blocks first — one per line as height, timestamp (milliseconds), difficulty.");
+  var lines = inputStr.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  if (lines.length === 0) return fail("Paste the epoch-boundary blocks first — one per line as height, timestamp (milliseconds), difficulty.");
+  var headers = [];
+  for (var li = 0; li < lines.length; li++) {
+    var parts = lines[li].split(/[\s,;]+/).filter(function (s) { return s !== ""; });
+    if (parts.length !== 3 || !/^[0-9]{1,10}$/.test(parts[0]) || !/^[0-9]{1,19}$/.test(parts[1]) || !/^[0-9]{1,78}$/.test(parts[2])) {
+      return fail("Line " + (li + 1) + " is not three whole numbers — each line must be exactly: height, timestamp in milliseconds, difficulty (plain decimal, no commas inside the numbers).");
+    }
+    var height = Number(parts[0]);
+    var ts = BigInt(parts[1]);
+    var diff = BigInt(parts[2]);
+    if (height > 4294967295) return fail("Line " + (li + 1) + ": that height is past the 32-bit height a header can carry.");
+    if (ts >= (1n << 63n)) return fail("Line " + (li + 1) + ": that timestamp is past the signed 64-bit range a header timestamp lives in.");
+    if (diff <= 0n || diff >= (1n << 256n)) return fail("Line " + (li + 1) + ": a difficulty is a whole number above zero and below 2^256.");
+    headers.push({ height: height, timestampMs: ts, difficulty: diff });
+  }
+  headers.sort(function (x, y) { return x.height - y.height; });
+  for (var di = 1; di < headers.length; di++) {
+    if (headers[di].height === headers[di - 1].height) return fail("Height " + headers[di].height + " appears twice — each epoch-boundary block belongs in the list once.");
+  }
+  var parent = headers[headers.length - 1];
+  var targetHeight = parent.height + 1;
+  var finish = function (mode, epochLength, difficulty, extra) {
+    var nBits = encodeCompactBits(difficulty);
+    var target = SECP_N / difficulty;
+    var out = { valid: true, reason: null, mode: mode, targetHeight: String(targetHeight), epochLength: epochLength === null ? null : String(epochLength), boundaryHeights: headers.map(function (h) { return String(h.height); }).join(","), parentDifficulty: parent.difficulty.toString(), predictive: null, predictiveUncompressed: null, perEpoch: null, fallback: null, limitedPredictive: null, classic: null, average: null, uncompressed: null, clampedPredictive: null, clampedFinal: null, difficulty: difficulty.toString(), nBits: String(nBits), nBitsHex: "0x" + nBits.toString(16).padStart(8, "0"), target: target.toString(), targetHex: target.toString(16).padStart(64, "0"), nextEpochStart: null };
+    if (extra) { for (var k in extra) out[k] = extra[k]; }
+    if (epochLength !== null && mode === "inherit") {
+      out.nextEpochStart = String((Math.floor(parent.height / epochLength) + 1) * epochLength + 1);
+    }
+    return out;
+  };
+  /* The version-2 activation carries a fixed difficulty from
+     the mainnet settings, ahead of any epoch maths (and ahead
+     of the EIP-37 branch in era terms — it sits far below it). */
+  if (targetHeight < DIFF_EIP37_HEIGHT && (parent.height === DIFF_V2_HEIGHT || targetHeight === DIFF_V2_HEIGHT)) {
+    return finish("v2-activation", null, DIFF_INITIAL_V2, null);
+  }
+  var eip37 = targetHeight >= DIFF_EIP37_HEIGHT;
+  var epochLength = eip37 ? 128 : 1024;
+  if (parent.height % epochLength !== 0) {
+    return finish("inherit", epochLength, parent.difficulty, null);
+  }
+  var required = [];
+  for (var i = 8; i >= 0; i--) {
+    var bh = parent.height - i * epochLength;
+    if (bh >= 0) required.push(bh);
+  }
+  var have = headers.map(function (h) { return h.height; });
+  var missing = required.filter(function (h) { return have.indexOf(h) === -1; });
+  var extraH = have.filter(function (h) { return required.indexOf(h) === -1; });
+  if (missing.length > 0 || extraH.length > 0) {
+    var why = "Block " + targetHeight + " opens a new " + epochLength + "-block epoch, so its difficulty is calculated from the epoch-boundary blocks at heights " + required.join(", ") + " — ";
+    if (missing.length > 0) why += "the block at height " + missing[0] + " is missing from the list";
+    else why += "height " + extraH[0] + " is not one of those boundary blocks";
+    why += ". Tool 62 shows the height, timestamp and difficulty of any serialized header, and explorers list all three per block. Nothing was calculated.";
+    return fail(why);
+  }
+  var pred = diffPredictive(headers, epochLength);
+  if (!eip37) {
+    return finish("legacy", epochLength, pred.difficulty, {
+      predictive: pred.difficulty.toString(),
+      predictiveUncompressed: pred.uncompressed,
+      perEpoch: pred.perEpoch,
+      fallback: pred.fallback
+    });
+  }
+  if (headers.length < 2) return fail("The EIP-37 calculation needs at least two epoch-boundary blocks.");
+  var lastDiff = parent.difficulty;
+  var half = lastDiff / 2n;
+  var threeHalf = lastDiff * 3n / 2n;
+  var limited = pred.difficulty > lastDiff ? (pred.difficulty < threeHalf ? pred.difficulty : threeHalf) : (pred.difficulty > half ? pred.difficulty : half);
+  var classic = lastDiff * DIFF_DESIRED_MS * BigInt(epochLength) / (parent.timestampMs - headers[headers.length - 2].timestampMs);
+  var avg = (classic + limited) / 2n;
+  var unc = avg > lastDiff ? (avg < threeHalf ? avg : threeHalf) : (avg > half ? avg : half);
+  return finish("eip37", epochLength, decodeCompactBits(encodeCompactBits(unc)), {
+    predictive: pred.difficulty.toString(),
+    predictiveUncompressed: pred.uncompressed,
+    perEpoch: pred.perEpoch,
+    fallback: pred.fallback,
+    limitedPredictive: limited.toString(),
+    classic: classic.toString(),
+    average: avg.toString(),
+    uncompressed: unc.toString(),
+    clampedPredictive: limited !== pred.difficulty,
+    clampedFinal: unc !== avg
+  });
+}
+
 function inspectBlockHeader(headerHex, expectedStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, headerId: null, idMatches: null, expectedId: null, version: null, autolykosVersion: null, parentId: null, adProofsRoot: null, transactionsRoot: null, stateRoot: null, extensionRoot: null, timestampMs: null, timestampIso: null, nBits: null, nBitsHex: null, difficulty: null, height: null, votesHex: null, votes: null, unparsedHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null, byteLength: null, withoutPowLength: null, solutionLength: null };
@@ -7572,7 +7748,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -8122,6 +8298,37 @@ if (typeof document !== "undefined") {
         emsg += "Computed locally; nothing was fetched, signed or sent.";
         out.textContent = emsg;
       }
+    });
+
+    document.getElementById("diffcalc-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("diffcalc-result");
+      var res = analyzeNextDifficulty(document.getElementById("diffcalc-input").value);
+      if (!res || !res.valid) {
+        out.textContent = res && res.reason ? res.reason : "I could not calculate that. Nothing was calculated.";
+        return;
+      }
+      var msg;
+      if (res.mode === "inherit") {
+        msg = "✓ Block " + res.targetHeight + " is not the first block of an epoch, so it must carry its parent block's difficulty exactly: " + res.difficulty + " (nBits " + res.nBits + ", " + res.nBitsHex + "). Difficulty only changes at an epoch start — under the current " + res.epochLength + "-block epochs the next change can land at block " + res.nextEpochStart + ". ";
+      } else if (res.mode === "v2-activation") {
+        msg = "✓ Block " + res.targetHeight + " is the Autolykos version-2 activation point: its difficulty is not calculated from earlier blocks at all — the mainnet settings fix it at " + res.difficulty + " (nBits " + res.nBits + ", " + res.nBitsHex + "), the roughly 1 TH/s starting point for the new proof-of-work. ";
+      } else if (res.mode === "legacy") {
+        msg = "✓ Block " + res.targetHeight + " opens a new 1,024-block epoch, so its difficulty is the predictive adjustment over the epoch-boundary blocks behind it (" + res.boundaryHeights + "). ";
+        if (res.fallback) {
+          msg += "With " + (res.fallback === "single" ? "a single boundary block" : "boundary timestamps that do not increase") + " the prediction falls back to the earliest block's difficulty, " + res.predictiveUncompressed + ", which the nBits round trip spells as " + res.predictive + ". ";
+        } else {
+          msg += "Each past epoch's classic adjustment (difficulty × 120,000 ms × 1,024 ÷ its actual duration) feeds a least-squares line extrapolated one epoch ahead: the prediction is " + res.predictiveUncompressed + ", which the nBits round trip of tool 69 normalizes to " + res.predictive + ". ";
+        }
+        msg += "So block " + res.targetHeight + " must carry difficulty " + res.difficulty + " (nBits " + res.nBits + ", " + res.nBitsHex + "). ";
+      } else {
+        msg = "✓ Block " + res.targetHeight + " opens a new 128-block EIP-37 epoch, so its difficulty averages two views over the epoch-boundary blocks behind it (" + res.boundaryHeights + "). The predictive view — a least-squares line through each epoch's classic adjustment, extrapolated one epoch ahead — gives " + res.predictive + (res.clampedPredictive ? ", clamped into the allowed band [last ÷ 2, last × 3/2] as " + res.limitedPredictive : " (inside the allowed band, so no clamp)") + ". The classic view over just the last epoch gives " + res.classic + ". Their average is " + res.average + (res.clampedFinal ? ", clamped into the band as " + res.uncompressed : " (inside the band, so no clamp)") + ", and the nBits round trip of tool 69 normalizes that to the final difficulty " + res.difficulty + " (nBits " + res.nBits + ", " + res.nBitsHex + "). ";
+      }
+      if (res.mode !== "v2-activation") {
+        msg += "At that difficulty a miner's Autolykos hit must fall below b = q / difficulty = " + res.target + ". ";
+      }
+      msg += "This is the difficulty a block must carry to be valid — arithmetic over the blocks you pasted, not a hashrate forecast. Calculated locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
     });
 
     /* --- Serialized box parser --- */

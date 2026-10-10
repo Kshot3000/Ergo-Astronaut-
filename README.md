@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 89 tools on one page it beats scrolling.
+headers) — with 90 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1924,6 +1924,36 @@ headers) — with 89 tools on one page it beats scrolling.
   sides, a disjoint pair, a single-header
   subset difference, a forked differing
   pair, and a linked differing pair.
+- **Block header set difference** — the asymmetric
+  remainder: the headers the first of two sets of
+  serialized headers (one header per line in each)
+  holds that the second does not — what is left of
+  a set after another set is taken away, which the
+  symmetric difference cannot hand back on its own
+  because it returns both sides combined. The
+  remainder headers are keyed by header ID and
+  sorted by height then ID, and their bytes —
+  always the first set's bytes, the remainder's
+  owning side — come back in that order ready to
+  paste into tools 65, 72, 73 or 76. The remainder
+  difficulty total is the exact sum over the
+  remainder headers only, taken from tool 73 itself
+  run over the remainder bytes, so the two tools
+  can never disagree — and the chain judgement
+  comes with it: conflict heights (a fork inside
+  what is left), missing heights in the remainder
+  span counted with the first ten named, broken
+  parent links reported. A second set that covers
+  the first is reported plainly as emptying it,
+  with zero totals — an answer, not an error; a
+  disjoint second set removes nothing. Duplicates
+  inside one side are refused. Verified against
+  an independent Python oracle over a chained
+  pair remaining as a linked chain, a first set
+  wholly covered by the second, identical sides,
+  a disjoint pair that removes nothing, a forked
+  remainder pair, a gapped remainder, and the
+  swapped pair returning the other side's header.
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>89 tools and counting — find the one you need:</p>
+    <p>90 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -1224,6 +1224,17 @@
         <p id="headerxor-result" role="status" aria-live="polite"></p>
       </form>
 
+      <form class="tool" id="headerminus-calc" data-family="headers">
+        <h3>90 · Block header set difference (first set of headers minus the second → what remains)</h3>
+        <p>Tools 77, 84 and 87 union, intersect and symmetric-difference two sets of headers; this is the asymmetric operation none of them hands back — what is left of one set after another set is taken away: a sync batch minus the headers another node already reported, a header collection minus the part a second source already accounted for. Tool 87 splits its difference into only-in-the-first and only-in-the-second but hands the two sides back combined, so the first side's remainder cannot be pasted onward alone; here the remainder comes back by itself. Paste both sets, one complete header per line in each, and the remainder headers come back: sorted by height then ID, with the first set's bytes handed back in that order, ready to paste into tools 65, 72, 73 or 76. Sorting by height then ID makes the remainder order a property of the set, never of paste order. Direction matters: the first set minus the second is a different question from the reverse, and every report says so. The remainder total difficulty is the exact sum over the remainder headers only, and it is tool 73's own total for the remainder bytes — the remainder set is re-summarized by tool 73 itself before anything is shown, so the two tools can never disagree. The remainder set keeps the chain judgement too: a height the remainder set carries under more than one ID is a <strong>fork inside what is left</strong> — what remains after the subtraction can still disagree with itself about a height — heights missing inside the remainder span are counted (the first ten named), and height-adjacent remainder pairs are checked for parent linkage. A second set that covers the first is reported plainly as emptying it, with zero totals — an answer, not an error. Each side is a set in its own right, so a single header is a valid side; a header pasted twice inside one side is refused, not counted twice, and every header's difficulty is re-decoded from its own nBits before anything is shown. Subtraction only, over the bytes you pasted: it fetches nothing, proves neither set sits on the main chain, and a remainder between two pasted sets proves neither is the chain's real state. Subtracted locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="headerminus-a">First set of serialized block headers (one per line)</label>
+        <textarea id="headerminus-a" rows="4" spellcheck="false" placeholder="e.g. the headers from one source, one complete header per line" autocomplete="off"></textarea>
+        <label for="headerminus-b">Second set of serialized block headers — the headers to take away (one per line)</label>
+        <textarea id="headerminus-b" rows="4" spellcheck="false" placeholder="e.g. the headers from another source, one complete header per line" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Subtract the second set</button>
+        <p id="headerminus-result" role="status" aria-live="polite"></p>
+      </form>
+
       <form class="tool" id="txset-calc" data-family="transactions">
         <h3>78 · Transaction set summarizer (serialized transactions, one per line → what this set of transactions does)</h3>
         <p>Tools 29–61 each work on <strong>one</strong> transaction, tool 33 summarizes a set of boxes and tool 73 a set of headers — this is the transaction family's set view. Paste serialized transactions, one per line — a batch of pending sends, the transactions of one block copied from an explorer, two sources' views of the same mempool — and it aggregates the whole set: the input, data-input and output counts; the exact total output value in BigInt over every output of every transaction (outputs only — a fee needs the input boxes' values, which the serialized bytes do not carry; tool 34 computes it when the boxes are supplied); the size account (total, smallest, largest and floored mean); how many transactions carry a proof on at least one input; the token account (entries across all outputs, distinct token IDs, and the exact per-token totals summed over the whole set); and the mints (a token whose ID is its transaction's first input box ID — the protocol's mint rule). The verdict no single-transaction tool can give is the <strong>shared input</strong>: a box spent by more than one transaction in the set can only ever be spent once, so at most one of those transactions can confirm — flagged with the transactions that spend it, never smoothed over. Data inputs are only read, not spent, so shared data inputs are counted distinct, not flagged. A transaction pasted twice — including its signed and unsigned forms, which share one ID — would double-count every aggregate, so duplicate IDs are refused rather than summarized. Every transaction is parsed by tool 29 first, and each one's output value and token totals are re-aggregated from its own outputs before it counts. The summary covers only the transactions you paste — it does not say any of them is confirmed, still valid against the current UTXO set, or broadcastable. Summarized locally: it fetches nothing, signs nothing and sends nothing.</p>
@@ -1333,6 +1344,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=90"></script>
+<script src="app.js?v=91"></script>
 </body>
 </html>

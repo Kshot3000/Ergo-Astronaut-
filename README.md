@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 103 tools on one page it beats scrolling.
+headers) — with 104 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -503,6 +503,24 @@ headers) — with 103 tools on one page it beats scrolling.
   affine curve arithmetic) over the generator multiples
   and mixed operations. Combining public keys proves no
   ownership of any of them.
+- **Public key list aggregator** — a whole list of compressed
+  public keys, one per line, summed into the single group
+  element they add up to: the batch form of the group element
+  calculator, and the raw operation behind key aggregation.
+  Every line is validated by the public key inspector first
+  and the list is strict — an invalid line refuses the whole
+  aggregation with the line named, since a skipped key would
+  change the sum silently. Repeated keys are counted, not
+  refused: a key written twice is a term written twice and
+  contributes twice. The sum is computed in input order and
+  in reverse order, which must agree, and a list whose terms
+  cancel exactly is reported as the point at infinity it is.
+  Stated plainly on the page: a plain sum is not a secure
+  multisig scheme by itself (the rogue-key attack), and this
+  tool claims nothing more than the raw sum. Verified against
+  an independent Python oracle (pure affine curve arithmetic)
+  over generator-multiple, duplicate, cancellation and
+  large-multiple lists.
 - **Box set summarizer** — a whole set of boxes at once, one
   full serialized box per line: exact BigInt totals for ERG
   and for each token (aggregated by token ID across every box

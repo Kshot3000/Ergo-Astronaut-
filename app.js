@@ -4177,6 +4177,80 @@ function calculateGroupElement(keyAHex, keyBHex, operationStr, scalarStr) {
   return { valid: true, reason: null, operation: op, a: ia.publicKey, b: ib ? ib.publicKey : null, scalar: scalar, scalarReduced: scalarReduced, infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet };
 }
 
+/* ---------- Public key list aggregator (many keys -> their sum) ---------- */
+/* Tool 103 combines two points; an aggregate key is built from a
+   whole list. This sums a pasted list of compressed keys — one per
+   line, up to 100 — into the single group element the list adds up
+   to, the raw operation behind key aggregation. Every line is
+   validated by tool 32 itself before any arithmetic, and the set
+   is strict: a line tool 32 refuses stops the whole aggregation
+   naming the line, because a silently skipped key would change the
+   sum with no sign it had happened. Duplicates are the opposite of
+   the box set's rule, deliberately: a box listed twice would
+   double-count one on-chain object, but a key listed twice is a
+   term written twice — it contributes twice, exactly as 2 * A in
+   tool 103 — so duplicates are allowed, counted, and named with
+   their line numbers rather than refused or silently collapsed.
+   The sum is computed twice, once in input order and once in
+   reverse order (group addition is associative and commutative,
+   so the two traversals must land on the same point), and the
+   result is re-inspected by tool 32 before it is shown. A list
+   whose terms cancel exactly — G and -G among them — sums to the
+   point at infinity, the group's identity element: a genuine
+   answer with no compressed encoding and no address, reported as
+   itself. The honest boundary is stated on the page: a plain sum
+   is NOT a secure multisig scheme by itself — a counterparty who
+   picks their key after seeing yours can choose it as (their own
+   target point minus your key), leaving an aggregate they control
+   alone (the rogue-key attack); real aggregation schemes add
+   proofs of possession or per-key coefficients, which this tool
+   does not pretend to provide. It computes the raw sum, for
+   checking script constants and aggregate points, and claims
+   nothing more. Public keys only: nothing here asks for, or could
+   use, a private key. Verified against an independent Python
+   oracle (oracle-groupsum.py, pure affine curve arithmetic with
+   built-in modular inverses — a different implementation strategy
+   from this Jacobian code) over generator-multiple lists, a
+   duplicate list, cancellation lists, a single real key, and a
+   pair of large multiples, before coding. */
+function aggregatePublicKeys(keysText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, count: null, distinctCount: null, duplicates: null, keys: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
+  };
+  var lines = (keysText == null ? "" : String(keysText)).split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  if (lines.length === 0) return fail("Paste at least one compressed public key as hex, one key per line — the 33-byte keys (starting 02 or 03) that tools 8, 19 and 32 work with, from an address, a script or an explorer. This sums the keys you paste; it fetches nothing and proves no ownership of any of them.");
+  if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool aggregates at most 100 keys at a time, so a pasted list stays reviewable line by line.");
+  var keys = [];
+  var points = [];
+  var seen = {};
+  var order = [];
+  for (var i = 0; i < lines.length; i++) {
+    var ik = inspectPublicKey(lines[i]);
+    if (!ik.valid) return fail("Line " + (i + 1) + " is not a public key tool 32 would accept — " + ik.reason + " The whole list is refused rather than summed without it — a skipped key would change the aggregate with no sign it had happened.");
+    keys.push(ik.publicKey);
+    points.push([BigInt("0x" + ik.x), BigInt("0x" + ik.y), 1n]);
+    if (!Object.prototype.hasOwnProperty.call(seen, ik.publicKey)) { seen[ik.publicKey] = []; order.push(ik.publicKey); }
+    seen[ik.publicKey].push(i + 1);
+  }
+  var duplicates = [];
+  for (var d = 0; d < order.length; d++) {
+    if (seen[order[d]].length > 1) duplicates.push({ publicKey: order[d], count: seen[order[d]].length, lines: seen[order[d]] });
+  }
+  var fwd = null;
+  for (var f = 0; f < points.length; f++) fwd = secpAdd(fwd, points[f]);
+  var rev = null;
+  for (var r = points.length - 1; r >= 0; r--) rev = secpAdd(rev, points[r]);
+  var fwdC = secpCompressJacobian(fwd);
+  var revC = secpCompressJacobian(rev);
+  if (fwdC !== revC) return fail("Internal check failed: summing this list in input order and in reverse order disagree — refusing to show an aggregate.");
+  if (fwd === null) {
+    return { valid: true, reason: null, count: keys.length, distinctCount: order.length, duplicates: duplicates, keys: keys, infinity: true, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
+  }
+  var ir = inspectPublicKey(fwdC);
+  if (!ir.valid) return fail("Internal check failed: the aggregate point does not pass tool 32's inspection — refusing to show it.");
+  return { valid: true, reason: null, count: keys.length, distinctCount: order.length, duplicates: duplicates, keys: keys, infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet };
+}
+
 /* ---------- Box set summarizer (many boxes -> one set of totals) ---------- */
 /* Tool 15 reads one box; a wallet holds many. This reads a whole
    pasted set — one full serialized box per line — and answers for
@@ -11293,7 +11367,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -12780,6 +12854,27 @@ if (typeof document !== "undefined") {
       if (res.operation === "Multiply (k * A)" && res.scalar !== res.scalarReduced) msg += "The scalar was reduced modulo the group order n before use — " + res.scalar + " and " + res.scalarReduced + " move every point identically. ";
       msg += "As a Sigma constant it is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
       msg += "Arithmetic only: combining public keys proves no ownership of any of them, and a combined point may have no known private key at all — that is what makes A + B a key neither side controls alone. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Public key list aggregator --- */
+    document.getElementById("groupsum-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("groupsum-result");
+      var res = aggregatePublicKeys(document.getElementById("groupsum-keys").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var counts = res.count + (res.count === 1 ? " key" : " keys") + " (" + res.distinctCount + " distinct)";
+      var dupNote = res.duplicates.length ? " Repeated keys, each counted as many times as it is written: " + res.duplicates.map(function (d) { return d.publicKey + " × " + d.count + " (lines " + d.lines.join(", ") + ")"; }).join("; ") + "." : "";
+      if (res.infinity) {
+        out.textContent = "✓ The " + counts + " sum to the point at infinity — the secp256k1 group's identity element: the terms cancel exactly. That is a genuine result, not an error, but it has no compressed form, no Sigma group-element constant and no P2PK address — Ergo's 33-byte group-element encoding cannot write it, so no box can be guarded by it as a key." + dupNote + " Summed in input order and in reverse order with the same result, and verified locally. Nothing was fetched, signed or sent.";
+        return;
+      }
+      var msg = "✓ The " + counts + " aggregate to " + res.compressed + " — the point x " + res.x + ", y " + res.y + " (" + res.yParity + "), summed locally in input order and in reverse order with the same result, and re-inspected by tool 32 (curve equation, parity, re-compression) before being shown." + dupNote + " ";
+      msg += "As a Sigma constant it is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
+      msg += "Arithmetic only, with one hard warning: a plain sum is NOT a secure multisig scheme by itself — a counterparty who picks their key after seeing yours can choose it so the aggregate is a point they control alone (the rogue-key attack); real aggregation schemes add proofs of possession or per-key coefficients, which this tool does not provide. Aggregating public keys also proves no ownership of any of them, and the aggregate's private key, if anyone holds it, is the sum of the private keys — a fact about the maths, not something this tool can check. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

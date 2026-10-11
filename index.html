@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>103 tools and counting — find the one you need:</p>
+    <p>104 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -799,6 +799,15 @@
         <input id="groupcalc-k" spellcheck="false" placeholder="e.g. 12345 — a public exponent, never a private key" autocomplete="off">
         <button type="submit" class="btn primary">Combine the points</button>
         <p id="groupcalc-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="groupsum-calc" data-family="addresses">
+        <h3>104 · Public key list aggregator (many public keys → the one point they add up to)</h3>
+        <p>Tool 103 combines two points; an aggregate key is built from a whole list. Paste compressed public keys, one per line, and this tool sums them into the single group element the list adds up to — the raw operation behind key aggregation, where the aggregate's private key would be the sum of all the private keys. Every line is validated by tool 32 itself first, and the list is <strong>strict</strong>: a line that is not a real point on the curve stops the whole aggregation with the line named, because a silently skipped key would change the sum with no sign it had happened. Repeated keys are the deliberate opposite of the box tools' rule: a box listed twice would double-count one on-chain object, but a key written twice is a term written twice — it contributes twice, exactly as 2 · A in tool 103 — so duplicates are allowed, counted, and named with their line numbers. The sum is computed in input order and in reverse order (group addition is associative and commutative, so both must land on the same point) and the result is re-inspected by tool 32 before it is shown. A list whose terms cancel exactly — G and −G among them — sums to the <strong>point at infinity</strong>, the group's identity element: a genuine answer, reported as itself, with no compressed form, constant or address claimed for it. One hard warning, stated plainly: a plain sum is <strong>not</strong> a secure multisig scheme by itself — a counterparty who picks their key after seeing yours can choose it as their own target point minus your key, leaving an aggregate they control alone (the rogue-key attack); real aggregation schemes add proofs of possession or per-key coefficients, which this tool does not pretend to provide. It computes the raw sum, for checking script constants and aggregate points — nothing more. Aggregating public keys proves no ownership of any of them. Public keys only: never type a private key or seed into any website, this one included. Computed locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="groupsum-keys">Compressed public keys (hex — one 66-character key per line, up to 100)</label>
+        <textarea id="groupsum-keys" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Aggregate the keys</button>
+        <p id="groupsum-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxset-calc" data-family="boxes">
@@ -1531,6 +1540,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=104"></script>
+<script src="app.js?v=105"></script>
 </body>
 </html>

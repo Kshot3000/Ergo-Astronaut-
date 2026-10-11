@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 104 tools on one page it beats scrolling.
+headers) — with 105 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -521,6 +521,30 @@ headers) — with 104 tools on one page it beats scrolling.
   an independent Python oracle (pure affine curve arithmetic)
   over generator-multiple, duplicate, cancellation and
   large-multiple lists.
+- **Weighted public key aggregator** — the weighted form of
+  the list aggregator: one term per line, a whole-number
+  coefficient and a compressed public key, summed as
+  Σ kᵢ·Pᵢ — the shape of Pedersen commitments and
+  coefficient-weighted key aggregation. Coefficients may be
+  negative (subtraction is a negative term), each is reduced
+  modulo the group order with typed and reduced values
+  reported per term, and a coefficient reducing to 0 is
+  counted as a zero term contributing the identity, never
+  silently dropped. Every key is validated by the public
+  key inspector and the list is strict — a malformed line
+  refuses the whole sum with the line named. Each
+  contribution is recomputed in the opposite bit order and
+  the total summed forward and in reverse; cancelling terms
+  are reported as the point at infinity. Stated plainly on
+  the page: the coefficients are plain numbers the user
+  supplies — no MuSig-style hash coefficients are derived
+  and no proofs of possession are provided, so this is
+  arithmetic for checking script constants and commitments,
+  not a multisig scheme. Verified against an independent
+  Python oracle (pure affine curve arithmetic) over
+  mixed-sign, large-coefficient, cancellation,
+  zero-coefficient, order-sized, repeated-key and real-key
+  lists.
 - **Box set summarizer** — a whole set of boxes at once, one
   full serialized box per line: exact BigInt totals for ERG
   and for each token (aggregated by token ID across every box

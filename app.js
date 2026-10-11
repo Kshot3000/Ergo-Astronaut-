@@ -4251,6 +4251,102 @@ function aggregatePublicKeys(keysText) {
   return { valid: true, reason: null, count: keys.length, distinctCount: order.length, duplicates: duplicates, keys: keys, infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet };
 }
 
+/* ---------- Weighted public key aggregator (coefficient + key per line -> their weighted sum) ---------- */
+/* Tool 104 sums a list of keys with every coefficient equal to 1;
+   the constructions that actually use group arithmetic weight each
+   key first -- a Pedersen commitment is value * G + blinding * H,
+   coefficient-weighted aggregation multiplies each key by its own
+   coefficient before summing, and a script checking a weighted
+   combination of ProveDlog statements adds k_i * P_i, never bare
+   P_i. This computes that weighted sum: one term per line, written
+   "<coefficient> <compressed key>", coefficients whole numbers in
+   decimal (negatives allowed, so subtraction is a negative term).
+   Each coefficient is reduced modulo the group order n before use
+   -- k and k mod n move every point identically -- and both the
+   typed and reduced values are reported per term. A coefficient
+   that reduces to 0 contributes the identity: the term is counted
+   and named as a zero term, never silently dropped, and its key is
+   still validated first. Every key is validated by tool 32 itself
+   and the list is strict: a line that is not exactly a coefficient
+   and a real point stops the whole sum naming the line, because a
+   silently skipped or misread term would change the total with no
+   sign it had happened. The same key may appear on several lines
+   with different coefficients -- separate terms, counted and named
+   as a repeated key. Each contribution is computed LSB-first and
+   recomputed MSB-first (the two bit orders must agree, as in tool
+   103's multiply), and the total is summed forward and in reverse
+   before the result is re-inspected by tool 32. A weighted sum
+   whose terms cancel lands on the point at infinity, reported as
+   itself with no key material claimed. The honest boundary is
+   stated on the page: the coefficients here are plain numbers the
+   user supplies -- this tool derives no MuSig-style hash
+   coefficients and provides no proofs of possession, so its total
+   is arithmetic for checking script constants and commitments,
+   not a multisig scheme. Coefficients are ordinary public
+   exponents of the kind scripts carry; a private key or seed is
+   never entered anywhere. Verified against an independent Python
+   oracle (oracle-groupweight.py, pure affine curve arithmetic with
+   built-in modular inverses -- a different implementation strategy
+   from this Jacobian code) over mixed-sign generator terms, a
+   large-coefficient pair, cancellation lists, a zero-coefficient
+   list, an order-sized coefficient, a repeated key and a real key
+   at coefficient 7, before coding. */
+function aggregateWeightedPublicKeys(termsText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, count: null, distinctCount: null, duplicates: null, terms: null, zeroCount: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
+  };
+  var lines = (termsText == null ? "" : String(termsText)).split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  if (lines.length === 0) return fail("Paste at least one weighted term, one per line, written as a whole-number coefficient, a space, then a compressed public key in hex — for example \"2 0279be…f81798\". This computes the weighted sum of the terms you paste; it fetches nothing and proves no ownership of any key.");
+  if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool sums at most 100 weighted terms at a time, so a pasted list stays reviewable line by line.");
+  var terms = [];
+  var contributions = [];
+  var seen = {};
+  var order = [];
+  var zeroCount = 0;
+  for (var i = 0; i < lines.length; i++) {
+    var tokens = lines[i].split(/[\s,]+/).filter(function (t) { return t !== ""; });
+    if (tokens.length !== 2) return fail("Line " + (i + 1) + " is not a weighted term — write exactly a whole-number coefficient, a space, then a compressed public key in hex (\"" + lines[i] + "\" has " + tokens.length + (tokens.length === 1 ? " part" : " parts") + "). The whole list is refused rather than summed without it — a misread term would change the total with no sign it had happened.");
+    var ks = tokens[0];
+    if (!/^-?[0-9]+$/.test(ks)) return fail("Line " + (i + 1) + ": the coefficient \"" + ks + "\" is not a whole number written in decimal (digits, with an optional leading minus). Coefficients are ordinary public exponents of the kind a script carries; a private key or seed is never entered anywhere, including here. The whole list is refused rather than summed without this term.");
+    if (ks.replace("-", "").length > 1000) return fail("Line " + (i + 1) + ": the coefficient is capped at 1000 digits — more than enough for any exponent a script carries (the group order itself has 78). The whole list is refused.");
+    var k = BigInt(ks);
+    var red = k % SECP_N;
+    if (red < 0n) red += SECP_N;
+    var ik = inspectPublicKey(tokens[1]);
+    if (!ik.valid) return fail("Line " + (i + 1) + " does not carry a public key tool 32 would accept — " + ik.reason + " The whole list is refused rather than summed without it — a skipped term would change the total with no sign it had happened.");
+    var pt = [BigInt("0x" + ik.x), BigInt("0x" + ik.y), 1n];
+    var contrib = null;
+    var contribC = null;
+    if (red === 0n) {
+      zeroCount++;
+    } else {
+      contrib = secpScalarMulPoint(pt, red);
+      contribC = secpCompressJacobian(contrib);
+      var msbC = secpCompressJacobian(secpScalarMulPointMsb(pt, red));
+      if (msbC !== contribC) return fail("Internal check failed: line " + (i + 1) + "'s contribution recomputed in the opposite bit order disagrees — refusing to show the sum.");
+    }
+    terms.push({ line: i + 1, scalar: k.toString(), scalarReduced: red.toString(), publicKey: ik.publicKey, contribution: contribC, zero: red === 0n });
+    contributions.push(contrib);
+    if (!Object.prototype.hasOwnProperty.call(seen, ik.publicKey)) { seen[ik.publicKey] = []; order.push(ik.publicKey); }
+    seen[ik.publicKey].push(i + 1);
+  }
+  var duplicates = [];
+  for (var d = 0; d < order.length; d++) {
+    if (seen[order[d]].length > 1) duplicates.push({ publicKey: order[d], count: seen[order[d]].length, lines: seen[order[d]] });
+  }
+  var fwd = null;
+  for (var f = 0; f < contributions.length; f++) fwd = secpAdd(fwd, contributions[f]);
+  var rev = null;
+  for (var r = contributions.length - 1; r >= 0; r--) rev = secpAdd(rev, contributions[r]);
+  if (secpCompressJacobian(fwd) !== secpCompressJacobian(rev)) return fail("Internal check failed: summing this list in input order and in reverse order disagree — refusing to show a total.");
+  if (fwd === null) {
+    return { valid: true, reason: null, count: terms.length, distinctCount: order.length, duplicates: duplicates, terms: terms, zeroCount: zeroCount, infinity: true, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
+  }
+  var ir = inspectPublicKey(secpCompressJacobian(fwd));
+  if (!ir.valid) return fail("Internal check failed: the weighted total does not pass tool 32's inspection — refusing to show it.");
+  return { valid: true, reason: null, count: terms.length, distinctCount: order.length, duplicates: duplicates, terms: terms, zeroCount: zeroCount, infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet };
+}
+
 /* ---------- Box set summarizer (many boxes -> one set of totals) ---------- */
 /* Tool 15 reads one box; a wallet holds many. This reads a whole
    pasted set — one full serialized box per line — and answers for
@@ -11367,7 +11463,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -12875,6 +12971,29 @@ if (typeof document !== "undefined") {
       var msg = "✓ The " + counts + " aggregate to " + res.compressed + " — the point x " + res.x + ", y " + res.y + " (" + res.yParity + "), summed locally in input order and in reverse order with the same result, and re-inspected by tool 32 (curve equation, parity, re-compression) before being shown." + dupNote + " ";
       msg += "As a Sigma constant it is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
       msg += "Arithmetic only, with one hard warning: a plain sum is NOT a secure multisig scheme by itself — a counterparty who picks their key after seeing yours can choose it so the aggregate is a point they control alone (the rogue-key attack); real aggregation schemes add proofs of possession or per-key coefficients, which this tool does not provide. Aggregating public keys also proves no ownership of any of them, and the aggregate's private key, if anyone holds it, is the sum of the private keys — a fact about the maths, not something this tool can check. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Weighted public key aggregator --- */
+    document.getElementById("groupweight-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("groupweight-result");
+      var res = aggregateWeightedPublicKeys(document.getElementById("groupweight-terms").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var counts = res.count + (res.count === 1 ? " term" : " terms") + " (" + res.distinctCount + " distinct " + (res.distinctCount === 1 ? "key" : "keys") + ")";
+      var termList = " Per term: " + res.terms.map(function (t) { return "line " + t.line + " — " + t.scalar + (t.scalar !== t.scalarReduced ? " (reduced mod n to " + t.scalarReduced + ")" : "") + " × " + t.publicKey + " = " + (t.zero ? "the point at infinity (a coefficient that reduces to 0 contributes the identity)" : t.contribution); }).join("; ") + ".";
+      var dupNote = res.duplicates.length ? " Repeated keys, each line a separate term with its own coefficient: " + res.duplicates.map(function (d) { return d.publicKey + " × " + d.count + " (lines " + d.lines.join(", ") + ")"; }).join("; ") + "." : "";
+      var zeroNote = res.zeroCount ? " " + res.zeroCount + (res.zeroCount === 1 ? " term's" : " terms'") + " coefficient reduces to 0 modulo the group order, so it contributes the identity and changes nothing — counted here, not dropped silently." : "";
+      if (res.infinity) {
+        out.textContent = "✓ The " + counts + " sum to the point at infinity — the secp256k1 group's identity element: the weighted terms cancel exactly. That is a genuine result, not an error, but it has no compressed form, no Sigma group-element constant and no P2PK address — Ergo's 33-byte group-element encoding cannot write it, so no box can be guarded by it as a key." + termList + dupNote + zeroNote + " Every contribution was recomputed in the opposite bit order, the total was summed forward and in reverse with the same result, and everything was verified locally. Nothing was fetched, signed or sent.";
+        return;
+      }
+      var msg = "✓ The " + counts + " weighted-sum to " + res.compressed + " — the point x " + res.x + ", y " + res.y + " (" + res.yParity + "), computed locally: every coefficient reduced modulo the group order, every contribution recomputed in the opposite bit order, the total summed forward and in reverse with the same result, and the total re-inspected by tool 32 (curve equation, parity, re-compression) before being shown." + termList + dupNote + zeroNote + " ";
+      msg += "As a Sigma constant it is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
+      msg += "Arithmetic only: the coefficients are plain numbers you supplied — this tool derives no MuSig-style hash coefficients and provides no proofs of possession, so the total is a weighted sum for checking script constants and commitments, not a multisig scheme, and computing it proves no ownership of any key. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

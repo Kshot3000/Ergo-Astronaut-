@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>104 tools and counting — find the one you need:</p>
+    <p>105 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -808,6 +808,15 @@
         <textarea id="groupsum-keys" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line)" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Aggregate the keys</button>
         <p id="groupsum-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="groupweight-calc" data-family="addresses">
+        <h3>105 · Weighted public key aggregator (coefficient + public key per line → the weighted sum Σ kᵢ·Pᵢ)</h3>
+        <p>Tool 104 sums a list of keys with every coefficient equal to 1, but the constructions that actually use group arithmetic weight each key first: a Pedersen commitment is value · G + blinding · H, coefficient-weighted key aggregation multiplies each key by its own coefficient before summing, and a script checking a weighted combination of ProveDlog statements adds kᵢ · Pᵢ, never bare Pᵢ. Paste one term per line — a whole-number coefficient, a space, then a compressed public key — and this tool computes the weighted sum Σ kᵢ·Pᵢ. Coefficients may be negative, so subtraction is simply a negative term. Each coefficient is reduced modulo the group order n before use — k and k mod n move every point identically — and both the typed and reduced values are reported per term, alongside each term's own contribution. A coefficient that reduces to 0 contributes the identity: its term is counted and named as a zero term, never silently dropped, and its key is still validated first. Every key is validated by tool 32 itself and the list is <strong>strict</strong>: a line that is not exactly a coefficient and a real point stops the whole sum with the line named, because a silently skipped or misread term would change the total with no sign it had happened. The same key may appear on several lines with different coefficients — separate terms, counted and named as a repeated key. Each contribution is computed in one bit order and recomputed in the opposite one, the total is summed forward and in reverse, and the total is re-inspected by tool 32 before it is shown. A weighted sum whose terms cancel lands on the <strong>point at infinity</strong>, reported as itself, with no compressed form, constant or address claimed for it. Stated plainly: the coefficients here are plain numbers you supply — this tool derives no MuSig-style hash coefficients and provides no proofs of possession, so its total is arithmetic for checking script constants and commitments, <strong>not</strong> a multisig scheme, and computing it proves no ownership of any key. Coefficients are ordinary public exponents of the kind scripts carry: never type a private key or seed into any website, this one included. Computed locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="groupweight-terms">Weighted terms (one per line — a whole-number coefficient, a space, then a 66-character compressed public key in hex, up to 100)</label>
+        <textarea id="groupweight-terms" rows="5" spellcheck="false" placeholder="e.g. 2 0279be667e…f81798 (coefficient, space, compressed public key — one term per line)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Compute the weighted sum</button>
+        <p id="groupweight-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxset-calc" data-family="boxes">
@@ -1540,6 +1549,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=105"></script>
+<script src="app.js?v=106"></script>
 </body>
 </html>

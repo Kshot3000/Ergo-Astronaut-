@@ -4051,6 +4051,132 @@ function inspectPublicKey(pubkeyHex) {
   };
 }
 
+/* ---------- Group element calculator (points combined) ---------- */
+/* Tool 32 checks that one compressed key is a real point on
+   secp256k1, but ErgoScript's group elements are not only inspected
+   — they are combined. A Sigma GroupElement supports exactly the
+   operations this tool performs: points add (the operation behind
+   key aggregation, where A + B is a key neither side controls
+   alone), subtract, negate, and multiply by a scalar (the
+   exponentiation proveDlog and proveDHTuple statements are built
+   from — a verifier checks g^k against a public point, never
+   learning k). Both points are validated by tool 32 itself before
+   any arithmetic, so a non-residue x or an out-of-field x refuses
+   with tool 32's own reason. The arithmetic reuses the hub's
+   Jacobian point code (the same secpAdd / secpDouble the HD
+   derivation runs on), and every result is verified before it is
+   shown: the result is re-inspected by tool 32 (curve equation,
+   parity, re-compression, both P2PK addresses round-tripped), and
+   the operation is inverted — (A + B) - B must be A again,
+   (A - B) + B must be A again, -(-A) must be A, and a scalar
+   multiple is computed twice, once least-significant-bit first and
+   once most-significant-bit first, two traversals that must land
+   on the same point. The scalar is reduced modulo the group order
+   n before use (k and k mod n move a point identically), and the
+   reduced value is reported alongside what was typed. A result can
+   be the point at infinity — A + (-A), 0 * A, n * A — the group's
+   identity element: a genuine answer with no compressed encoding
+   and no address, since Ergo's 33-byte group-element form cannot
+   write it; it is reported as itself, never dressed up as a key.
+   Combining public keys proves nothing about owning any of them,
+   and a combined point may have no known private key at all.
+   Public material only: the scalar is an ordinary public exponent
+   of the kind scripts carry, never a private key or seed — those
+   are never typed into any website, this one included. Verified
+   against an independent Python oracle (oracle-groupcalc.py, pure
+   affine curve arithmetic with built-in modular inverses — a
+   different implementation strategy from this Jacobian code) over
+   the generator multiples and mixed operations before coding. */
+function secpAffineFromJacobian(pt) {
+  if (pt === null) return null;
+  if (pt[2] === 1n) return [pt[0], pt[1]];
+  var zInv = secpPowMod(pt[2], SECP_P - 2n);
+  var zInv2 = secpMod(zInv * zInv);
+  return [secpMod(pt[0] * zInv2), secpMod(pt[1] * zInv2 * zInv)];
+}
+function secpCompressJacobian(pt) {
+  var a = secpAffineFromJacobian(pt);
+  if (a === null) return null;
+  return ((a[1] & 1n) === 1n ? "03" : "02") + bigIntToHex64(a[0]);
+}
+function secpNegJacobian(pt) {
+  if (pt === null) return null;
+  return [pt[0], secpMod(-pt[1]), pt[2]];
+}
+function secpScalarMulPoint(pt, k) {
+  var acc = null, addend = pt, e = k;
+  while (e > 0n) {
+    if ((e & 1n) === 1n) acc = secpAdd(acc, addend);
+    addend = secpDouble(addend);
+    e >>= 1n;
+  }
+  return acc;
+}
+function secpScalarMulPointMsb(pt, k) {
+  var acc = null, bits = k.toString(2);
+  for (var i = 0; i < bits.length; i++) {
+    acc = secpDouble(acc);
+    if (bits[i] === "1") acc = secpAdd(acc, pt);
+  }
+  return acc;
+}
+var GROUP_OPS = ["Add (A + B)", "Subtract (A - B)", "Negate (-A)", "Multiply (k * A)"];
+function calculateGroupElement(keyAHex, keyBHex, operationStr, scalarStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, operation: null, a: null, b: null, scalar: null, scalarReduced: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
+  };
+  var op = GROUP_OPS.indexOf(operationStr) >= 0 ? operationStr : null;
+  if (op === null) return fail("Choose the operation — add, subtract, negate or scalar multiply. Nothing was computed.");
+  var ia = inspectPublicKey(keyAHex);
+  if (!ia.valid) return fail("Point A is not a public key tool 32 would accept — " + ia.reason);
+  var aPt = [BigInt("0x" + ia.x), BigInt("0x" + ia.y), 1n];
+  var bPt = null, ib = null;
+  if (op === "Add (A + B)" || op === "Subtract (A - B)") {
+    ib = inspectPublicKey(keyBHex);
+    if (!ib.valid) return fail("Point B is not a public key tool 32 would accept — " + ib.reason);
+    bPt = [BigInt("0x" + ib.x), BigInt("0x" + ib.y), 1n];
+  }
+  var scalar = null, scalarReduced = null, k = null;
+  if (op === "Multiply (k * A)") {
+    var ks = (scalarStr == null ? "" : String(scalarStr)).trim();
+    if (!/^-?[0-9]+$/.test(ks)) return fail("The scalar k must be a whole number written in decimal (digits, with an optional leading minus) — got \"" + ks + "\". It is an ordinary public exponent of the kind a script carries; a private key or seed is never entered anywhere, including here.");
+    if (ks.replace("-", "").length > 1000) return fail("The scalar k is capped at 1000 digits — more than enough for any exponent a script carries (the group order itself has 78). Nothing was computed.");
+    k = BigInt(ks);
+    scalar = k.toString();
+    var red = k % SECP_N;
+    if (red < 0n) red += SECP_N;
+    scalarReduced = red.toString();
+    k = red;
+  }
+  var res = null;
+  if (op === "Add (A + B)") res = secpAdd(aPt, bPt);
+  else if (op === "Subtract (A - B)") res = secpAdd(aPt, secpNegJacobian(bPt));
+  else if (op === "Negate (-A)") res = secpNegJacobian(aPt);
+  else res = k === 0n ? null : secpScalarMulPoint(aPt, k);
+  if (res === null) {
+    /* The point at infinity: verify the claim independently of the
+       path that produced it — the two sides must be exact negations
+       (add/subtract), or the reduced scalar must be 0 (multiply). */
+    var infOk = false;
+    if (op === "Add (A + B)") infOk = ia.x === ib.x && secpMod(BigInt("0x" + ia.y) + BigInt("0x" + ib.y)) === 0n;
+    else if (op === "Subtract (A - B)") infOk = ia.publicKey === ib.publicKey;
+    else if (op === "Multiply (k * A)") infOk = scalarReduced === "0";
+    if (!infOk) return fail("Internal check failed: the operation produced the point at infinity where the inputs do not imply it — refusing to show it.");
+    return { valid: true, reason: null, operation: op, a: ia.publicKey, b: ib ? ib.publicKey : null, scalar: scalar, scalarReduced: scalarReduced, infinity: true, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
+  }
+  var compressed = secpCompressJacobian(res);
+  var ir = inspectPublicKey(compressed);
+  if (!ir.valid) return fail("Internal check failed: the resulting point does not pass tool 32's inspection — refusing to show it.");
+  /* Invert the operation as a second, independent check. */
+  var backOk = false;
+  if (op === "Add (A + B)") backOk = secpCompressJacobian(secpAdd(res, secpNegJacobian(bPt))) === ia.publicKey;
+  else if (op === "Subtract (A - B)") backOk = secpCompressJacobian(secpAdd(res, bPt)) === ia.publicKey;
+  else if (op === "Negate (-A)") backOk = secpCompressJacobian(secpNegJacobian(res)) === ia.publicKey;
+  else backOk = secpCompressJacobian(secpScalarMulPointMsb(aPt, k)) === compressed;
+  if (!backOk) return fail("Internal check failed: inverting the operation does not return point A — refusing to show the result.");
+  return { valid: true, reason: null, operation: op, a: ia.publicKey, b: ib ? ib.publicKey : null, scalar: scalar, scalarReduced: scalarReduced, infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet };
+}
+
 /* ---------- Box set summarizer (many boxes -> one set of totals) ---------- */
 /* Tool 15 reads one box; a wallet holds many. This reads a whole
    pasted set — one full serialized box per line — and answers for
@@ -11167,7 +11293,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -12633,6 +12759,27 @@ if (typeof document !== "undefined") {
       var msg = "✓ That is a real point on the curve: x " + res.x + ", y " + res.y + " (" + res.yParity + ", as its " + res.publicKey.slice(0, 2) + " prefix claims) — y² = x³ + 7 (mod p) holds and the point re-compresses to exactly this key. ";
       msg += "Uncompressed form: " + res.uncompressedHex + ". As a Sigma constant it is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses (tools 8 and 19 build the same): mainnet " + res.mainnet + " — testnet " + res.testnet + ", round-tripped through tool 11's decoder before being shown. ";
       msg += "Inspection only: a public key is public — this proves the point is real, and proves no ownership of the key; the private half is never asked for and cannot be found from the point. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Group element calculator --- */
+    document.getElementById("groupcalc-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("groupcalc-result");
+      var res = calculateGroupElement(document.getElementById("groupcalc-a").value, document.getElementById("groupcalc-b").value, document.getElementById("groupcalc-op").value, document.getElementById("groupcalc-k").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var what = res.operation === "Add (A + B)" ? "A + B" : res.operation === "Subtract (A - B)" ? "A - B" : res.operation === "Negate (-A)" ? "-A" : res.scalar + " * A";
+      if (res.infinity) {
+        out.textContent = "✓ " + what + " is the point at infinity — the secp256k1 group's identity element. That is a genuine result, not an error: the two sides cancel exactly. But it has no compressed form, no Sigma group-element constant and no P2PK address — Ergo's 33-byte group-element encoding cannot write it, so no box can be guarded by it as a key. Computed and verified locally: the inputs are exact negations of each other" + (res.operation === "Multiply (k * A)" ? " (the scalar reduces to 0 modulo the group order)" : "") + ". Nothing was fetched, signed or sent.";
+        return;
+      }
+      var msg = "✓ " + what + " = " + res.compressed + " — the point x " + res.x + ", y " + res.y + " (" + res.yParity + "), computed locally, re-inspected by tool 32 (curve equation, parity, re-compression) and verified by inverting the operation before being shown. ";
+      if (res.operation === "Multiply (k * A)" && res.scalar !== res.scalarReduced) msg += "The scalar was reduced modulo the group order n before use — " + res.scalar + " and " + res.scalarReduced + " move every point identically. ";
+      msg += "As a Sigma constant it is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
+      msg += "Arithmetic only: combining public keys proves no ownership of any of them, and a combined point may have no known private key at all — that is what makes A + B a key neither side controls alone. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

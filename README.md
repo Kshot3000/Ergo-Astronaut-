@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 102 tools on one page it beats scrolling.
+headers) — with 103 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -483,6 +483,26 @@ headers) — with 102 tools on one page it beats scrolling.
   of private keys 2 and 3, and my own address's key, which
   re-encodes to that exact address. Inspecting a public key
   proves no ownership of it.
+- **Group element calculator** — the arithmetic the public
+  key inspector stops short of: ErgoScript's group elements
+  combine, and this tool performs the four operations a
+  Sigma group element supports on compressed keys — add
+  (key aggregation: A + B is a point neither side controls
+  alone), subtract, negate, and scalar multiply (the
+  exponentiation proveDlog and proveDHTuple are built
+  from). Both points are validated by the inspector itself
+  first; every result is re-inspected by it and verified by
+  inverting the operation (a scalar multiple is recomputed
+  in the opposite bit order). The scalar is reduced modulo
+  the group order and the reduced value reported. Results
+  that land on the point at infinity — A + (−A), 0 · A,
+  n · A — are reported as the identity element they are,
+  with no compressed form, constant or address claimed for
+  them, since Ergo's 33-byte encoding cannot write them.
+  Verified against an independent Python oracle (pure
+  affine curve arithmetic) over the generator multiples
+  and mixed operations. Combining public keys proves no
+  ownership of any of them.
 - **Box set summarizer** — a whole set of boxes at once, one
   full serialized box per line: exact BigInt totals for ERG
   and for each token (aggregated by token ID across every box

@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>102 tools and counting — find the one you need:</p>
+    <p>103 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -782,6 +782,23 @@
         <textarea id="pubkey-in" rows="2" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (the secp256k1 generator point — the public key of private key 1)" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Inspect the public key</button>
         <p id="pubkey-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="groupcalc-calc" data-family="addresses">
+        <h3>103 · Group element calculator (two public keys combined → the point their combination names)</h3>
+        <p>Tool 32 inspects one public key, but ErgoScript's group elements are not only inspected — they are <strong>combined</strong>. A Sigma group element supports exactly four operations, and this calculator performs all of them on the compressed keys tools 8, 19 and 32 work with: <strong>add</strong> two points (the operation behind key aggregation — A + B is a point neither side controls alone, because its private key would be the sum of both private keys), <strong>subtract</strong> one from another, <strong>negate</strong> a point (the same x, the flipped y — the point's other root), and <strong>multiply</strong> a point by a scalar (the exponentiation the sigma protocols are built from: a proveDlog verifier checks g<sup>k</sup> against a public point without ever learning k, and proveDHTuple statements are three such exponentiations tied together). Both points are validated by tool 32 itself before any arithmetic — a key whose x names no point on the curve refuses with tool 32's own reason — and every result is verified before it is shown: the resulting point is re-inspected by tool 32 (curve equation, parity, re-compression, both networks' P2PK addresses round-tripped), the operation is inverted ((A + B) − B must be A again, a scalar multiple is recomputed in the opposite bit order), so the calculator can never disagree with the inspector about what a point is. The scalar is a whole number in decimal, reduced modulo the group order n before use — k and k mod n move every point identically, and the reduced value is reported next to what you typed. One honest outcome has no key in it: A + (−A), 0 · A and n · A land on the <strong>point at infinity</strong>, the group's identity element — a genuine answer, reported as itself, but it has no compressed form, no Sigma constant and no address, because Ergo's 33-byte group-element encoding cannot write it, so no box can be guarded by it as a key. The honest boundary: combining public keys proves no ownership of any of them, and a combined point may have no known private key at all. Public material only — the scalar is an ordinary public exponent of the kind scripts carry; a private key or seed is never typed into any website, this one included. Computed locally: it signs nothing and sends nothing.</p>
+        <label for="groupcalc-a">Point A — compressed public key (hex — 66 characters, starting 02 or 03)</label>
+        <textarea id="groupcalc-a" rows="2" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (the generator point G)" autocomplete="off"></textarea>
+        <label for="groupcalc-b">Point B — compressed public key (hex — used by add and subtract)</label>
+        <textarea id="groupcalc-b" rows="2" spellcheck="false" placeholder="e.g. 02c6047f94…c709ee5 (the point 2G)" autocomplete="off"></textarea>
+        <label for="groupcalc-op">Operation — what to do with the points</label>
+        <select id="groupcalc-op">
+          <option selected>Add (A + B)</option><option>Subtract (A - B)</option><option>Negate (-A)</option><option>Multiply (k * A)</option>
+        </select>
+        <label for="groupcalc-k">Scalar k — a whole number in decimal (used by multiply)</label>
+        <input id="groupcalc-k" spellcheck="false" placeholder="e.g. 12345 — a public exponent, never a private key" autocomplete="off">
+        <button type="submit" class="btn primary">Combine the points</button>
+        <p id="groupcalc-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxset-calc" data-family="boxes">
@@ -1514,6 +1531,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=103"></script>
+<script src="app.js?v=104"></script>
 </body>
 </html>

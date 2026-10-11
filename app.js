@@ -1458,6 +1458,93 @@ function replaceErgoTreeConstant(treeHex, indexStr, valueSpec, networkStr) {
   };
 }
 
+/* ---------- ErgoTree segregated-tree assembler ---------- */
+/* The assemble-side pairing of tools 93/94, completing the template
+   workflow the reference segregation exists for: tool 93 pulls a
+   segregated tree apart into its constants and its proposition
+   template, tool 94 retunes one constant in place — but nothing
+   could put a template and a set of constants together into a NEW
+   segregated tree, which is how a contract template is actually
+   deployed for a new set of parameters (a new fee contract instance,
+   a new pool, a new oracle round). The assembly is the exact
+   inverse of tool 93's walk, in the reference serialization
+   (sigma-rust ergotree-ir): header byte 0x10 (version 0 + the
+   segregation flag), or 0x18 when the size field is requested —
+   then the VLQ declared size counting every byte after the size
+   field itself (constants section + template) — then the constants
+   section (a VLQ count, then each constant in the register form
+   tool 18 writes, given here one per line as a typed spec or as raw
+   constant hex exactly as tool 93 displays it), then the template
+   bytes verbatim. The template is taken as opaque proposition bytes:
+   this tool does not parse it, so it cannot promise the template is
+   a valid proposition, and it says so — what it DOES promise, and
+   verifies before showing the tree, is the byte layout: tool 93's
+   extractor must read the assembled tree back with exactly the
+   constants given, in order, and the template byte-identical, and
+   tool 16's P2S builder must carry the assembled bytes verbatim
+   (round-tripped through tool 11). A segregated tree with zero
+   constants is refused (the reference extractor rejects it too —
+   segregation with nothing segregated is not a segregated tree).
+   Verified against an independent Python oracle
+   (hidden_files/oracle-segbuild.py): the miner fee contract and
+   the second pinned segregated tree reassemble byte-for-byte from
+   their extracted constants + template, the oracle-built
+   size-flagged tree reassembles with its size field, and a
+   from-scratch P2PK-template build is pinned in both size forms
+   on both networks. */
+function buildSegregatedTree(templateHex, constantsText, sizeMode, networkStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, header: null, sizeFlag: false, declaredSize: null, constantCount: null, constants: null, sectionByteLength: null, templateHex: null, templateByteLength: null, treeHex: null, byteLength: null, p2sAddress: null, verdict: null };
+  };
+  var net = (networkStr == null ? "" : String(networkStr)).trim().toLowerCase();
+  if (net !== "mainnet" && net !== "testnet") return fail("Unknown network — pick mainnet or testnet. The ErgoTree itself is the same on both; only the addresses derived from it differ.");
+  var templateBytes = hexToBytes(templateHex == null ? "" : String(templateHex).trim().toLowerCase());
+  if (!templateBytes) return fail("Give the proposition template as hex — the bytes tool 93 hands back from a segregated tree, or any proposition bytes you want carried as the template. A template is never empty: a segregated tree is constants plus the script that refers to them.");
+  if (templateBytes.length > 100000) return fail("Implausible template (" + templateBytes.length + " bytes) — proposition templates are scripts, not data blobs.");
+  var lines = String(constantsText == null ? "" : constantsText).split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  if (lines.length < 1) return fail("Give at least one constant, one per line — a segregated tree with no constants is not a segregated tree (tool 93 refuses to read one back, and so does the reference). For a tree with its constants inline, tools 10/16/19/92 build it directly.");
+  if (lines.length > 10000) return fail("Implausible constant count (" + lines.length + ") — a template's constants are its parameters, not a data table.");
+  var constants = [];
+  var sectionBody = [];
+  for (var i = 0; i < lines.length; i++) {
+    var enc = sigmaConstantBytes(lines[i]);
+    if (!enc.valid) return fail("Constant " + i + " is not a usable Sigma constant: " + enc.reason);
+    constants.push({ index: i, type: enc.typeName, value: enc.value, rawHex: enc.rawHex, byteLength: enc.bytes.length });
+    for (var j = 0; j < enc.bytes.length; j++) sectionBody.push(enc.bytes[j]);
+  }
+  var countBytes = writeVlqBig(BigInt(lines.length));
+  var section = countBytes.concat(sectionBody);
+  var sizeFlag = String(sizeMode == null ? "" : sizeMode).trim().toLowerCase().indexOf("size") === 0;
+  var header = 0x10 | (sizeFlag ? 0x08 : 0x00);
+  var bodyLength = section.length + templateBytes.length;
+  var head = [header];
+  var declared = null;
+  if (sizeFlag) {
+    declared = bodyLength;
+    head = head.concat(writeVlqBig(BigInt(bodyLength)));
+  }
+  var treeBytes = Uint8Array.from(head.concat(section, Array.from(templateBytes)));
+  var treeHex = bytesToHex(treeBytes);
+  var check = extractErgoTreeConstants(treeHex, net);
+  if (!check.valid || !check.segregated || check.constantCount !== lines.length) return fail("Internal round-trip check failed: the assembled tree does not read back through tool 93's extractor — refusing to show it rather than risk a malformed tree.");
+  if (check.templateHex !== bytesToHex(templateBytes)) return fail("Internal round-trip check failed: the assembled tree's template does not read back byte-identical — refusing to show it.");
+  var readBackOk = check.constants.every(function (c, j) { return c.rawHex === constants[j].rawHex; });
+  if (!readBackOk) return fail("Internal round-trip check failed: the assembled tree's constants do not read back as exactly the ones given, in order — refusing to show it.");
+  var p2s = buildP2SAddress(treeHex, net);
+  if (!p2s.valid || !p2s.address) return fail("Internal round-trip check failed: tool 16's P2S builder does not carry the assembled tree — refusing to show it unverified.");
+  var dec = decodeErgoAddress(p2s.address);
+  if (!dec.valid || dec.ergoTree !== treeHex) return fail("Internal round-trip check failed: the assembled tree's P2S address does not decode back to the assembled bytes — refusing to show it unverified.");
+  return {
+    valid: true, reason: null,
+    network: net === "mainnet" ? "Mainnet" : "Testnet", header: header, sizeFlag: sizeFlag, declaredSize: declared,
+    constantCount: lines.length, constants: constants,
+    sectionByteLength: section.length,
+    templateHex: bytesToHex(templateBytes), templateByteLength: templateBytes.length,
+    treeHex: treeHex, byteLength: treeBytes.length, p2sAddress: p2s.address,
+    verdict: "Assembled as the reference lays a segregated tree out: header 0x" + header.toString(16).padStart(2, "0") + (sizeFlag ? " with its VLQ size field counting the " + declared + " bytes after it" : ", no size field") + ", a " + section.length + "-byte constants section (VLQ count included), then the " + templateBytes.length + "-byte template verbatim. Tool 93 reads it back with exactly these constants in this order, so placeholder number N in the template refers to constant N above. The template bytes themselves are carried unexamined — this proves the layout, not that the template is a valid or sensible proposition; a box built with this tree is guarded by whatever that template, run with these constants, actually says."
+  };
+}
+
 /* ---------- Address -> ErgoTree decoder ---------- */
 /* The inverse direction of tools 8 and 10: an address is
    [prefix byte][content][4-byte checksum] (tool 2 verifies the
@@ -10360,7 +10447,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -10823,6 +10910,23 @@ if (typeof document !== "undefined") {
       if (res.sizeFlag) msg += "Its header carries the size flag, so the declared size was rewritten " + res.declaredSize + " → " + res.newDeclaredSize + " bytes. ";
       msg += res.verdict + " ";
       msg += "Its " + res.network + " P2S address is " + res.p2sAddress + " (the original tree's was " + res.oldP2sAddress + "). Built locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- ErgoTree segregated-tree assembler --- */
+    document.getElementById("segbuild-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("segbuild-result");
+      var res = buildSegregatedTree(document.getElementById("segbuild-template").value, document.getElementById("segbuild-constants").value, document.getElementById("segbuild-size").value, document.getElementById("segbuild-network").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var list = res.constants.map(function (c) { return "#" + c.index + " " + c.type + " = " + c.value + " (" + c.byteLength + " bytes: " + c.rawHex + ")"; }).join(" · ");
+      var msg = "✓ Assembled a " + res.byteLength + "-byte constant-segregated ErgoTree (header 0x" + res.header.toString(16).padStart(2, "0") + (res.sizeFlag ? ", declared size " + res.declaredSize + " bytes" : ", no size field") + "): " + res.treeHex + " ";
+      msg += "Constants segregated, in placeholder order: " + list + " ";
+      msg += res.verdict + " ";
+      msg += "Its " + res.network + " P2S address is " + res.p2sAddress + ". Built locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

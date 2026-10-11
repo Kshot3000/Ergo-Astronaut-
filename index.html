@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>94 tools and counting — find the one you need:</p>
+    <p>95 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -358,6 +358,25 @@
         </select>
         <button type="submit" class="btn primary">Replace this constant</button>
         <p id="constswap-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="segbuild-calc" data-family="addresses">
+        <h3>95 · ErgoTree segregated-tree assembler (proposition template + constants → the segregated tree)</h3>
+        <p>Tools 93 and 94 take a segregated tree apart and retune one constant inside it — this one puts a template and its constants together into a <strong>new</strong> segregated tree, which is how a contract template is actually deployed with fresh parameters: a new fee-contract instance, a new pool, a new oracle round. Paste the proposition <strong>template</strong> bytes (exactly what tool 93 hands back from an existing tree, or any proposition bytes), give the constants one per line in tool 18's forms — a typed spec like <code>long:100</code>, or one Sigma constant in raw hex exactly as tool 93 displays it — and I assemble the tree locally in the reference layout: header <strong>0x10</strong> (or <strong>0x18</strong> with the VLQ size field, counting every byte after it), a VLQ constant count, the constants in order, then the template verbatim. Placeholder number N in the template refers to the Nth constant you list, so order is the contract — and a segregated tree with zero constants is refused, because segregation with nothing segregated is not a segregated tree. The result is read back through tool 93's extractor and tool 16's P2S builder before it is shown: exactly your constants, in your order, template byte-identical. One honest limit: the template bytes are carried <em>unexamined</em> — this proves the layout, not that the template is a valid proposition, so read a template you did not write with tool 93 first. Assembled locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="segbuild-template">Proposition template (hex)</label>
+        <input id="segbuild-template" spellcheck="false" placeholder="e.g. d1968303… (a template, as tool 93 hands it back)" autocomplete="off">
+        <label for="segbuild-constants">Constants (one per line, in placeholder order — typed spec like int:1000, or one Sigma constant as hex)</label>
+        <textarea id="segbuild-constants" rows="4" spellcheck="false" placeholder="e.g. int:1000" autocomplete="off"></textarea>
+        <label for="segbuild-size">Size field</label>
+        <select id="segbuild-size">
+          <option selected>No size field</option><option>Size field included</option>
+        </select>
+        <label for="segbuild-network">Network</label>
+        <select id="segbuild-network">
+          <option selected>Mainnet</option><option>Testnet</option>
+        </select>
+        <button type="submit" class="btn primary">Assemble this segregated tree</button>
+        <p id="segbuild-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="addrtree-calc" data-family="addresses">
@@ -1406,6 +1425,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=95"></script>
+<script src="app.js?v=96"></script>
 </body>
 </html>

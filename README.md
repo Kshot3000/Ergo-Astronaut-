@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 94 tools on one page it beats scrolling.
+headers) — with 95 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -2030,6 +2030,28 @@ headers) — with 94 tools on one page it beats scrolling.
   byte, and cross-checked against
   sigmastate-js, which reads the replaced
   constants back at exactly the new values.
+- **ErgoTree segregated-tree assembler** —
+  the assemble side that completes the
+  template workflow: a proposition template
+  (as the extractor hands it back) plus its
+  constants, one per line in placeholder
+  order as typed specs or raw constant hex,
+  assembled into a new constant-segregated
+  ErgoTree in the reference layout — header
+  0x10, or 0x18 with the VLQ size field —
+  with its P2S address. Zero constants is
+  refused (segregation with nothing
+  segregated is not a segregated tree), and
+  the template bytes are carried unexamined:
+  the layout is proven by reading the result
+  back through the extractor, the template's
+  own validity is not claimed. Verified
+  against an independent Python oracle: the
+  fee contract and the second pinned
+  segregated tree reassemble byte-for-byte
+  from their extracted constants and
+  templates, and a from-scratch build is
+  pinned in both size forms on both networks.
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

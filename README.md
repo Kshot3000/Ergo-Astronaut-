@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 95 tools on one page it beats scrolling.
+headers) — with 96 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -2052,6 +2052,31 @@ headers) — with 95 tools on one page it beats scrolling.
   from their extracted constants and
   templates, and a from-scratch build is
   pinned in both size forms on both networks.
+- **Merkle root & inclusion proof** — Ergo's
+  Merkle tree (the construction behind a
+  block's transactions root), built exactly
+  as sigma-rust's ergo-merkle-tree builds it:
+  leaves hash as Blake2b-256(0x00 ‖ data),
+  parents as Blake2b-256(0x01 ‖ left ‖
+  right), and a lone left child is promoted
+  as Blake2b-256(0x01 ‖ child), never
+  duplicated. Build mode takes the leaves
+  (one hex item per line — for a block, each
+  transaction's ID) and returns the root
+  plus one leaf's inclusion proof (sibling
+  hashes bottom-up, with the proven node's
+  side, EMPTY for the empty slot), folded
+  back to the root before it is shown;
+  verify mode folds a pasted leaf + proof
+  against a root exactly as the reference
+  MerkleProof.valid does. Verified against
+  an independent Python oracle mirroring the
+  crate: its one-element and five-element
+  unit tests, and its real mainnet proof
+  vectors — the genesis block's single
+  transaction, block #650787 and the
+  LiteClient miner proof — plus tamper
+  cases that must not verify.
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

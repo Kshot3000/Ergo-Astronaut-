@@ -1545,6 +1545,156 @@ function buildSegregatedTree(templateHex, constantsText, sizeMode, networkStr) {
   };
 }
 
+/* ---------- Merkle root + inclusion proof (tool 96) ---------- */
+/* Ergo's Merkle tree, exactly as sigma-rust's ergo-merkle-tree
+   builds it (the construction behind a block's transactionsRoot —
+   the leaf data of a block's tree is each transaction's ID bytes):
+   - leaf hash     = Blake2b-256(0x00 || data)         (LEAF_PREFIX)
+   - internal hash = Blake2b-256(0x01 || left || right) (INTERNAL_PREFIX)
+   - an internal node with only a left child hashes as
+     Blake2b-256(0x01 || left) — the child is promoted, never
+     duplicated (this is where Ergo's tree differs from Bitcoin's).
+   The tree array pads the leaves with ONE empty slot when the leaf
+   count is odd, then fills parents bottom-up; an empty tree's root
+   is 32 zero bytes (root_hash), while the genesis blocks use
+   Blake2b-256("") as the special empty root (root_hash_special).
+   A proof is the sibling hash at each level, bottom-up, with the
+   side of the node being proven (a sibling to its right means side
+   Left); an empty sibling is a level with no hash and folds as the
+   single-child promotion. Verification is the crate's
+   MerkleProof.valid fold. Verified against an independent Python
+   oracle (hidden_files/oracle-merkle.py): the crate's own unit
+   tests (one element; five identical elements), its real mainnet
+   proof vectors (genesis block, block #650787, the LiteClient miner
+   proof) and tamper cases. */
+function merkleHash(prefix, parts) {
+  var buf = [prefix];
+  for (var i = 0; i < parts.length; i++) for (var j = 0; j < parts[i].length; j++) buf.push(parts[i][j]);
+  return blake2b256(Uint8Array.from(buf));
+}
+function buildMerkleTree(leafDatas) {
+  var slots = leafDatas.map(function (d) { return merkleHash(0, [d]); });
+  if (slots.length % 2 === 1) slots.push(null);
+  var internal = 0;
+  if (slots.length > 0) { var p = 1; while (p < slots.length) p *= 2; internal = p - 1; }
+  var nodes = [];
+  var i;
+  for (i = 0; i < internal; i++) nodes.push(null);
+  for (i = 0; i < slots.length; i++) nodes.push(slots[i]);
+  for (var pair = nodes.length - 2; pair >= 1; pair -= 2) {
+    var left = nodes[pair], right = nodes[pair + 1];
+    if (left !== null && right !== null) nodes[(pair - 1) / 2] = merkleHash(1, [left, right]);
+    else if (left !== null) nodes[(pair - 1) / 2] = merkleHash(1, [left]);
+    else nodes[(pair - 1) / 2] = null;
+  }
+  return { nodes: nodes, internal: internal, root: nodes.length > 0 && nodes[0] !== null ? nodes[0] : new Uint8Array(32) };
+}
+function merkleProofLevels(tree, leafIndex) {
+  var levels = [];
+  var i = leafIndex + tree.internal;
+  while (i > 0) {
+    var parent = (i - 1) >> 1;
+    var leftChild = parent * 2 + 1;
+    var sibling = leftChild !== i ? leftChild : leftChild + 1;
+    levels.push({ hash: tree.nodes[sibling], side: sibling === i + 1 ? "Left" : "Right" });
+    i = parent;
+  }
+  return levels;
+}
+function foldMerkleProof(leafData, levels) {
+  var h = merkleHash(0, [leafData]);
+  for (var i = 0; i < levels.length; i++) {
+    var lv = levels[i];
+    if (lv.hash === null || lv.hash === undefined) h = merkleHash(1, [h]);
+    else if (lv.side === "Left") h = merkleHash(1, [h, lv.hash]);
+    else h = merkleHash(1, [lv.hash, h]);
+  }
+  return h;
+}
+function merkleLevelText(lv) {
+  return lv.hash === null || lv.hash === undefined ? "EMPTY" : (lv.side === "Left" ? "L " : "R ") + bytesToHex(lv.hash);
+}
+function analyzeMerkle(leavesText, indexText, expectedText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, leafCount: null, leafHashes: null, rootHex: null, proofIndex: null, proofLevels: null, proofText: null, proofChecksOut: false, expectedRoot: null, matchesExpected: null, verdict: null };
+  };
+  var lines = String(leavesText == null ? "" : leavesText).split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  if (lines.length < 1) return fail("Give at least one leaf, one per line, as hex — for a block's transactions root each leaf is one transaction's 32-byte ID. An empty tree is not built here: the reference root for zero leaves is 32 zero bytes (and the genesis blocks' special empty root is Blake2b-256 of nothing, 0e5751c0…).");
+  if (lines.length > 10000) return fail("Implausible leaf count (" + lines.length + ") — a Merkle tree over a pasted list is a checking tool, not a block builder.");
+  var datas = [];
+  for (var i = 0; i < lines.length; i++) {
+    var b = hexToBytes(lines[i]);
+    if (!b) return fail("Leaf " + (i + 1) + " is not valid hex (even length, hex characters only): \"" + lines[i].slice(0, 48) + "\".");
+    datas.push(b);
+  }
+  var idxStr = String(indexText == null ? "" : indexText).trim();
+  var idx = 0;
+  if (idxStr !== "") {
+    if (!/^[0-9]+$/.test(idxStr)) return fail("The leaf number to prove must be a whole number, 1 for the first leaf.");
+    idx = parseInt(idxStr, 10) - 1;
+    if (idx < 0 || idx >= datas.length) return fail("Leaf number " + idxStr + " is out of range — the tree has " + datas.length + (datas.length === 1 ? " leaf." : " leaves."));
+  }
+  var tree = buildMerkleTree(datas);
+  var rootHex = bytesToHex(tree.root);
+  var levels = merkleProofLevels(tree, idx);
+  var folded = bytesToHex(foldMerkleProof(datas[idx], levels));
+  if (folded !== rootHex) return fail("Internal check failed: the proof folded back up does not reproduce the tree root — refusing to show it rather than risk a bad proof.");
+  var expected = String(expectedText == null ? "" : expectedText).trim().toLowerCase();
+  var expectedRoot = null, matchesExpected = null;
+  if (expected !== "") {
+    var eb = hexToBytes(expected);
+    if (!eb || eb.length !== 32) return fail("The expected root must be exactly 32 bytes of hex (64 characters) — a Merkle root is one Blake2b-256 digest.");
+    expectedRoot = bytesToHex(eb);
+    matchesExpected = expectedRoot === rootHex;
+  }
+  return {
+    valid: true, reason: null,
+    leafCount: datas.length,
+    leafHashes: datas.map(function (d) { return bytesToHex(merkleHash(0, [d])); }),
+    rootHex: rootHex,
+    proofIndex: idx,
+    proofLevels: levels.map(function (lv) { return { hash: lv.hash === null ? null : bytesToHex(lv.hash), side: lv.side }; }),
+    proofText: levels.map(merkleLevelText).join("\n"),
+    proofChecksOut: true,
+    expectedRoot: expectedRoot, matchesExpected: matchesExpected,
+    verdict: "Built exactly as the reference builds it: every leaf hashed as Blake2b-256(0x00 || data), every parent as Blake2b-256(0x01 || left || right), and a parent with only a left child as Blake2b-256(0x01 || child) — promoted, never duplicated. The proof for leaf " + (idx + 1) + " is its sibling at each level, bottom-up, with the side the leaf's own node sits on; it was folded back up here and reproduces the root before being shown. Paste the leaf and these levels into any verifier that follows the same construction (sigma-rust's MerkleProof.valid is one) and it checks the same way."
+  };
+}
+function verifyMerkleProof(leafText, levelsText, rootText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verified: false, computedRootHex: null, leafHashHex: null, levelCount: null, verdict: null };
+  };
+  var leaf = hexToBytes(leafText == null ? "" : String(leafText).trim());
+  if (!leaf) return fail("Give the leaf data as hex — for a block proof that is the transaction's 32-byte ID, exactly as it was a leaf of the tree.");
+  var rootBytes = hexToBytes(rootText == null ? "" : String(rootText).trim());
+  if (!rootBytes || rootBytes.length !== 32) return fail("Give the expected root as exactly 32 bytes of hex (64 characters) — a Merkle root is one Blake2b-256 digest.");
+  var lines = String(levelsText == null ? "" : levelsText).split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  if (lines.length < 1) return fail("Give at least one proof level, one per line: \"L <sibling hash hex>\" when the proven node sits on the left, \"R <sibling hash hex>\" when it sits on the right, or EMPTY for a level whose sibling is the tree's empty slot.");
+  var levels = [];
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (/^empty$/i.test(line)) { levels.push({ hash: null, side: "Left" }); continue; }
+    var m = line.match(/^([lr])\s+([0-9a-fA-F]+)$/i);
+    if (!m) return fail("Proof level " + (i + 1) + " is not in the form \"L <64 hex>\", \"R <64 hex>\" or EMPTY: \"" + line.slice(0, 48) + "\".");
+    var hb = hexToBytes(m[2]);
+    if (!hb || hb.length !== 32) return fail("Proof level " + (i + 1) + "'s sibling hash must be exactly 32 bytes of hex (64 characters).");
+    levels.push({ hash: hb, side: m[1].toUpperCase() === "L" ? "Left" : "Right" });
+  }
+  var computed = foldMerkleProof(leaf, levels);
+  var computedHex = bytesToHex(computed);
+  var verified = computedHex === bytesToHex(rootBytes);
+  return {
+    valid: true, reason: null,
+    verified: verified,
+    computedRootHex: computedHex,
+    leafHashHex: bytesToHex(merkleHash(0, [leaf])),
+    levelCount: levels.length,
+    verdict: verified
+      ? "The proof folds up to exactly the expected root: the leaf hashes as Blake2b-256(0x00 || data) and each level combines as Blake2b-256(0x01 || left || right) — with an EMPTY level promoting the running hash as Blake2b-256(0x01 || hash) — so this leaf is in the tree that root commits to, in the position the sides describe. That is the whole claim a Merkle proof makes: inclusion in that tree, nothing about the leaf's own meaning."
+      : "The proof does NOT fold up to the expected root — the computed root is " + computedHex + ". Either the leaf was never in this tree, a level's hash or side is wrong, or the root belongs to a different tree. Nothing is included on a mismatch: check the levels are bottom-up (leaf level first) and that the sides describe where the proven node sits, not where the sibling sits."
+  };
+}
+
 /* ---------- Address -> ErgoTree decoder ---------- */
 /* The inverse direction of tools 8 and 10: an address is
    [prefix byte][content][4-byte checksum] (tool 2 verifies the
@@ -10447,7 +10597,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -10927,6 +11077,31 @@ if (typeof document !== "undefined") {
       msg += "Constants segregated, in placeholder order: " + list + " ";
       msg += res.verdict + " ";
       msg += "Its " + res.network + " P2S address is " + res.p2sAddress + ". Built locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- merkle root + inclusion proof --- */
+    document.getElementById("merkle-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("merkle-result");
+      if (document.getElementById("merkle-mode").value.indexOf("Verify") === 0) {
+        var vres = verifyMerkleProof(document.getElementById("merkle-leaf").value, document.getElementById("merkle-proof").value, document.getElementById("merkle-root").value);
+        if (!vres.valid) {
+          out.textContent = "✗ " + vres.reason;
+          return;
+        }
+        out.textContent = (vres.verified ? "✓ Proof verified" : "✗ Proof does not verify") + " over " + vres.levelCount + (vres.levelCount === 1 ? " level" : " levels") + ": the leaf hashes to " + vres.leafHashHex + " and the levels fold up to " + vres.computedRootHex + ". " + vres.verdict + " Verified locally; nothing was fetched, signed or sent.";
+        return;
+      }
+      var res = analyzeMerkle(document.getElementById("merkle-leaves").value, document.getElementById("merkle-index").value, document.getElementById("merkle-expected").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Merkle root over " + res.leafCount + (res.leafCount === 1 ? " leaf" : " leaves") + ": " + res.rootHex + " ";
+      if (res.expectedRoot !== null) msg += res.matchesExpected ? "That MATCHES the expected root you gave. " : "That does NOT match the expected root you gave (" + res.expectedRoot + ") — the leaves or their order differ from the tree that root commits to. ";
+      msg += "Inclusion proof for leaf " + (res.proofIndex + 1) + " (leaf hash " + res.leafHashes[res.proofIndex] + "), one level per line, bottom-up — L means the proven node sits on the left at that level, R on the right, EMPTY is the tree's empty slot: " + res.proofText.split("\n").join(" · ") + " ";
+      msg += res.verdict + " Built locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

@@ -4347,6 +4347,109 @@ function aggregateWeightedPublicKeys(termsText) {
   return { valid: true, reason: null, count: terms.length, distinctCount: order.length, duplicates: duplicates, terms: terms, zeroCount: zeroCount, infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet };
 }
 
+/* ---------- Public key list comparer (two key lists -> their sums, the difference, and whether they aggregate alike) ---------- */
+/* Tools 104 and 105 sum ONE list; the question between TWO lists is
+   different, and it is the question an aggregate-key check actually
+   asks: do these two lists add up to the same point, and if not,
+   what is the difference? Two lists a script or a counterparty
+   claims are "the same aggregate" may share no key at all and still
+   sum alike ([G, 2G] and [3G]), and two lists holding exactly the
+   same distinct keys may sum differently when a count differs
+   ([G, G] against [G] — a repeated key is a term written twice, as
+   tool 104 established). So this comparer reports BOTH comparisons
+   and never merges them: the literal comparison (shared keys with
+   their per-list counts, keys only on one side, whether the lists
+   are the same multiset of terms, whether even the order matches)
+   and the arithmetic comparison (each list's sum, whether the sums
+   are equal, and the difference sumA - sumB as a point in its own
+   right — the point that, added to the second sum, returns the
+   first). Each side is summed by tool 104 itself, so a side's sum
+   here is tool 104's sum there by construction, and tool 104's
+   strictness carries over: a line that is not a real point refuses
+   the whole comparison with the side and the line named, because a
+   skipped key would change that side's sum silently. The difference
+   is computed by tool 103 itself wherever tool 103 can express it
+   (subtract for two finite sums, negate when the first sum is the
+   identity), and it is verified before anything is shown: the
+   difference plus the second sum must return the first sum, checked
+   through tool 103 again, with the identity cases checked as
+   identities. A difference of the point at infinity means exactly
+   that the sums are equal — it is reported as itself, with no key
+   material claimed. The honest boundary is stated on the page:
+   equal sums do NOT prove the lists are the same keys, do not prove
+   anyone holds any private key, and a plain sum remains open to
+   the rogue-key attack tool 104 names — this is arithmetic for
+   checking two pasted lists against each other, nothing more.
+   Verified against an independent Python oracle
+   (oracle-groupdiff.py, pure affine curve arithmetic with built-in
+   modular inverses — a different implementation strategy from this
+   Jacobian code) over equal sums from disjoint lists, identical and
+   reordered lists, a pinned negative difference, cancelling sides,
+   a real key, a count-only difference and two large multiples
+   equalling their sum, before coding. */
+function comparePublicKeyLists(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, a: null, b: null, countA: null, countB: null, distinctCountA: null, distinctCountB: null, equalSums: null, sameLists: null, sameOrder: null, shared: null, onlyA: null, onlyB: null, diffInfinity: null, diffCompressed: null, diffX: null, diffY: null, diffYParity: null, diffUncompressedHex: null, diffSigmaConstantHex: null, diffMainnet: null, diffTestnet: null };
+  };
+  var a = aggregatePublicKeys(aText);
+  if (!a.valid) return fail("The FIRST list is refused: " + a.reason);
+  var b = aggregatePublicKeys(bText);
+  if (!b.valid) return fail("The SECOND list is refused: " + b.reason);
+  var countOf = function (keys) {
+    var m = {}, ord = [];
+    keys.forEach(function (k) { if (!Object.prototype.hasOwnProperty.call(m, k)) { m[k] = 0; ord.push(k); } m[k]++; });
+    return { m: m, ord: ord };
+  };
+  var ca = countOf(a.keys), cb = countOf(b.keys);
+  var shared = [], onlyA = [], onlyB = [];
+  ca.ord.forEach(function (k) {
+    if (Object.prototype.hasOwnProperty.call(cb.m, k)) shared.push({ publicKey: k, countA: ca.m[k], countB: cb.m[k] });
+    else onlyA.push(k);
+  });
+  cb.ord.forEach(function (k) { if (!Object.prototype.hasOwnProperty.call(ca.m, k)) onlyB.push(k); });
+  if (shared.length + onlyA.length !== a.distinctCount || shared.length + onlyB.length !== b.distinctCount) return fail("Internal check failed: the shared/only accounting does not close against the lists' distinct counts — refusing to show a comparison.");
+  var sameLists = a.count === b.count && shared.length === a.distinctCount && shared.length === b.distinctCount && shared.every(function (s) { return s.countA === s.countB; });
+  var sameOrder = a.keys.length === b.keys.length && a.keys.every(function (k, i) { return k === b.keys[i]; });
+  var equalSums = (a.infinity && b.infinity) || (!a.infinity && !b.infinity && a.compressed === b.compressed);
+  var diff = null;
+  if (equalSums) {
+    if (!a.infinity) {
+      var eq = calculateGroupElement(a.compressed, b.compressed, "Subtract (A - B)", "");
+      if (!eq.valid || eq.infinity !== true) return fail("Internal check failed: tool 103 does not confirm that equal sums subtract to the point at infinity — refusing to show a comparison.");
+    }
+    diff = { infinity: true, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
+  } else if (a.infinity) {
+    var ng = calculateGroupElement(b.compressed, "", "Negate (-A)", "");
+    if (!ng.valid || ng.infinity) return fail("Internal check failed: tool 103 cannot negate the second sum — refusing to show a comparison.");
+    diff = { infinity: false, compressed: ng.compressed, x: ng.x, y: ng.y, yParity: ng.yParity, uncompressedHex: ng.uncompressedHex, sigmaConstantHex: ng.sigmaConstantHex, mainnet: ng.mainnet, testnet: ng.testnet };
+  } else if (b.infinity) {
+    diff = { infinity: false, compressed: a.compressed, x: a.x, y: a.y, yParity: a.yParity, uncompressedHex: a.uncompressedHex, sigmaConstantHex: a.sigmaConstantHex, mainnet: a.mainnet, testnet: a.testnet };
+  } else {
+    var sb = calculateGroupElement(a.compressed, b.compressed, "Subtract (A - B)", "");
+    if (!sb.valid || sb.infinity) return fail("Internal check failed: tool 103's subtraction of the two sums disagrees with the sums themselves — refusing to show a comparison.");
+    diff = { infinity: false, compressed: sb.compressed, x: sb.x, y: sb.y, yParity: sb.yParity, uncompressedHex: sb.uncompressedHex, sigmaConstantHex: sb.sigmaConstantHex, mainnet: sb.mainnet, testnet: sb.testnet };
+  }
+  /* The difference must undo: difference + sumB returns sumA. */
+  if (!diff.infinity) {
+    if (b.infinity) {
+      if (diff.compressed !== a.compressed) return fail("Internal check failed: with the second sum at infinity the difference must be the first sum itself — refusing to show a comparison.");
+    } else {
+      var back = calculateGroupElement(diff.compressed, b.compressed, "Add (A + B)", "");
+      if (!back.valid) return fail("Internal check failed: tool 103 cannot add the difference back onto the second sum — refusing to show a comparison.");
+      if (a.infinity ? back.infinity !== true : back.compressed !== a.compressed) return fail("Internal check failed: the difference plus the second sum does not return the first sum — refusing to show a comparison.");
+    }
+  }
+  return {
+    valid: true, reason: null,
+    verdict: equalSums ? "equal-sums" : "different-sums",
+    a: a, b: b,
+    countA: a.count, countB: b.count, distinctCountA: a.distinctCount, distinctCountB: b.distinctCount,
+    equalSums: equalSums, sameLists: sameLists, sameOrder: sameOrder,
+    shared: shared, onlyA: onlyA, onlyB: onlyB,
+    diffInfinity: diff.infinity, diffCompressed: diff.compressed, diffX: diff.x, diffY: diff.y, diffYParity: diff.yParity, diffUncompressedHex: diff.uncompressedHex, diffSigmaConstantHex: diff.sigmaConstantHex, diffMainnet: diff.mainnet, diffTestnet: diff.testnet
+  };
+}
+
 /* ---------- Box set summarizer (many boxes -> one set of totals) ---------- */
 /* Tool 15 reads one box; a wallet holds many. This reads a whole
    pasted set — one full serialized box per line — and answers for
@@ -11463,7 +11566,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -12994,6 +13097,40 @@ if (typeof document !== "undefined") {
       var msg = "✓ The " + counts + " weighted-sum to " + res.compressed + " — the point x " + res.x + ", y " + res.y + " (" + res.yParity + "), computed locally: every coefficient reduced modulo the group order, every contribution recomputed in the opposite bit order, the total summed forward and in reverse with the same result, and the total re-inspected by tool 32 (curve equation, parity, re-compression) before being shown." + termList + dupNote + zeroNote + " ";
       msg += "As a Sigma constant it is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
       msg += "Arithmetic only: the coefficients are plain numbers you supplied — this tool derives no MuSig-style hash coefficients and provides no proofs of possession, so the total is a weighted sum for checking script constants and commitments, not a multisig scheme, and computing it proves no ownership of any key. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Public key list comparer --- */
+    document.getElementById("groupdiff-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("groupdiff-result");
+      var res = comparePublicKeyLists(document.getElementById("groupdiff-a").value, document.getElementById("groupdiff-b").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var sumText = function (side, label) {
+        return side.infinity
+          ? "The " + label + " list (" + side.count + (side.count === 1 ? " key" : " keys") + ", " + side.distinctCount + " distinct) sums to the point at infinity — its terms cancel exactly."
+          : "The " + label + " list (" + side.count + (side.count === 1 ? " key" : " keys") + ", " + side.distinctCount + " distinct) sums to " + side.compressed + " (tool 104's own sum).";
+      };
+      var msg = "✓ Compared locally. " + sumText(res.a, "first") + " " + sumText(res.b, "second") + " ";
+      if (res.sameOrder) msg += "Literally, the lists are identical — same keys, same counts, same order. ";
+      else if (res.sameLists) msg += "Literally, the lists hold the same keys the same number of times each — only the order differs, and order cannot change a sum. ";
+      else {
+        var parts = [];
+        if (res.shared.length) parts.push("shared: " + res.shared.map(function (s) { return s.publicKey + (s.countA === s.countB ? " × " + s.countA + " on both sides" : " × " + s.countA + " in the first, × " + s.countB + " in the second"); }).join("; "));
+        if (res.onlyA.length) parts.push("only in the first: " + res.onlyA.join(", "));
+        if (res.onlyB.length) parts.push("only in the second: " + res.onlyB.join(", "));
+        msg += "Literally, the lists differ — " + parts.join(". ") + ". ";
+      }
+      if (res.equalSums) {
+        msg += "Arithmetically, the sums are EQUAL: the difference sumA − sumB is the point at infinity, the group's identity element — a genuine result with no compressed form, no Sigma group-element constant and no P2PK address, since Ergo's 33-byte encoding cannot write it. ";
+        if (!res.sameLists) msg += "Read that carefully: equal sums do not mean equal lists — these two lists aggregate to the same point while holding different keys, which is exactly why a plain sum alone must never be treated as proof that two key lists are the same. ";
+      } else {
+        msg += "Arithmetically, the sums DIFFER, and the difference sumA − sumB is " + res.diffCompressed + " — the point x " + res.diffX + ", y " + res.diffY + " (" + res.diffYParity + "), computed by tool 103 and verified by adding it back onto the second sum to return the first. As a Sigma constant it is the SGroupElement " + res.diffSigmaConstantHex + " (tool 18); its P2PK addresses: mainnet " + res.diffMainnet + " — testnet " + res.diffTestnet + ". ";
+      }
+      msg += "Arithmetic only: comparing public keys proves no ownership of any of them, and a plain sum is not a secure multisig scheme (the rogue-key attack — tool 104 states it in full). Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

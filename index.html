@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>105 tools and counting — find the one you need:</p>
+    <p>106 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -817,6 +817,17 @@
         <textarea id="groupweight-terms" rows="5" spellcheck="false" placeholder="e.g. 2 0279be667e…f81798 (coefficient, space, compressed public key — one term per line)" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Compute the weighted sum</button>
         <p id="groupweight-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="groupdiff-calc" data-family="addresses">
+        <h3>106 · Public key list comparer (two lists of public keys → their sums, the difference, and whether they aggregate alike)</h3>
+        <p>Tools 104 and 105 sum one list; the question between two lists is different, and it is the question an aggregate-key check actually asks: do these two lists add up to the same point, and if not, what is the difference? The trap is that the literal and arithmetic answers can disagree both ways: two lists may share <strong>no key at all</strong> and still sum alike — G and 2G on one side, 3G alone on the other — and two lists holding exactly the same distinct keys may sum differently when a count differs, because a repeated key is a term written twice (G written twice against G written once differs by exactly G). So this comparer reports both comparisons and never merges them: the <strong>literal</strong> one — shared keys with their per-list counts, keys only on one side, whether the lists are the same multiset of terms, whether even the order matches — and the <strong>arithmetic</strong> one — each list's sum by tool 104 itself, whether the sums are equal, and the difference sumA − sumB as a point in its own right, the point that added to the second sum returns the first (verified that way, through tool 103, before anything is shown). Each side is <strong>strict</strong>, exactly as in tool 104: a line that is not a real point on the curve refuses the whole comparison with the side and the line named, because a silently skipped key would change that side's sum with no sign it had happened. A difference of the <strong>point at infinity</strong> means exactly that the sums are equal — reported as itself, with no compressed form, constant or address claimed for it. Stated plainly: equal sums do <strong>not</strong> prove the lists hold the same keys, prove no ownership of any key, and a plain sum remains open to the rogue-key attack tool 104 names — real aggregation schemes add proofs of possession or per-key coefficients, which this tool does not pretend to provide. It compares two pasted lists arithmetically — nothing more. Public keys only: never type a private key or seed into any website, this one included. Computed locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="groupdiff-a">First list — compressed public keys (hex — one 66-character key per line, up to 100)</label>
+        <textarea id="groupdiff-a" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line)" autocomplete="off"></textarea>
+        <label for="groupdiff-b">Second list — compressed public keys (hex — one 66-character key per line, up to 100)</label>
+        <textarea id="groupdiff-b" rows="5" spellcheck="false" placeholder="e.g. 02f9308a01…3bce036f9 (one compressed public key per line)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Compare the lists</button>
+        <p id="groupdiff-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxset-calc" data-family="boxes">
@@ -1549,6 +1560,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=106"></script>
+<script src="app.js?v=107"></script>
 </body>
 </html>

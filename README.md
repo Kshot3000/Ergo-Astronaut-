@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 105 tools on one page it beats scrolling.
+headers) — with 106 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -545,6 +545,28 @@ headers) — with 105 tools on one page it beats scrolling.
   mixed-sign, large-coefficient, cancellation,
   zero-coefficient, order-sized, repeated-key and real-key
   lists.
+- **Public key list comparer** — two lists of compressed
+  public keys compared both ways at once: literally (shared
+  keys with their per-list counts, keys only on one side,
+  whether the lists are the same multiset of terms, whether
+  even the order matches) and arithmetically (each list's sum
+  by the list aggregator itself, whether the sums are equal,
+  and the difference sumA − sumB as a point in its own right,
+  computed by the group element calculator and verified by
+  adding it back onto the second sum to return the first).
+  The two answers can disagree both ways — disjoint lists can
+  sum alike, and lists with the same distinct keys can sum
+  differently when a count differs — so they are reported
+  separately and never merged. Each side is strict: an
+  invalid line refuses the whole comparison with the side
+  and line named. A difference of the point at infinity
+  means exactly that the sums are equal. Stated plainly on
+  the page: equal sums do not prove the lists hold the same
+  keys, and a plain sum is not a secure multisig scheme.
+  Verified against an independent Python oracle (pure affine
+  curve arithmetic) over equal-from-disjoint, identical,
+  reordered, cancelling, count-only and large-multiple list
+  pairs.
 - **Box set summarizer** — a whole set of boxes at once, one
   full serialized box per line: exact BigInt totals for ERG
   and for each token (aggregated by token ID across every box

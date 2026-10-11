@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 96 tools on one page it beats scrolling.
+headers) — with 97 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -2077,6 +2077,30 @@ headers) — with 96 tools on one page it beats scrolling.
   transaction, block #650787 and the
   LiteClient miner proof — plus tamper
   cases that must not verify.
+- **Address set summarizer** — a whole
+  list of addresses (one per line: a
+  payout list, an address-book export,
+  the HD-derived set) triaged at once,
+  composing the single-address checker
+  and decoder so it cannot disagree
+  with them: distinct valid addresses
+  with network and type splits and each
+  address's decoded content, duplicate
+  lines named with all their line
+  numbers, mixed-network sets called
+  out, cross-network pairs (the same
+  type and content under both prefixes)
+  listed, and invalid lines reported
+  with their line and the checker's
+  reason instead of refusing the set —
+  an address list carries no value
+  total a skipped line could understate.
+  Verified against an independent
+  Python oracle over the hub's pinned
+  vectors (both networks' P2PK and
+  P2SH pairs, the fee-contract P2S, a
+  tampered address, an EIP-44 type-4
+  representation).
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

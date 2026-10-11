@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>96 tools and counting — find the one you need:</p>
+    <p>97 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -408,6 +408,15 @@
         <input id="netconv-in" spellcheck="false" placeholder="e.g. 9f… or 3W…" autocomplete="off">
         <button type="submit" class="btn primary">Convert to the other network</button>
         <p id="netconv-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="addrset-calc" data-family="addresses">
+        <h3>97 · Address set summarizer (many addresses → which are valid, duplicated, or on the wrong network)</h3>
+        <p>Tools 2, 11 and 13 each take one address — a payout list, an address-book export or the set tool 31 derives is many, and a list has failure modes a single address never shows. Paste the whole list, one address per line, and I check every line with tool 2's own checksum and decode it with tool 11, then report over the <strong>distinct</strong> valid addresses: how many there are, the network split (mainnet / testnet) and the type split (P2PK / P2SH / P2S), each address's content — a P2PK's public key, a P2SH's script hash, a P2S's script carried as its content — and the list accidents worth catching before anything is sent: <strong>duplicate lines</strong>, named with all their line numbers, because paying a duplicated entry twice is the classic payout-list mistake; <strong>mixed networks</strong> in one list, because the two networks are separate worlds and sending across them loses the ERG; and <strong>cross-network pairs</strong> — the same type and content under both prefixes, tool 13's conversion turning up inside one list. A line that is not a valid payment address at all does <em>not</em> refuse the whole set: it is listed with its line number and tool 2's reason, because — unlike the box and transaction sets, whose value totals a skipped line would silently understate — an address list carries no value to understate, and triage is the job. That includes a type-4 EIP-44 data-hash representation (tool 28): its checksum verifies, but it is not a payment address, and it is reported as such. The honest boundary: this summarizes the strings you pasted — it fetches nothing, and it proves nothing about any address's balance or who owns it. Summarized locally: it signs nothing and sends nothing.</p>
+        <label for="addrset-in">Ergo addresses (one per line, up to 100)</label>
+        <textarea id="addrset-in" rows="6" spellcheck="false" placeholder="e.g. one address per line — a payout list, an address-book export, or tool 31's derived set" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Summarize the set</button>
+        <p id="addrset-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxid-calc" data-family="boxes">
@@ -1448,6 +1457,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=97"></script>
+<script src="app.js?v=98"></script>
 </body>
 </html>

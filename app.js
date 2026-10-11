@@ -1882,6 +1882,93 @@ function convertAddressNetwork(raw) {
   return out;
 }
 
+/* ---------- Address set summarizer ---------- */
+/* Tools 2, 11 and 13 each take ONE address; a payout list, an
+   address-book export or the derived set from tool 31 is many. This
+   reads a whole pasted list — one address per line — and triages it,
+   composing the single-address tools so the set can never disagree
+   with them: every line is checksum-checked by tool 2 and decoded by
+   tool 11 itself. The breakdown is over DISTINCT valid addresses:
+   total lines, valid lines, distinct count, duplicate lines (the
+   same address pasted again — named by all its line numbers, since
+   paying a duplicated entry twice is the classic list accident),
+   counts by network and by type, and cross-network pairs — the same
+   type and content appearing under both networks, which is tool 13's
+   conversion showing up inside one list: the two entries guard boxes
+   on separate worlds, and sending across them loses the ERG. Invalid
+   lines are REPORTED with their line and tool 2's reason, not used
+   to refuse the whole set — the opposite choice from the box and
+   transaction set tools, and deliberately so: those sets sum values,
+   where a skipped line would silently understate a total, while an
+   address list carries no value to understate and triage is the
+   job. A line whose checksum verifies but whose content is
+   malformed for its claimed type (tool 11's note) still counts as
+   that type, with the note carried onto its entry. Nothing here
+   fetches anything and nothing is proven about any address's
+   balance or owner: the summary is a statement about the pasted
+   strings only, and the page says so. Verified against an
+   independent Python oracle (from-scratch Base58 + hashlib
+   Blake2b-256) over the hub's pinned address vectors — Kyle's P2PK
+   on both networks, the fleet #219 P2PK and P2SH pairs, the
+   fleet-sdk fee-contract P2S, a tampered address and an EIP-44
+   type-4 representation — preserved in the goal's hidden files. */
+function summarizeAddressSet(addressesText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, entries: null, invalid: null, lineCount: null, validCount: null, distinctCount: null, duplicateCount: null, invalidCount: null, mainnetCount: null, testnetCount: null, p2pkCount: null, p2shCount: null, p2sCount: null, mixedNetworks: null, crossNetworkPairs: null, verdict: null };
+  };
+  var lines = (addressesText == null ? "" : String(addressesText)).split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  if (lines.length === 0) return fail("Paste at least one Ergo address, one address per line — a payout list, an address-book export, or the addresses tool 31 derives. This summarizes the addresses you paste; it fetches nothing and says nothing about any address's balance.");
+  if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool summarizes at most 100 addresses at a time, so a pasted list stays reviewable line by line.");
+  var entries = [];
+  var byAddress = {};
+  var invalid = [];
+  var validCount = 0;
+  for (var i = 0; i < lines.length; i++) {
+    var dec = decodeErgoAddress(lines[i]);
+    if (!dec.valid) { invalid.push({ line: i + 1, input: lines[i], reason: dec.reason }); continue; }
+    validCount++;
+    if (Object.prototype.hasOwnProperty.call(byAddress, lines[i])) { byAddress[lines[i]].lines.push(i + 1); continue; }
+    var entry = {
+      address: lines[i], network: dec.network, type: dec.type, typeCode: dec.typeCode,
+      contentHex: dec.contentHex, contentBytes: dec.contentBytes,
+      publicKey: dec.publicKey, scriptHash: dec.scriptHash, ergoTree: dec.ergoTree,
+      note: dec.note, lines: [i + 1]
+    };
+    byAddress[lines[i]] = entry;
+    entries.push(entry);
+  }
+  var mainnetCount = 0, testnetCount = 0, p2pkCount = 0, p2shCount = 0, p2sCount = 0;
+  var byContent = {};
+  var contentOrder = [];
+  for (var e = 0; e < entries.length; e++) {
+    var en = entries[e];
+    if (en.network === "Mainnet") mainnetCount++; else testnetCount++;
+    if (en.typeCode === 1) p2pkCount++; else if (en.typeCode === 2) p2shCount++; else p2sCount++;
+    var key = en.typeCode + ":" + en.contentHex;
+    if (!Object.prototype.hasOwnProperty.call(byContent, key)) { byContent[key] = []; contentOrder.push(key); }
+    byContent[key].push(en.address);
+  }
+  var crossNetworkPairs = contentOrder.map(function (k) { return byContent[k]; }).filter(function (g) { return g.length > 1; });
+  var duplicateCount = validCount - entries.length;
+  var mixedNetworks = mainnetCount > 0 && testnetCount > 0;
+  var verdict = entries.length + (entries.length === 1 ? " distinct valid address" : " distinct valid addresses") + " (" + mainnetCount + " mainnet, " + testnetCount + " testnet; " + p2pkCount + " P2PK, " + p2shCount + " P2SH, " + p2sCount + " P2S).";
+  if (invalid.length === 0 && duplicateCount === 0 && !mixedNetworks) verdict += " Every line is a distinct, checksum-valid address on one network — the clean case.";
+  if (duplicateCount > 0) verdict += " " + duplicateCount + (duplicateCount === 1 ? " line is" : " lines are") + " a repeat of an address already listed — on a payout list a duplicate like that is how the same address gets paid twice, so each repeated address above is named with all of its line numbers.";
+  if (mixedNetworks) verdict += " The set mixes mainnet and testnet addresses: the two networks are separate worlds, an address guards boxes on its own network only, and sending mainnet ERG to a testnet address (or the reverse) loses it — a single-purpose list should sit on one network.";
+  if (crossNetworkPairs.length > 0) verdict += " " + crossNetworkPairs.length + (crossNetworkPairs.length === 1 ? " entry's content appears" : " entries' content appears") + " on BOTH networks (the same type and content under both prefixes, listed as pairs above) — that is tool 13's conversion inside one list, so check it was deliberate.";
+  if (invalid.length > 0) verdict += " " + invalid.length + (invalid.length === 1 ? " line is" : " lines are") + " not a valid payment address at all, listed above with tool 2's reason for each — nothing should ever be sent to those strings.";
+  return {
+    valid: true, reason: null,
+    entries: entries, invalid: invalid,
+    lineCount: lines.length, validCount: validCount,
+    distinctCount: entries.length, duplicateCount: duplicateCount, invalidCount: invalid.length,
+    mainnetCount: mainnetCount, testnetCount: testnetCount,
+    p2pkCount: p2pkCount, p2shCount: p2shCount, p2sCount: p2sCount,
+    mixedNetworks: mixedNetworks, crossNetworkPairs: crossNetworkPairs,
+    verdict: verdict
+  };
+}
+
 /* ---------- Babel fee calculator ---------- */
 /* Babel fees let a transaction pay its fee in a native token instead of
    ERG: a babel box holds ERG and its contract swaps tokens for that ERG
@@ -10597,7 +10684,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, summarizeAddressSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -11161,6 +11248,30 @@ if (typeof document !== "undefined") {
         return;
       }
       out.textContent = "That is a " + res.network + " " + res.type + " address, and its content is identical on both networks — only the prefix byte changes. The same address on " + res.convertedNetwork + " is: " + res.converted + " — Converting moves no funds and proves no ownership: the converted address guards boxes on " + res.convertedNetwork + " only, and sending " + res.network + " ERG to it would lose them. Converted locally; nothing was signed or sent.";
+    });
+
+    /* --- Address set summarizer --- */
+    document.getElementById("addrset-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("addrset-result");
+      var res = summarizeAddressSet(document.getElementById("addrset-in").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Summarized " + res.lineCount + (res.lineCount === 1 ? " line" : " lines") + ": " + res.validCount + " valid, " + res.distinctCount + " distinct, " + res.invalidCount + " invalid. " + res.verdict + " ";
+      msg += res.entries.map(function (e) {
+        var detail = e.typeCode === 1 ? (e.publicKey ? "public key " + e.publicKey : "content " + e.contentHex)
+          : e.typeCode === 2 ? "script hash " + e.scriptHash
+          : "the script itself as its content (" + e.contentBytes + " bytes of ErgoTree)";
+        var s = "Line" + (e.lines.length > 1 ? "s" : "") + " " + e.lines.join(", ") + ": " + e.address + " — " + e.network + " " + e.type + ", carrying " + detail + ".";
+        if (e.note) s += " Note: " + e.note;
+        return s;
+      }).join(" ");
+      if (res.crossNetworkPairs.length > 0) msg += " Cross-network pairs (same type and content, both networks): " + res.crossNetworkPairs.map(function (g) { return g.join(" ⇄ "); }).join(" · ") + ".";
+      if (res.invalid.length > 0) msg += " Invalid lines: " + res.invalid.map(function (iv) { return "line " + iv.line + " (" + iv.input + "): " + iv.reason; }).join(" · ");
+      msg += " Summarized locally; nothing was fetched, signed or sent, and nothing here says any address holds a balance or who owns it.";
+      out.textContent = msg;
     });
 
     /* --- Box ID calculator --- */

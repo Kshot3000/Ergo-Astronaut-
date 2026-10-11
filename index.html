@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>92 tools and counting — find the one you need:</p>
+    <p>93 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -328,6 +328,19 @@
         </select>
         <button type="submit" class="btn primary">Build this guard</button>
         <p id="guardbuild-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="segconst-calc" data-family="addresses">
+        <h3>93 · ErgoTree segregated-constants extractor (constant-segregated script hex → the constants it actually runs with)</h3>
+        <p>Every contract tree worth reading — the miner fee contract, DEX pools, oracle scripts — is <strong>constant-segregated</strong>: its header (0x10) pulls the script's constants out of the proposition into a section of their own, and the script that remains is only a <em>template</em> referring to them by placeholder number. Tools 10, 16 and 20 stop at that flag, honestly, because the tree's P2SH hash needs the constants substituted back into the template — but the constants themselves sit in the bytes in plain sight, and they are often the whole contract: a price, a recipient script, a pool's parameters. Paste such a tree and I walk its constants section locally — a VLQ count, then that many Sigma constants in exactly the form tool 18 reads as registers — and list each one by its placeholder number, with its type, its value and its raw bytes, plus the template bytes handed back for tools 10 and 53. A constant whose type this hub's reader does not decode stops the extraction with that constant named, never skipped past by guessing its length; and the substituted proposition and P2SH address are still <em>not</em> reconstructed, for the same reason as in tools 10 and 20 — but the tree's <strong>P2S</strong> address needs no substitution, because it carries these very bytes, so it is derived and shown. A tree that segregates nothing is a valid paste too: it is reported with zero constants and its whole proposition as the template. Read locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="segconst-hex">ErgoTree (hex)</label>
+        <input id="segconst-hex" spellcheck="false" placeholder="e.g. 1005040004000e36… (the miner fee contract)" autocomplete="off">
+        <label for="segconst-network">Network</label>
+        <select id="segconst-network">
+          <option selected>Mainnet</option><option>Testnet</option>
+        </select>
+        <button type="submit" class="btn primary">Extract the segregated constants</button>
+        <p id="segconst-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="addrtree-calc" data-family="addresses">
@@ -1376,6 +1389,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=93"></script>
+<script src="app.js?v=94"></script>
 </body>
 </html>

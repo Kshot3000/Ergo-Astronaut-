@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 92 tools on one page it beats scrolling.
+headers) — with 93 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1991,6 +1991,25 @@ headers) — with 92 tools on one page it beats scrolling.
   independent Python oracle reproducing the
   explainer's pinned single / all-of / any-of /
   2-of-3 trees and addresses byte-for-byte.
+- **ErgoTree segregated-constants extractor** —
+  the read side of the trees every other tool
+  declines: a constant-segregated ErgoTree's
+  constants section (a VLQ count, then that many
+  Sigma constants in the register form) walked
+  with the same type/data readers as the Sigma
+  constant inspector, listing each constant by
+  placeholder number with its type, value and
+  raw bytes, and handing the proposition
+  template bytes back verbatim. A constant
+  whose type is outside the decoded set stops
+  the extraction with that constant named, and
+  the substituted proposition / P2SH address is
+  still not reconstructed — but the P2S address
+  is derived, since it carries the tree bytes
+  themselves. Verified against an independent
+  Python oracle over the miner fee contract,
+  the second pinned segregated tree, and an
+  oracle-built size-flagged segregated tree.
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 108 tools on one page it beats scrolling.
+headers) — with 109 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -620,6 +620,32 @@ headers) — with 108 tools on one page it beats scrolling.
   Python oracle (pure affine curve arithmetic) over shifted,
   cancelling-term, fully cancelling, duplicated,
   triple-shifted, cancelling-list and real-key lists.
+- **Public key list pairwise differencer** — the paired case
+  of the list tools: two lists of compressed public keys
+  naming the same number of keys, differenced line by line
+  (Dᵢ = Aᵢ − Bᵢ), returning every pair's difference, each
+  list's plain sum by the list aggregator itself, and the
+  differences' total. It is the pairing law as a tool —
+  (A₁ − B₁) + … + (Aₙ − Bₙ) = (A₁ + … + Aₙ) − (B₁ + … + Bₙ) —
+  the operation behind checking a batch of updated script
+  constants against the batch they replace. Lists of
+  different lengths refuse outright naming both counts,
+  since pairing would invent a partner for the extra keys,
+  and each side is strict — an invalid line refuses the
+  whole differencing with the side and line named, since a
+  skipped key would misalign every pair after it. A pair
+  holding the same key on both sides differs to the point
+  at infinity, counted and reported as the identity. The
+  total is verified three ways before it is shown: every
+  difference is added back onto its own second key through
+  the group element calculator to return its first key, the
+  differences are summed forward and in reverse, and the
+  total must agree with the list comparer's own difference
+  of the two sums. Stated plainly on the page: differencing
+  public keys proves no ownership of any of them. Verified
+  against an independent Python oracle (pure affine curve
+  arithmetic) over mixed, identical, negative, cancelling,
+  large-multiple, cancelling-sum and real-key list pairs.
 - **Box set summarizer** — a whole set of boxes at once, one
   full serialized box per line: exact BigInt totals for ERG
   and for each token (aggregated by token ID across every box

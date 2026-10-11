@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>108 tools and counting — find the one you need:</p>
+    <p>109 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -850,6 +850,17 @@
         <textarea id="groupshift-keys" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line)" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Shift the keys</button>
         <p id="groupshift-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="grouppair-calc" data-family="addresses">
+        <h3>109 · Public key list pairwise differencer (two lists of public keys → the per-pair differences, and what they add up to)</h3>
+        <p>Tools 104 to 108 each work a list on its own terms; this tool pairs <strong>two</strong> lists up line by line: line 1 of the second list is subtracted from line 1 of the first, line 2 from line 2, and so on — D<sub>i</sub> = A<sub>i</sub> − B<sub>i</sub> — the shape of checking a batch of updated script constants against the batch they replace, or of the per-position gap between two snapshots of one key list. Paste both lists, one compressed key per line; the lists must name the <strong>same number of keys</strong>, and lists of different lengths refuse outright naming both counts, because pairing a longer list against a shorter one would invent a partner for the extra keys. Each side is <strong>strict</strong>, exactly as in tool 104: a line that is not a real point on the curve refuses the whole differencing with the side and the line named, because a silently skipped key would misalign every pair after it. A pair holding the same key on both sides differs to the <strong>point at infinity</strong>: a genuine pair, counted and reported as the identity it contributes, never silently dropped. Alongside the per-pair differences the tool returns each list's plain sum by tool 104 itself and the differences' total — and the governing law is the <strong>pairing law</strong>: the differences add up to exactly the difference of the sums, sumA − sumB, the same difference tool 106 reports. Nothing is shown until that law has been verified three ways inside the tool: each difference is computed by tool 103 and added back onto its own second key through tool 103 to return its first key, the differences are summed forward and in reverse, and the total must agree with tool 106's own difference of the sums, with cancelling sums checked as identities. Stated plainly: differencing public keys does <strong>not</strong> prove ownership of any of them, and no difference point comes with any claim about who holds its private key. Public keys only: never type a private key or seed into any website, this one included. Computed locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="grouppair-a">First list — compressed public keys (hex — one 66-character key per line, up to 100)</label>
+        <textarea id="grouppair-a" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line)" autocomplete="off"></textarea>
+        <label for="grouppair-b">Second list — compressed public keys (hex — one 66-character key per line, the same count as the first list)</label>
+        <textarea id="grouppair-b" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line — line i is subtracted from line i of the first list)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Difference the pairs</button>
+        <p id="grouppair-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxset-calc" data-family="boxes">
@@ -1582,6 +1593,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=109"></script>
+<script src="app.js?v=110"></script>
 </body>
 </html>

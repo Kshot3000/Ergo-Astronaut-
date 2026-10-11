@@ -4641,6 +4641,92 @@ function shiftPublicKeyList(keysText, shiftText) {
   return Object.assign(head, { infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet });
 }
 
+/* ---------- Public key list pairwise differencer (two paired lists -> per-pair differences and their total) ---------- */
+/* Tools 104-108 sum, weight, compare, scale or shift lists; this
+   tool pairs two lists up line by line: two lists of the SAME
+   length, where line i of the second list is subtracted from
+   line i of the first -- D_i = A_i - B_i -- the shape of checking
+   a batch of updated script constants against the batch they
+   replace, or of the per-position gap between two snapshots of
+   one key list. The pairing is positional and strict: each side
+   is composed from tool 104 itself (whose refusal names the side
+   and the line, because a silently skipped key would misalign
+   every pair after it), and lists of different lengths refuse
+   outright naming both counts, since pairing a longer list
+   against a shorter one would invent a partner for the extra
+   keys. A pair holding the same key on both sides differs to the
+   point at infinity: a genuine pair, counted and reported as
+   the identity it contributes, never silently dropped. Nothing
+   is shown until the pairing law itself has been verified three
+   ways inside the tool: each difference is computed by tool 103
+   and added back onto its own second key through tool 103 to
+   return its first key (an infinity pair is checked as an exact
+   equality instead), the differences are summed forward and in
+   reverse, and -- separately -- the total must equal tool
+   106's own difference of the two lists' sums (sumA - sumB),
+   with the identity sums checked as identities. The honest
+   boundary is stated on the page: differencing public keys
+   proves no ownership of any of them, and a difference point
+   may have no known private key at all. Public keys only: no
+   private key or seed is ever entered anywhere. Verified
+   against an independent Python oracle (oracle-grouppair.py,
+   pure affine curve arithmetic with built-in modular inverses
+   -- a different implementation strategy from this Jacobian
+   code) over a mixed list with an equal pair, identical lists,
+   a negative difference, a cancelling total, a real key, a
+   large-multiple pair, a cancelling first sum, and two
+   cancelling sums whose differences still cancel, before
+   coding. */
+function diffPublicKeyPairs(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, count: null, pairs: null, equalCount: null, sumAInfinity: null, sumACompressed: null, sumBInfinity: null, sumBCompressed: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
+  };
+  var a = aggregatePublicKeys(aText);
+  if (!a.valid) return fail("The FIRST list is refused: " + a.reason);
+  var b = aggregatePublicKeys(bText);
+  if (!b.valid) return fail("The SECOND list is refused: " + b.reason);
+  if (a.count !== b.count) return fail("The lists do not pair up: the first list holds " + a.count + (a.count === 1 ? " key" : " keys") + " and the second holds " + b.count + (b.count === 1 ? " key" : " keys") + " — pairing is line by line, so both lists must name the same number of keys. Add or remove lines until they match; nothing was computed, because pairing a longer list against a shorter one would invent a partner for the extra keys.");
+  var pairs = [];
+  var contributions = [];
+  var equalCount = 0;
+  for (var i = 0; i < a.keys.length; i++) {
+    var ia = inspectPublicKey(a.keys[i]);
+    var ib = inspectPublicKey(b.keys[i]);
+    if (!ia.valid || !ib.valid) return fail("Internal check failed: pair " + (i + 1) + ", accepted by tool 104, does not pass tool 32's inspection — refusing to show a differenced list.");
+    if (ia.publicKey === ib.publicKey) {
+      equalCount++;
+      pairs.push({ line: i + 1, a: ia.publicKey, b: ib.publicKey, diff: null, infinity: true });
+      contributions.push(null);
+      continue;
+    }
+    var d = calculateGroupElement(ia.publicKey, ib.publicKey, "Subtract (A - B)", "");
+    if (!d.valid || d.infinity) return fail("Internal check failed: tool 103 cannot difference pair " + (i + 1) + " of two different keys — refusing to show a differenced list.");
+    var back = calculateGroupElement(d.compressed, ib.publicKey, "Add (A + B)", "");
+    if (!back.valid || back.compressed !== ia.publicKey) return fail("Internal check failed: adding pair " + (i + 1) + "'s difference back onto its second key through tool 103 does not return its first key — refusing to show a differenced list.");
+    pairs.push({ line: i + 1, a: ia.publicKey, b: ib.publicKey, diff: d.compressed, infinity: false });
+    contributions.push([BigInt("0x" + d.x), BigInt("0x" + d.y), 1n]);
+  }
+  var fwd = null;
+  for (var f = 0; f < contributions.length; f++) fwd = secpAdd(fwd, contributions[f]);
+  var rev = null;
+  for (var r = contributions.length - 1; r >= 0; r--) rev = secpAdd(rev, contributions[r]);
+  var totalC = secpCompressJacobian(fwd);
+  if (secpCompressJacobian(rev) !== totalC) return fail("Internal check failed: summing the differences in input order and in reverse order disagree — refusing to show a total.");
+  /* The pairing law, checked the other way around: the total of
+     the per-pair differences is tool 106's difference of the two
+     sums (sumA - sumB), identities included. */
+  var cmp = comparePublicKeyLists(aText, bText);
+  if (!cmp.valid) return fail("Internal check failed: tool 106 cannot compare the two lists — refusing to show a total.");
+  if ((totalC === null) !== cmp.diffInfinity || (totalC !== null && totalC !== cmp.diffCompressed)) return fail("Internal check failed: differencing the lists pair by pair and differencing their sums by tool 106 disagree — the pairing check failed, refusing to show a total.");
+  var head = { valid: true, reason: null, count: a.count, pairs: pairs, equalCount: equalCount, sumAInfinity: a.infinity, sumACompressed: a.compressed, sumBInfinity: b.infinity, sumBCompressed: b.compressed };
+  if (fwd === null) {
+    return Object.assign(head, { infinity: true, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null });
+  }
+  var ir = inspectPublicKey(totalC);
+  if (!ir.valid) return fail("Internal check failed: the differences' total does not pass tool 32's inspection — refusing to show it.");
+  return Object.assign(head, { infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet });
+}
+
 /* ---------- Box set summarizer (many boxes -> one set of totals) ---------- */
 /* Tool 15 reads one box; a wallet holds many. This reads a whole
    pasted set — one full serialized box per line — and answers for
@@ -11757,7 +11843,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -13370,6 +13456,30 @@ if (typeof document !== "undefined") {
       var msg = "✓ Shifted locally. " + plainText + multText + " The " + counts + " shifted by " + res.shift + " total " + res.compressed + " — the point x " + res.x + ", y " + res.y + " (" + res.yParity + "), verified two ways before being shown: every shifted key had the shift subtracted back off it through tool 103 to return its original key, the shifted terms were summed forward and in reverse, and the plain sum plus the shift times the list length (the translation law — both paths must land on the same point) agrees." + termList + dupNote + " ";
       msg += "As a Sigma constant the total is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
       msg += "Arithmetic only: shifting public keys proves no ownership of any of them, and no shifted point comes with any claim about who holds its private key. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Public key list pairwise differencer --- */
+    document.getElementById("grouppair-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("grouppair-result");
+      var res = diffPublicKeyPairs(document.getElementById("grouppair-a").value, document.getElementById("grouppair-b").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var counts = res.count + (res.count === 1 ? " pair" : " pairs");
+      var pairList = " Per pair: " + res.pairs.map(function (p) { return "line " + p.line + " — " + p.a + " − " + p.b + " = " + (p.infinity ? "the point at infinity (the pair holds the same key on both sides, so the two cancel)" : p.diff); }).join("; ") + ".";
+      var equalNote = res.equalCount ? " " + res.equalCount + (res.equalCount === 1 ? " pair holds" : " pairs hold") + " the same key on both sides and contributes the identity." : "";
+      var sumAText = res.sumAInfinity ? "The first list's sum (tool 104) is the point at infinity — its terms cancel." : "The first list's sum (tool 104) is " + res.sumACompressed + ".";
+      var sumBText = res.sumBInfinity ? " The second list's sum (tool 104) is the point at infinity — its terms cancel." : " The second list's sum (tool 104) is " + res.sumBCompressed + ".";
+      if (res.infinity) {
+        out.textContent = "✓ Differenced locally. " + sumAText + sumBText + " The " + counts + " differ to a total of the point at infinity — the secp256k1 group's identity element: the differences cancel exactly. That is a genuine result, not an error, but it has no compressed form, no Sigma group-element constant and no P2PK address — Ergo's 33-byte group-element encoding cannot write it." + pairList + equalNote + " Verified three ways before being shown: every difference was added back onto its own second key through tool 103 to return its first key, the differences were summed forward and in reverse, and the total agrees with tool 106's difference of the two sums. Nothing was fetched, signed or sent.";
+        return;
+      }
+      var msg = "✓ Differenced locally. " + sumAText + sumBText + " The " + counts + " differ to a total of " + res.compressed + " — the point x " + res.x + ", y " + res.y + " (" + res.yParity + "), verified three ways before being shown: every difference was added back onto its own second key through tool 103 to return its first key, the differences were summed forward and in reverse, and the total agrees with tool 106's difference of the two sums (the pairing law — both paths must land on the same point)." + pairList + equalNote + " ";
+      msg += "As a Sigma constant the total is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
+      msg += "Arithmetic only: differencing public keys proves no ownership of any of them, and no difference point comes with any claim about who holds its private key. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

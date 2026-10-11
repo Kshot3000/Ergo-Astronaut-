@@ -1969,6 +1969,89 @@ function summarizeAddressSet(addressesText) {
   };
 }
 
+/* ---------- Address set difference ---------- */
+/* Tool 97 triages one list; tools 88–90 subtract box and header sets.
+   This is the same asymmetric operation for address lists: a master
+   payout list minus the addresses already paid, an address book minus
+   the entries retired. Two deliberate differences from tool 97.
+   First, strictness: tool 97 REPORTS invalid lines because a list
+   carries no value a skipped line could understate, but a subtraction
+   hands back a remainder meant to be used as-is — a skipped line in
+   the first list would silently drop an address from that remainder,
+   and a skipped line in the second would silently fail to remove
+   one — so either side containing an invalid line refuses the whole
+   subtraction, with the side, line and tool 2's reason named.
+   Second, identity: an address is removed only by ITSELF, the exact
+   string. Its cross-network twin (same type and content under the
+   other network's prefix, tool 13's conversion) is a different
+   address guarding boxes on a different world, so it removes
+   nothing — but it is exactly the trap in a hand-kept subtraction
+   ("I removed that one" — on the wrong network), so a remainder
+   address whose twin sits in the second list is reported as a
+   cross-network near miss. Duplicates inside a side collapse to the
+   distinct address (a set, as everywhere on this hub) and are
+   counted. The remainder keeps the FIRST list's first-appearance
+   order — a remainder handed back for pasting onward as a list
+   should read in the order its owner wrote it, not in an order
+   invented here — and it is re-summarized by tool 97 itself before
+   anything is shown, so the two tools can never disagree about it.
+   Verified against an independent Python oracle (oracle-addrminus.py)
+   over the hub's pinned vectors before coding. */
+function subtractAddressSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, distinctCountA: null, distinctCountB: null, duplicateCountA: null, duplicateCountB: null, removedCount: null, remainderCount: null, removedAddresses: null, remainderAddresses: null, remainderEntries: null, remainderText: null, crossNetworkNearMisses: null, remainderMainnetCount: null, remainderTestnetCount: null };
+  };
+  var strict = function (text, side) {
+    var s = summarizeAddressSet(text);
+    if (!s.valid) return { error: "The " + side + " list is refused: " + s.reason };
+    if (s.invalidCount > 0) {
+      var iv = s.invalid[0];
+      return { error: "The " + side + " list is refused: line " + iv.line + " (" + iv.input + ") is not a valid payment address — " + iv.reason + " A subtraction hands back a remainder meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line in the first list would silently drop an address from the remainder, and one in the second would silently fail to remove one." };
+    }
+    return { summary: s };
+  };
+  var pa = strict(aText, "FIRST");
+  if (pa.error) return fail(pa.error);
+  var pb = strict(bText, "SECOND");
+  if (pb.error) return fail(pb.error);
+  var a = pa.summary, b = pb.summary;
+  var inB = {};
+  var bByContent = {};
+  b.entries.forEach(function (e) {
+    inB[e.address] = true;
+    bByContent[e.typeCode + ":" + e.contentHex] = e.address;
+  });
+  var remainderEntriesA = a.entries.filter(function (e) { return !inB[e.address]; });
+  var removedAddresses = a.entries.filter(function (e) { return inB[e.address]; }).map(function (e) { return e.address; });
+  var remainderAddresses = remainderEntriesA.map(function (e) { return e.address; });
+  if (remainderAddresses.length + removedAddresses.length !== a.distinctCount) return fail("Internal error: the subtraction accounting does not close — nothing was shown rather than an unverified remainder.");
+  var nearMisses = [];
+  remainderEntriesA.forEach(function (e) {
+    var twin = bByContent[e.typeCode + ":" + e.contentHex];
+    if (twin && twin !== e.address) nearMisses.push([e.address, twin]);
+  });
+  var remainderText = remainderAddresses.join("\n");
+  var remainderEntries = [], remainderMainnetCount = 0, remainderTestnetCount = 0;
+  if (remainderAddresses.length) {
+    var s = summarizeAddressSet(remainderText);
+    if (!s.valid || s.distinctCount !== remainderAddresses.length || s.invalidCount !== 0) return fail("Internal error: the remainder does not re-summarize as itself — nothing was shown rather than an unverified remainder.");
+    remainderEntries = s.entries;
+    remainderMainnetCount = s.mainnetCount;
+    remainderTestnetCount = s.testnetCount;
+  }
+  var verdict = remainderAddresses.length === 0 ? "emptied" : (removedAddresses.length === 0 ? "unchanged" : "partial");
+  return {
+    valid: true, reason: null, verdict: verdict,
+    distinctCountA: a.distinctCount, distinctCountB: b.distinctCount,
+    duplicateCountA: a.duplicateCount, duplicateCountB: b.duplicateCount,
+    removedCount: removedAddresses.length, remainderCount: remainderAddresses.length,
+    removedAddresses: removedAddresses, remainderAddresses: remainderAddresses,
+    remainderEntries: remainderEntries, remainderText: remainderText,
+    crossNetworkNearMisses: nearMisses,
+    remainderMainnetCount: remainderMainnetCount, remainderTestnetCount: remainderTestnetCount
+  };
+}
+
 /* ---------- Babel fee calculator ---------- */
 /* Babel fees let a transaction pay its fee in a native token instead of
    ERG: a babel box holds ERG and its contract swaps tokens for that ERG
@@ -10684,7 +10767,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, summarizeAddressSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -11271,6 +11354,31 @@ if (typeof document !== "undefined") {
       if (res.crossNetworkPairs.length > 0) msg += " Cross-network pairs (same type and content, both networks): " + res.crossNetworkPairs.map(function (g) { return g.join(" ⇄ "); }).join(" · ") + ".";
       if (res.invalid.length > 0) msg += " Invalid lines: " + res.invalid.map(function (iv) { return "line " + iv.line + " (" + iv.input + "): " + iv.reason; }).join(" · ");
       msg += " Summarized locally; nothing was fetched, signed or sent, and nothing here says any address holds a balance or who owns it.";
+      out.textContent = msg;
+    });
+
+    /* --- Address set difference --- */
+    document.getElementById("addrminus-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("addrminus-result");
+      var res = subtractAddressSets(document.getElementById("addrminus-a").value, document.getElementById("addrminus-b").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.verdict === "emptied") {
+        msg = "✓ The second list covers every distinct address in the first — all " + res.distinctCountA + " are removed, so the remainder is empty. Emptied is an answer, not an error: the first list minus the second either leaves something or it does not. Subtraction only, over the lists you pasted: it fetches nothing and says nothing about any address's balance or who owns it. Subtracted locally; nothing was fetched, signed or sent.";
+        out.textContent = msg;
+        return;
+      }
+      msg = "✓ Of " + res.distinctCountA + " distinct address(es) in the first list, the second list's " + res.distinctCountB + " distinct address(es) remove " + res.removedCount + ", leaving a remainder of " + res.remainderCount + " (" + res.remainderMainnetCount + " mainnet, " + res.remainderTestnetCount + " testnet). ";
+      if (res.duplicateCountA + res.duplicateCountB > 0) msg += "Repeated lines inside a list collapsed to the distinct address before subtracting (" + res.duplicateCountA + " in the first, " + res.duplicateCountB + " in the second) — each list is treated as the set it names. ";
+      if (res.verdict === "unchanged") msg += "The two lists share no address at all — the second list removes nothing, and the remainder is the first list exactly. ";
+      else msg += "Removed: " + res.removedAddresses.join(", ") + ". ";
+      msg += "Direction matters: this is the first list minus the second — swapping the two lists would answer the reverse question. ";
+      if (res.crossNetworkNearMisses.length > 0) msg += "Cross-network near misses — NOT removed: " + res.crossNetworkNearMisses.map(function (p) { return p[0] + " stays, because the second list holds only its other-network twin " + p[1] + " (same type and content, different network — a different address)"; }).join("; ") + ". Check those were deliberate before using the remainder. ";
+      msg += "Remainder, in the first list's order, ready to paste into tool 97 or a payout list: " + res.remainderText.replace(/\n/g, ", ") + " Subtraction only, over the lists you pasted: it fetches nothing and says nothing about any address's balance or who owns it. Subtracted locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

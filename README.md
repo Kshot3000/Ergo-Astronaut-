@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 97 tools on one page it beats scrolling.
+headers) — with 98 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -2101,6 +2101,30 @@ headers) — with 97 tools on one page it beats scrolling.
   P2SH pairs, the fee-contract P2S, a
   tampered address, an EIP-44 type-4
   representation).
+- **Address set difference** — a first
+  list of addresses minus a second (a
+  master payout list minus the addresses
+  already paid), the remainder handed
+  back by itself in the first list's own
+  order, ready to paste onward. Identity
+  is exact: only the same string on the
+  same network removes an address, and a
+  remainder address whose cross-network
+  twin sits in the second list is named
+  as a near miss instead of silently
+  staying. Unlike the summarizer's
+  triage, an invalid line on either side
+  refuses the whole subtraction — a
+  skipped line would silently drop an
+  address from the remainder or fail to
+  remove one — and the remainder is
+  re-summarized by the summarizer itself
+  before it is shown. Verified against
+  an independent Python oracle over the
+  hub's pinned vectors (partial, emptied
+  and unchanged cases, the cross-network
+  near miss, strict refusals on both
+  sides, and the reverse direction).
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

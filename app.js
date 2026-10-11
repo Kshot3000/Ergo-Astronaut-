@@ -4450,6 +4450,103 @@ function comparePublicKeyLists(aText, bText) {
   };
 }
 
+/* ---------- Public key list scaler (one coefficient x many keys -> every key scaled, and the scaled total) ---------- */
+/* Tool 105 gives every term its own coefficient; this is the
+   one-coefficient case, and it is the case the distributive law
+   governs: k * (P1 + ... + Pn) is k * P1 + ... + k * Pn, so a
+   single number scales a whole list at once -- the operation
+   behind scaling an aggregate point, re-randomising a commitment
+   list, or checking a batch of script constants against one
+   exponent. The user pastes one whole-number coefficient
+   (negatives allowed) and a list of compressed keys; the tool
+   returns every key scaled, the list's plain sum by tool 104
+   itself, and the scaled total. The coefficient is reduced
+   modulo the group order n before use -- k and k mod n move
+   every point identically -- with typed and reduced values both
+   reported. A coefficient reducing to 0 sends every term, and
+   so the total, to the point at infinity: a genuine answer,
+   reported term by term as the identity rather than dropped.
+   Every line is validated by tool 32 itself (via tool 104's own
+   strict aggregation, whose refusal names the line), because a
+   silently skipped key would change both sums with no sign it
+   had happened. Repeated keys are terms written twice, exactly
+   as tool 104 established: each occurrence is scaled and
+   counted. Nothing is shown until the distributive law itself
+   has been verified two independent ways inside the tool: each
+   scaled key recomputed in the opposite bit order (as in tool
+   103's multiply), the scaled terms summed forward and in
+   reverse, and -- separately -- the plain sum scaled once by
+   tool 103 itself; the two totals must agree, with the
+   identity cases (zero coefficient, a plain sum that is
+   already the identity) checked as identities. The honest
+   boundary is stated on the page: the coefficient is a plain
+   number the user supplies, an ordinary public exponent of the
+   kind scripts carry -- scaling public keys proves no
+   ownership of any of them, and no private key or seed is ever
+   entered anywhere. Verified against an independent Python
+   oracle (oracle-groupscale.py, pure affine curve arithmetic
+   with built-in modular inverses -- a different implementation
+   strategy from this Jacobian code) over a scaled generator
+   pair, a zero coefficient, a negative coefficient, an
+   order-sized coefficient, a cancelling list, a real key, a
+   large coefficient on a large multiple, a duplicated key and
+   the unit coefficient, before coding. */
+function scalePublicKeyList(keysText, scalarText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, count: null, distinctCount: null, duplicates: null, scalar: null, scalarReduced: null, zeroScalar: null, terms: null, plainInfinity: null, plainCompressed: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
+  };
+  var ks = (scalarText == null ? "" : String(scalarText)).trim();
+  if (!/^-?[0-9]+$/.test(ks)) return fail("The coefficient \"" + ks + "\" is not a whole number written in decimal (digits, with an optional leading minus) — write the one number the whole list is scaled by, for example \"3\" or \"-1\". Coefficients are ordinary public exponents of the kind a script carries; a private key or seed is never entered anywhere, including here.");
+  if (ks.replace("-", "").length > 1000) return fail("The coefficient is capped at 1000 digits — more than enough for any exponent a script carries (the group order itself has 78).");
+  var k = BigInt(ks);
+  var red = k % SECP_N;
+  if (red < 0n) red += SECP_N;
+  var agg = aggregatePublicKeys(keysText);
+  if (!agg.valid) return fail(agg.reason);
+  var terms = [];
+  var contributions = [];
+  for (var i = 0; i < agg.keys.length; i++) {
+    var ik = inspectPublicKey(agg.keys[i]);
+    if (!ik.valid) return fail("Internal check failed: line " + (i + 1) + ", accepted by tool 104, does not pass tool 32's inspection — refusing to show a scaled list.");
+    var scaled = null;
+    var scaledC = null;
+    if (red !== 0n) {
+      var pt = [BigInt("0x" + ik.x), BigInt("0x" + ik.y), 1n];
+      scaled = secpScalarMulPoint(pt, red);
+      scaledC = secpCompressJacobian(scaled);
+      var msbC = secpCompressJacobian(secpScalarMulPointMsb(pt, red));
+      if (msbC !== scaledC) return fail("Internal check failed: line " + (i + 1) + "'s scaled key recomputed in the opposite bit order disagrees — refusing to show a scaled list.");
+      var sk = inspectPublicKey(scaledC);
+      if (!sk.valid) return fail("Internal check failed: line " + (i + 1) + "'s scaled key does not pass tool 32's inspection — refusing to show it.");
+    }
+    terms.push({ line: i + 1, publicKey: ik.publicKey, scaled: scaledC, infinity: red === 0n });
+    contributions.push(scaled);
+  }
+  var fwd = null;
+  for (var f = 0; f < contributions.length; f++) fwd = secpAdd(fwd, contributions[f]);
+  var rev = null;
+  for (var r = contributions.length - 1; r >= 0; r--) rev = secpAdd(rev, contributions[r]);
+  var totalC = secpCompressJacobian(fwd);
+  if (secpCompressJacobian(rev) !== totalC) return fail("Internal check failed: summing the scaled terms in input order and in reverse order disagree — refusing to show a total.");
+  /* The distributive law, checked the other way around: scale
+     the plain sum once, through tool 103 itself, and require
+     the same total -- with the identity cases as identities. */
+  if (red === 0n || agg.infinity) {
+    if (totalC !== null) return fail("Internal check failed: with " + (red === 0n ? "a coefficient reducing to 0" : "a plain sum at the point at infinity") + " the scaled total must be the point at infinity — refusing to show a total.");
+  } else {
+    var via = calculateGroupElement(agg.compressed, "", "Multiply (k * A)", ks);
+    if (!via.valid) return fail("Internal check failed: tool 103 cannot scale the plain sum — refusing to show a total.");
+    if (via.infinity ? totalC !== null : via.compressed !== totalC) return fail("Internal check failed: scaling the list term by term and scaling its plain sum by tool 103 disagree — the distributive check failed, refusing to show a total.");
+  }
+  var head = { valid: true, reason: null, count: agg.count, distinctCount: agg.distinctCount, duplicates: agg.duplicates, scalar: k.toString(), scalarReduced: red.toString(), zeroScalar: red === 0n, terms: terms, plainInfinity: agg.infinity, plainCompressed: agg.compressed };
+  if (fwd === null) {
+    return Object.assign(head, { infinity: true, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null });
+  }
+  var ir = inspectPublicKey(totalC);
+  if (!ir.valid) return fail("Internal check failed: the scaled total does not pass tool 32's inspection — refusing to show it.");
+  return Object.assign(head, { infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet });
+}
+
 /* ---------- Box set summarizer (many boxes -> one set of totals) ---------- */
 /* Tool 15 reads one box; a wallet holds many. This reads a whole
    pasted set — one full serialized box per line — and answers for
@@ -11566,7 +11663,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -13131,6 +13228,30 @@ if (typeof document !== "undefined") {
         msg += "Arithmetically, the sums DIFFER, and the difference sumA − sumB is " + res.diffCompressed + " — the point x " + res.diffX + ", y " + res.diffY + " (" + res.diffYParity + "), computed by tool 103 and verified by adding it back onto the second sum to return the first. As a Sigma constant it is the SGroupElement " + res.diffSigmaConstantHex + " (tool 18); its P2PK addresses: mainnet " + res.diffMainnet + " — testnet " + res.diffTestnet + ". ";
       }
       msg += "Arithmetic only: comparing public keys proves no ownership of any of them, and a plain sum is not a secure multisig scheme (the rogue-key attack — tool 104 states it in full). Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Public key list scaler --- */
+    document.getElementById("groupscale-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("groupscale-result");
+      var res = scalePublicKeyList(document.getElementById("groupscale-keys").value, document.getElementById("groupscale-scalar").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var counts = res.count + (res.count === 1 ? " key" : " keys") + " (" + res.distinctCount + " distinct)";
+      var termList = " Per key: " + res.terms.map(function (t) { return "line " + t.line + " — " + res.scalar + " × " + t.publicKey + " = " + (t.infinity ? "the point at infinity (a coefficient reducing to 0 sends every point to the identity)" : t.scaled); }).join("; ") + ".";
+      var dupNote = res.duplicates.length ? " Repeated keys, each occurrence scaled and counted as its own term: " + res.duplicates.map(function (d) { return d.publicKey + " × " + d.count + " (lines " + d.lines.join(", ") + ")"; }).join("; ") + "." : "";
+      var plainText = res.plainInfinity ? "The list's plain sum (tool 104) is the point at infinity — its terms cancel before any scaling." : "The list's plain sum (tool 104) is " + res.plainCompressed + ".";
+      var reducedNote = res.scalar !== res.scalarReduced ? " The coefficient was reduced modulo the group order n before use — " + res.scalar + " and " + res.scalarReduced + " move every point identically." : "";
+      if (res.infinity) {
+        out.textContent = "✓ Scaled locally. " + plainText + " The scaled total of the " + counts + " is the point at infinity — the secp256k1 group's identity element: " + (res.zeroScalar ? "the coefficient reduces to 0, so every term contributes the identity" : "the scaled terms cancel exactly") + ". That is a genuine result, not an error, but it has no compressed form, no Sigma group-element constant and no P2PK address — Ergo's 33-byte group-element encoding cannot write it." + termList + dupNote + reducedNote + " Verified two ways before being shown: the scaled terms summed forward and in reverse, and the plain sum scaled once by tool 103, agree. Nothing was fetched, signed or sent.";
+        return;
+      }
+      var msg = "✓ Scaled locally. " + plainText + " The " + counts + " scaled by " + res.scalar + " total " + res.compressed + " — the point x " + res.x + ", y " + res.y + " (" + res.yParity + "), verified two ways before being shown: every scaled key recomputed in the opposite bit order, the scaled terms summed forward and in reverse, and the plain sum scaled once by tool 103 (the distributive law — both paths must land on the same point)." + termList + dupNote + reducedNote + " ";
+      msg += "As a Sigma constant the total is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
+      msg += "Arithmetic only: the coefficient is a plain number you supplied, an ordinary public exponent of the kind scripts carry — scaling public keys proves no ownership of any of them. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>106 tools and counting — find the one you need:</p>
+    <p>107 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -828,6 +828,17 @@
         <textarea id="groupdiff-b" rows="5" spellcheck="false" placeholder="e.g. 02f9308a01…3bce036f9 (one compressed public key per line)" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Compare the lists</button>
         <p id="groupdiff-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="groupscale-calc" data-family="addresses">
+        <h3>107 · Public key list scaler (one coefficient × many public keys → every key scaled, and the scaled total)</h3>
+        <p>Tool 105 gives every term its own coefficient; this tool is the one-coefficient case, and it is the case the <strong>distributive law</strong> governs: k · (P₁ + … + Pₙ) is k · P₁ + … + k · Pₙ, so a single number scales a whole list at once — the operation behind scaling an aggregate point, re-randomising a list of commitments, or checking a batch of script constants against one exponent. Paste one whole-number coefficient (negatives allowed — scaling by −1 is exactly negating every key on the list) and the compressed keys, one per line, and this tool returns every key scaled, the list's plain sum by tool 104 itself, and the scaled total. The coefficient is reduced modulo the group order n before use — k and k mod n move every point identically — with the typed and reduced values both reported. A coefficient that reduces to 0 sends every term, and so the total, to the <strong>point at infinity</strong>: a genuine answer, reported term by term as the identity it contributes, never silently dropped. Every line is validated by tool 32 itself and the list is <strong>strict</strong>, exactly as in tool 104: a line that is not a real point on the curve refuses the whole scaling with the line named, because a silently skipped key would change both sums with no sign it had happened. Repeated keys are terms written twice — each occurrence is scaled and counted, as tool 104 established. Nothing is shown until the distributive law itself has been verified two ways inside the tool: each scaled key recomputed in the opposite bit order, the scaled terms summed forward and in reverse, and — separately — the plain sum scaled once by tool 103 itself; the two totals must agree. Stated plainly: the coefficient is a plain number you supply, an ordinary public exponent of the kind scripts carry — scaling public keys does <strong>not</strong> prove ownership of any of them, and no scaled point comes with any claim about who holds its private key. Public keys and public exponents only: never type a private key or seed into any website, this one included. Computed locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="groupscale-scalar">Coefficient k — a whole number in decimal (may be negative, reduced modulo the group order)</label>
+        <input id="groupscale-scalar" spellcheck="false" placeholder="e.g. 3 — a public exponent, never a private key" autocomplete="off">
+        <label for="groupscale-keys">Compressed public keys (hex — one 66-character key per line, up to 100)</label>
+        <textarea id="groupscale-keys" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Scale the keys</button>
+        <p id="groupscale-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxset-calc" data-family="boxes">
@@ -1560,6 +1571,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=107"></script>
+<script src="app.js?v=108"></script>
 </body>
 </html>

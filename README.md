@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 106 tools on one page it beats scrolling.
+headers) — with 107 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -567,6 +567,32 @@ headers) — with 106 tools on one page it beats scrolling.
   curve arithmetic) over equal-from-disjoint, identical,
   reordered, cancelling, count-only and large-multiple list
   pairs.
+- **Public key list scaler** — the one-coefficient case of
+  the weighted aggregator: one whole-number coefficient and
+  a list of compressed public keys, returning every key
+  scaled, the list's plain sum by the list aggregator
+  itself, and the scaled total. It is the distributive law
+  as a tool — k · (P₁ + … + Pₙ) = k · P₁ + … + k · Pₙ — the
+  operation behind scaling an aggregate point or checking a
+  batch of script constants against one exponent. The
+  coefficient may be negative (scaling by −1 negates every
+  key) and is reduced modulo the group order with typed and
+  reduced values reported; a coefficient reducing to 0
+  sends every term, and the total, to the point at infinity,
+  reported term by term as the identity. Every line is
+  validated by the public key inspector and the list is
+  strict — an invalid line refuses the whole scaling with
+  the line named — and repeated keys are scaled and counted
+  as the separate terms they are. The total is verified two
+  ways before it is shown: the scaled terms summed forward
+  and in reverse, and the plain sum scaled once by the
+  group element calculator, must agree. Stated plainly on
+  the page: the coefficient is a plain public exponent the
+  user supplies, and scaling public keys proves no
+  ownership of any of them. Verified against an independent
+  Python oracle (pure affine curve arithmetic) over scaled,
+  zero, negative, order-sized, cancelling, duplicated,
+  unit-coefficient and real-key lists.
 - **Box set summarizer** — a whole set of boxes at once, one
   full serialized box per line: exact BigInt totals for ERG
   and for each token (aggregated by token ID across every box

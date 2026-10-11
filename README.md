@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 90 tools on one page it beats scrolling.
+headers) — with 91 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1954,6 +1954,25 @@ headers) — with 90 tools on one page it beats scrolling.
   a disjoint pair that removes nothing, a forked
   remainder pair, a gapped remainder, and the
   swapped pair returning the other side's header.
+- **ErgoTree guard explainer** — who can actually
+  spend: walks a pure sigma guard's SigmaBoolean
+  structure (ProveDlog keys, AND / OR / ATLEAST
+  thresholds, Diffie-Hellman tuples, trivially
+  true/false branches) in the reference
+  serialization and states the spending rule in
+  plain language — a single key, a k-of-n multisig
+  with each key's own P2PK address read out, an
+  all-of or any-of guard, an always-true tree
+  anyone can spend, an always-false tree no one
+  can — flagging a TRUE branch hidden inside an
+  OR or threshold, which quietly opens or weakens
+  the guard. General ErgoScript trees and
+  constant-segregated trees are reported as what
+  they are, never guessed at. Verified against an
+  independent Python oracle whose addresses match
+  Kyle's own P2PK address and the fleet python
+  cross-check vectors, and whose single-key P2SH
+  matches tool 10 exactly.
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

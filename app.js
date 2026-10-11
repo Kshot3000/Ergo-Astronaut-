@@ -997,6 +997,150 @@ function analyzeErgoTree(treeHex, networkStr) {
   return base;
 }
 
+/* ---------- ErgoTree guard explainer (pure sigma proposition -> plain language) ---------- */
+/* Tools 10/11/16 read a tree's header and hash, but a multisig
+   tree's actual spending rule lives in its SigmaBoolean structure,
+   which none of them walks. When a tree's whole proposition is one
+   SigmaProp constant — first proposition byte 0x08, the SSigmaProp
+   type code — the rest is a SigmaBoolean in the reference
+   serialization (sigma-rust ergotree-ir serialization/sigmaboolean.rs
+   and op_code.rs, OpCode = 112 + shift):
+     0xcd ProveDlog    + 33-byte compressed point
+     0xce ProveDhTuple + 4 x 33-byte compressed points
+     0x96 Cand (AND)   + u16be count + that many SigmaBooleans
+     0x97 Cor  (OR)    + u16be count + that many SigmaBooleans
+     0x98 Cthreshold   + u16be k + u16be count + that many SigmaBooleans
+     0xd2 TrivialProp false, 0xd3 TrivialProp true
+   Conjecture item counts are BoundedVec 1..=255 in the reference,
+   and a threshold needs 1 <= k <= count, so both are enforced here.
+   Anything else as the proposition's first byte is a general
+   ErgoScript expression (arithmetic, HEIGHT comparisons, method
+   calls) — reported as a script this tool does not decode, never
+   guessed at. A 0x08 body that then fails the sigma grammar is
+   malformed, not a script: it claims to be a SigmaProp constant and
+   does not parse as one. Verified against an independent Python
+   oracle (hidden_files/oracle-guard.py) whose P2PK addresses match
+   Kyle's own address and the fleet python cross-check vectors, and
+   whose P2SH for the single-key tree matches tool 10 exactly. */
+var SIGMA_OP_DLOG = 0xcd, SIGMA_OP_DHTUPLE = 0xce, SIGMA_OP_AND = 0x96, SIGMA_OP_OR = 0x97, SIGMA_OP_ATLEAST = 0x98, SIGMA_OP_FALSE = 0xd2, SIGMA_OP_TRUE = 0xd3;
+function explainErgoTreeGuard(treeHex, networkStr) {
+  var out = { valid: false, reason: null, network: null, header: null, version: null, sizeFlag: false, segregated: false, pureSigma: false, kind: null, verdict: null, lines: [], keys: [], keyCount: 0, dlogCount: 0, dhTupleCount: 0, andCount: 0, orCount: 0, thresholdCount: 0, hasTrivialTrue: false, hasTrivialFalse: false, p2shAddress: null, propositionHex: null };
+  var info = analyzeErgoTree(treeHex, networkStr);
+  out.network = info.network; out.header = info.header; out.version = info.version; out.sizeFlag = info.sizeFlag; out.segregated = info.segregated;
+  if (!info.valid) { out.reason = info.reason; return out; }
+  out.valid = true;
+  out.p2shAddress = info.p2shAddress;
+  if (info.segregated) { out.reason = info.reason; return out; }
+  var bytes = hexToBytes(treeHex);
+  var offset = 1;
+  if (info.sizeFlag) offset += readVlqSize(bytes, offset).length;
+  var proposition = bytes.subarray(offset);
+  out.propositionHex = bytesToHex(proposition);
+  if (proposition[0] !== 0x08) {
+    out.kind = "script";
+    out.verdict = "This tree's proposition does not start with the SigmaProp constant marker (0x08), so it is a general ErgoScript expression — arithmetic, height or value conditions, register reads, method calls — not a pure signature guard. Tools 10 and 16 still read its header and derive its P2SH address; this tool explains pure sigma guards only and will not guess at a general script's meaning.";
+    return out;
+  }
+  var pos = 1;
+  var nodeCount = 0;
+  var failParse = function (why) { throw new Error(why); };
+  var readU16 = function (what) {
+    if (pos + 2 > proposition.length) failParse("The sigma proposition ends in the middle of the " + what + " — the tree hex is truncated.");
+    var v = (proposition[pos] << 8) | proposition[pos + 1];
+    pos += 2;
+    return v;
+  };
+  var readPoint = function (what) {
+    if (pos + 33 > proposition.length) failParse("The sigma proposition ends in the middle of " + what + " — a compressed group element is 33 bytes and the tree hex is truncated.");
+    var pt = proposition.subarray(pos, pos + 33);
+    if (pt[0] !== 0x02 && pt[0] !== 0x03) failParse("A group element inside the guard does not start with a compressed-point prefix (02 or 03) — this is not a standard sigma proposition.");
+    pos += 33;
+    return bytesToHex(pt);
+  };
+  var parseBool = function (depth) {
+    if (depth > 16) failParse("The sigma proposition nests conjectures more than 16 levels deep — no reference wallet builds guards like that, so this is treated as malformed rather than real.");
+    if (++nodeCount > 512) failParse("The sigma proposition carries more than 512 nodes — no reference wallet builds guards like that, so this is treated as malformed rather than real.");
+    if (pos >= proposition.length) failParse("The sigma proposition ends where a proposition should start — the tree hex is truncated.");
+    var op = proposition[pos]; pos += 1;
+    var i, items, count, k;
+    if (op === SIGMA_OP_DLOG) {
+      var pk = readPoint("a ProveDlog public key");
+      out.dlogCount += 1;
+      var addr = p2pkAddressFromPublicKey(pk, networkStr);
+      out.keys.push({ publicKey: pk, address: addr });
+      return { type: "dlog", publicKey: pk, address: addr };
+    }
+    if (op === SIGMA_OP_DHTUPLE) {
+      var g = readPoint("a Diffie-Hellman tuple point"); var h = readPoint("a Diffie-Hellman tuple point"); var u = readPoint("a Diffie-Hellman tuple point"); var v = readPoint("a Diffie-Hellman tuple point");
+      out.dhTupleCount += 1;
+      return { type: "dhtuple", g: g, h: h, u: u, v: v };
+    }
+    if (op === SIGMA_OP_AND || op === SIGMA_OP_OR) {
+      count = readU16("conjecture item count");
+      if (count < 1 || count > 255) failParse("A sigma " + (op === SIGMA_OP_AND ? "AND" : "OR") + " carries " + count + " items — the reference bounds conjecture items to 1..=255, so this is not a standard sigma proposition.");
+      items = [];
+      for (i = 0; i < count; i++) items.push(parseBool(depth + 1));
+      if (op === SIGMA_OP_AND) out.andCount += 1; else out.orCount += 1;
+      return { type: op === SIGMA_OP_AND ? "and" : "or", items: items };
+    }
+    if (op === SIGMA_OP_ATLEAST) {
+      k = readU16("threshold k"); count = readU16("threshold item count");
+      if (count < 1 || count > 255) failParse("A sigma threshold carries " + count + " items — the reference bounds conjecture items to 1..=255, so this is not a standard sigma proposition.");
+      if (k < 1 || k > count) failParse("A sigma threshold of " + k + "-of-" + count + " can never be the guard it claims to be — a threshold needs 1 <= k <= the number of items.");
+      items = [];
+      for (i = 0; i < count; i++) items.push(parseBool(depth + 1));
+      out.thresholdCount += 1;
+      return { type: "atleast", k: k, items: items };
+    }
+    if (op === SIGMA_OP_TRUE) { out.hasTrivialTrue = true; return { type: "true" }; }
+    if (op === SIGMA_OP_FALSE) { out.hasTrivialFalse = true; return { type: "false" }; }
+    failParse("Byte 0x" + op.toString(16).padStart(2, "0") + " inside the SigmaProp constant is not a sigma proposition opcode (ProveDlog 0xcd, ProveDhTuple 0xce, AND 0x96, OR 0x97, threshold 0x98, true 0xd3, false 0xd2) — the constant claims to be a SigmaProp but does not parse as one.");
+    return null;
+  };
+  var root;
+  try {
+    root = parseBool(0);
+  } catch (e) {
+    out.valid = false; out.reason = e.message; out.keys = []; out.keyCount = 0;
+    out.dlogCount = 0; out.dhTupleCount = 0; out.andCount = 0; out.orCount = 0; out.thresholdCount = 0; out.hasTrivialTrue = false; out.hasTrivialFalse = false;
+    return out;
+  }
+  if (pos !== proposition.length) {
+    out.valid = false;
+    out.reason = "The sigma proposition parses but " + (proposition.length - pos) + " byte(s) trail it inside the SigmaProp constant — a guard is exactly one sigma proposition, so this tree hex carries extra bytes or was copied with something appended.";
+    out.keys = []; out.keyCount = 0;
+    return out;
+  }
+  out.pureSigma = true;
+  out.keyCount = out.keys.length;
+  out.structure = root;
+  var describe = function (node, indent, lines) {
+    var pad = indent;
+    var j;
+    if (node.type === "dlog") lines.push(pad + "the signature of public key " + node.publicKey + " (its " + out.network + " P2PK address is " + node.address + ")");
+    else if (node.type === "dhtuple") lines.push(pad + "a Diffie-Hellman tuple proof — knowledge of one secret w with u = g^w and v = h^w, over points g " + node.g + ", h " + node.h + ", u " + node.u + ", v " + node.v);
+    else if (node.type === "true") lines.push(pad + "TRUE — no proof at all: this part is satisfied by anyone, with no key");
+    else if (node.type === "false") lines.push(pad + "FALSE — no proof can ever satisfy this part");
+    else if (node.type === "and") { lines.push(pad + "ALL of these " + node.items.length + " must prove:"); for (j = 0; j < node.items.length; j++) describe(node.items[j], indent + "  ", lines); }
+    else if (node.type === "or") { lines.push(pad + "ANY ONE of these " + node.items.length + " must prove:"); for (j = 0; j < node.items.length; j++) describe(node.items[j], indent + "  ", lines); }
+    else if (node.type === "atleast") { lines.push(pad + "AT LEAST " + node.k + " OF these " + node.items.length + " must prove:"); for (j = 0; j < node.items.length; j++) describe(node.items[j], indent + "  ", lines); }
+  };
+  var lines = [];
+  describe(root, "", lines);
+  out.lines = lines;
+  var allDlog = function (node) { return node.type === "dlog" || ((node.type === "and" || node.type === "or" || node.type === "atleast") && node.items.every(allDlog)); };
+  if (root.type === "dlog") { out.kind = "p2pk"; out.verdict = "A classic single-key guard (P2PK): only whoever holds the one private key behind this public key can spend a box guarded by this tree."; }
+  else if (root.type === "true") { out.kind = "anyone"; out.verdict = "An always-true guard: any transaction can spend a box guarded by this tree, with no signature at all. Treat any funds in such a box as up for grabs — first come, first served."; }
+  else if (root.type === "false") { out.kind = "never"; out.verdict = "An always-false guard: no transaction can ever spend a box guarded by this tree. Funds sent to it are locked forever — there is no key, because there is no way through."; }
+  else if (root.type === "dhtuple") { out.kind = "dhtuple"; out.verdict = "A Diffie-Hellman tuple guard: spending requires proving knowledge of the shared secret behind the four points — the guard behind some oracle and atomic-swap style contracts, not a plain key."; }
+  else if (root.type === "and") { out.kind = "all-of"; out.verdict = allDlog(root) ? "An all-of multisig: every one of the " + out.keyCount + " listed keys must sign before a box guarded by this tree can move — " + out.keyCount + "-of-" + out.keyCount + "." : "An all-of guard: every branch below must be proven before a box guarded by this tree can move."; }
+  else if (root.type === "or") { out.kind = "any-of"; out.verdict = allDlog(root) ? "An any-of guard: any single one of the " + out.keyCount + " listed keys can spend a box guarded by this tree alone — 1-of-" + out.keyCount + ", the shape of backup-key and hot/cold wallet guards." : "An any-of guard: proving any single branch below spends a box guarded by this tree."; }
+  else if (root.type === "atleast") { out.kind = "threshold"; out.verdict = allDlog(root) ? "A " + root.k + "-of-" + root.items.length + " threshold multisig: any " + root.k + " of the " + root.items.length + " listed keys signing together can spend a box guarded by this tree; fewer cannot." : "A threshold guard: at least " + root.k + " of the " + root.items.length + " branches below must be proven to spend a box guarded by this tree."; }
+  if (out.hasTrivialFalse && root.type !== "false") out.verdict += " ⚠ One branch of this guard is FALSE and can never be proven — inside an AND or threshold that can make the whole guard, or part of its quorum, unreachable.";
+  if (out.hasTrivialTrue && root.type !== "true") out.verdict += " ⚠ One branch of this guard is TRUE and needs no key at all — inside an OR that makes the whole guard spendable by anyone; inside a threshold it silently lowers the real quorum by one.";
+  return out;
+}
+
 /* ---------- Address -> ErgoTree decoder ---------- */
 /* The inverse direction of tools 8 and 10: an address is
    [prefix byte][content][4-byte checksum] (tool 2 verifies the
@@ -9899,7 +10043,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -10275,6 +10419,32 @@ if (typeof document !== "undefined") {
         msg += "This is the standard P2PK script (ProveDlog) for public key " + res.publicKey + ". A box guarded by it has the " + res.network + " P2PK address " + res.address + " — it passes tool 2's checksum, and tool 8 builds the same address from the key alone. ";
       }
       msg += "The script's " + res.network + " P2SH (pay-to-script-hash) address is " + res.p2shAddress + " — prefix byte + the first 24 bytes of Blake2b-256 over the proposition bytes (not the whole tree: hashing the header in is the fleet-sdk #219 bug that made unspendable addresses). Inspection only, done locally: deriving an address proves nothing about who can spend the box.";
+      out.textContent = msg;
+    });
+
+    /* --- ErgoTree guard explainer --- */
+    document.getElementById("guard-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("guard-result");
+      var res = explainErgoTreeGuard(document.getElementById("guard-hex").value, document.getElementById("guard-network").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var head = "Header byte 0x" + res.header.toString(16).padStart(2, "0") + " — version " + res.version +
+        (res.sizeFlag ? ", with a VLQ proposition size" : ", no size field") +
+        (res.segregated ? ", constants segregated" : ", constants inline") + ". ";
+      if (res.segregated) {
+        out.textContent = head + res.reason;
+        return;
+      }
+      if (!res.pureSigma) {
+        out.textContent = head + res.verdict + " The script's " + res.network + " P2SH address is " + res.p2shAddress + ". Explained locally; nothing was fetched, signed or sent.";
+        return;
+      }
+      var msg = "✓ " + head + res.verdict + " The guard, branch by branch: " + res.lines.join(" · ") + " ";
+      msg += "Counted in the bytes: " + res.dlogCount + " ProveDlog key(s), " + res.dhTupleCount + " Diffie-Hellman tuple(s), " + res.andCount + " AND(s), " + res.orCount + " OR(s), " + res.thresholdCount + " threshold(s). ";
+      msg += "The tree's " + res.network + " P2SH address is " + res.p2shAddress + " — a P2S address for the same tree would carry these very bytes as its content (tool 16). A guard says who CAN spend, never who WILL: check every listed address against its owner through a second channel before sending funds to a shared guard, because a multisig with a stranger's key in it is a multisig you do not control. Explained locally from the bytes you pasted; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

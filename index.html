@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>90 tools and counting — find the one you need:</p>
+    <p>91 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -296,6 +296,19 @@
         </select>
         <button type="submit" class="btn primary">Inspect this tree</button>
         <p id="tree-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="guard-calc" data-family="addresses">
+        <h3>91 · ErgoTree guard explainer (pure sigma script hex → who can actually spend?)</h3>
+        <p>Tools 10, 11 and 16 read a tree's header, hash it and build addresses from it — but none of them walks the guard itself, and for a shared box the guard is the whole question. When a tree's entire proposition is one SigmaProp constant (first proposition byte <strong>0x08</strong>), what follows is a sigma proposition in the reference serialization: <strong>ProveDlog</strong> keys (0xcd + a 33-byte point), <strong>AND</strong> (0x96), <strong>OR</strong> (0x97) and <strong>ATLEAST thresholds</strong> (0x98, a u16 k then a u16 count), Diffie-Hellman tuples (0xce), and the trivially true/false propositions (0xd3 / 0xd2). Paste such a tree and I walk that structure locally and say, in plain language, who can spend: a classic single key, a 2-of-3 multisig with <em>each key's own P2PK address</em> read out so you can check every signer against its owner, an all-of or any-of guard, an always-true tree anyone can spend, an always-false tree no one ever can — and I flag the quiet traps, a TRUE branch inside an OR (spendable by anyone) or inside a threshold (it silently lowers the real quorum). Most contract trees are <em>not</em> pure sigma guards — they mix signatures with height, value and register conditions in general ErgoScript — and those are reported as general scripts, never guessed at; constant-segregated trees get the same honest refusal as tool 10. A guard says who <em>can</em> spend, never who will: verify each listed address with its owner through a second channel before funding a shared box. Explained locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="guard-hex">ErgoTree (hex)</label>
+        <input id="guard-hex" spellcheck="false" placeholder="e.g. 00089800020003cd02… (a 2-of-3 multisig)" autocomplete="off">
+        <label for="guard-network">Network</label>
+        <select id="guard-network">
+          <option selected>Mainnet</option><option>Testnet</option>
+        </select>
+        <button type="submit" class="btn primary">Explain this guard</button>
+        <p id="guard-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="addrtree-calc" data-family="addresses">
@@ -1344,6 +1357,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=91"></script>
+<script src="app.js?v=92"></script>
 </body>
 </html>

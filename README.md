@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 98 tools on one page it beats scrolling.
+headers) — with 99 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -2123,6 +2123,31 @@ headers) — with 98 tools on one page it beats scrolling.
   an independent Python oracle over the
   hub's pinned vectors (partial, emptied
   and unchanged cases, the cross-network
+  near miss, strict refusals on both
+  sides, and the reverse direction).
+- **Address set intersection** — the
+  addresses two lists both hold (a payout
+  list against an allowlist, two address
+  books being merged), the shared
+  addresses handed back by themselves in
+  the first list's own order, ready to
+  paste onward. Identity is exact: only
+  the same string on the same network is
+  shared, and a first-list address whose
+  cross-network twin sits in the second
+  list is named as a near miss instead of
+  silently counting as shared. Like the
+  difference, an invalid line on either
+  side refuses the whole intersection —
+  a skipped line could silently drop an
+  address that really is shared — and the
+  shared list is re-summarized by the
+  summarizer itself before it is shown.
+  The set is direction-free; only the
+  order follows the first list. Verified
+  against an independent Python oracle
+  over the hub's pinned vectors (partial,
+  full and none cases, the cross-network
   near miss, strict refusals on both
   sides, and the reverse direction).
 - **Transaction set summarizer** — a set

@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>98 tools and counting — find the one you need:</p>
+    <p>99 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -428,6 +428,17 @@
         <textarea id="addrminus-b" rows="5" spellcheck="false" placeholder="e.g. the addresses already paid, or the entries being retired" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Subtract the second list</button>
         <p id="addrminus-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="addrintersect-calc" data-family="addresses">
+        <h3>99 · Address set intersection (two lists of addresses → the addresses both lists hold)</h3>
+        <p>Tool 97 triages one list and tool 98 subtracts two; this is the symmetric question between two — the overlap of a payout list and an allowlist, of two address books being merged, of the set tool 31 derives and the set a contract expects — and the shared addresses come back by themselves, in the <strong>first list's own order</strong>, ready to paste onward. Identity is exact: an address is shared only by <em>itself</em>, the same string on the same network. Its cross-network twin — the same type and content under the other network's prefix, tool 13's conversion — is a different address guarding boxes in a different world, so it shares nothing; but that is exactly the trap in a hand-kept overlap (&ldquo;we both have that one&rdquo; — on different networks), so any first-list address that is not shared while its twin sits in the second list is named as a <strong>cross-network near miss</strong>. Two deliberate rules carry over from tool 98. A list meant to be used as-is cannot skip lines silently, so an invalid line on <em>either</em> side refuses the whole intersection, with the side, line and tool 2's reason named — a skipped line could silently drop an address that really is shared, and an omission is the one error a shared list cannot show. And repeated lines inside a list collapse to the distinct address (each list is the set it names) and are counted, so a duplicate cannot make an address look &ldquo;more shared&rdquo;. The shared list is re-summarized by tool 97 itself before anything is shown, so the tools can never disagree about it; two lists that share nothing are reported plainly as sharing nothing — an answer, not an error. The set itself does not depend on direction — the second list intersected with the first names the same addresses — but the order follows the first list, and every report says so. The honest boundary: this intersects the strings you pasted — it fetches nothing, and it proves nothing about any address's balance or who owns it. Intersected locally: it signs nothing and sends nothing.</p>
+        <label for="addrintersect-a">First list — Ergo addresses (one per line, up to 100)</label>
+        <textarea id="addrintersect-a" rows="5" spellcheck="false" placeholder="e.g. one side of the overlap — a payout list, an address-book export, or tool 31's derived set" autocomplete="off"></textarea>
+        <label for="addrintersect-b">Second list — the addresses to intersect with (one per line, up to 100)</label>
+        <textarea id="addrintersect-b" rows="5" spellcheck="false" placeholder="e.g. the other side — an allowlist, a second address book, or the set a contract expects" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Intersect the two lists</button>
+        <p id="addrintersect-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxid-calc" data-family="boxes">
@@ -1468,6 +1479,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=99"></script>
+<script src="app.js?v=100"></script>
 </body>
 </html>

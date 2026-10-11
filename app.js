@@ -2052,6 +2052,89 @@ function subtractAddressSets(aText, bText) {
   };
 }
 
+/* ---------- Address set intersection (tool 99) ----------
+   Tool 97 triages one list and tool 98 subtracts two; this is the
+   symmetric question between two lists: which addresses do BOTH hold —
+   the overlap of a payout list and an allowlist, of two address books
+   being merged, of the set tool 31 derives and the set a contract
+   expects. The shared addresses come back by themselves, in the
+   FIRST list's first-appearance order, ready to paste onward. Two
+   rules carry over from tool 98, for the same reasons. First, strict:
+   the shared list is handed back meant to be used as-is, so an
+   invalid line on either side refuses the whole intersection, with
+   the side, line and tool 2's reason named — a skipped line could
+   silently drop an address that really is shared, and the reader
+   cannot see an omission. Second, identity: an address is shared
+   only by ITSELF, the exact string. Its cross-network twin (same
+   type and content under the other network's prefix, tool 13's
+   conversion) is a different address guarding boxes on a different
+   world, so it shares nothing — but it is exactly the trap in a
+   hand-kept overlap ("we both have that one" — on different
+   networks), so a first-list address that is not shared while its
+   twin sits in the second list is reported as a cross-network near
+   miss. Duplicates inside a side collapse to the distinct address
+   and are counted. Unlike tool 98 the SET named is direction-free —
+   A ∩ B and B ∩ A hold the same addresses — but the ORDER follows
+   the first list, so the report says which list's order it used.
+   The shared list is re-summarized by tool 97 itself before anything
+   is shown, so the tools can never disagree about it.
+   Verified against an independent Python oracle
+   (oracle-addrintersect.py) over the hub's pinned vectors before
+   coding. */
+function intersectAddressSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, distinctCountA: null, distinctCountB: null, duplicateCountA: null, duplicateCountB: null, sharedCount: null, onlyACount: null, sharedAddresses: null, sharedEntries: null, sharedText: null, crossNetworkNearMisses: null, sharedMainnetCount: null, sharedTestnetCount: null };
+  };
+  var strict = function (text, side) {
+    var s = summarizeAddressSet(text);
+    if (!s.valid) return { error: "The " + side + " list is refused: " + s.reason };
+    if (s.invalidCount > 0) {
+      var iv = s.invalid[0];
+      return { error: "The " + side + " list is refused: line " + iv.line + " (" + iv.input + ") is not a valid payment address — " + iv.reason + " An intersection hands back a shared list meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line could silently drop an address that really is shared, and an omission is the one error a shared list cannot show." };
+    }
+    return { summary: s };
+  };
+  var pa = strict(aText, "FIRST");
+  if (pa.error) return fail(pa.error);
+  var pb = strict(bText, "SECOND");
+  if (pb.error) return fail(pb.error);
+  var a = pa.summary, b = pb.summary;
+  var inB = {};
+  var bByContent = {};
+  b.entries.forEach(function (e) {
+    inB[e.address] = true;
+    bByContent[e.typeCode + ":" + e.contentHex] = e.address;
+  });
+  var sharedEntriesA = a.entries.filter(function (e) { return inB[e.address]; });
+  var onlyAEntries = a.entries.filter(function (e) { return !inB[e.address]; });
+  var sharedAddresses = sharedEntriesA.map(function (e) { return e.address; });
+  if (sharedAddresses.length + onlyAEntries.length !== a.distinctCount) return fail("Internal error: the intersection accounting does not close — nothing was shown rather than an unverified shared list.");
+  var nearMisses = [];
+  onlyAEntries.forEach(function (e) {
+    var twin = bByContent[e.typeCode + ":" + e.contentHex];
+    if (twin && twin !== e.address) nearMisses.push([e.address, twin]);
+  });
+  var sharedText = sharedAddresses.join("\n");
+  var sharedEntries = [], sharedMainnetCount = 0, sharedTestnetCount = 0;
+  if (sharedAddresses.length) {
+    var s = summarizeAddressSet(sharedText);
+    if (!s.valid || s.distinctCount !== sharedAddresses.length || s.invalidCount !== 0) return fail("Internal error: the shared list does not re-summarize as itself — nothing was shown rather than an unverified shared list.");
+    sharedEntries = s.entries;
+    sharedMainnetCount = s.mainnetCount;
+    sharedTestnetCount = s.testnetCount;
+  }
+  var verdict = sharedAddresses.length === 0 ? "none" : (sharedAddresses.length === a.distinctCount ? "full" : "partial");
+  return {
+    valid: true, reason: null, verdict: verdict,
+    distinctCountA: a.distinctCount, distinctCountB: b.distinctCount,
+    duplicateCountA: a.duplicateCount, duplicateCountB: b.duplicateCount,
+    sharedCount: sharedAddresses.length, onlyACount: onlyAEntries.length,
+    sharedAddresses: sharedAddresses, sharedEntries: sharedEntries, sharedText: sharedText,
+    crossNetworkNearMisses: nearMisses,
+    sharedMainnetCount: sharedMainnetCount, sharedTestnetCount: sharedTestnetCount
+  };
+}
+
 /* ---------- Babel fee calculator ---------- */
 /* Babel fees let a transaction pay its fee in a native token instead of
    ERG: a babel box holds ERG and its contract swaps tokens for that ERG
@@ -10767,7 +10850,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -11379,6 +11462,32 @@ if (typeof document !== "undefined") {
       msg += "Direction matters: this is the first list minus the second — swapping the two lists would answer the reverse question. ";
       if (res.crossNetworkNearMisses.length > 0) msg += "Cross-network near misses — NOT removed: " + res.crossNetworkNearMisses.map(function (p) { return p[0] + " stays, because the second list holds only its other-network twin " + p[1] + " (same type and content, different network — a different address)"; }).join("; ") + ". Check those were deliberate before using the remainder. ";
       msg += "Remainder, in the first list's order, ready to paste into tool 97 or a payout list: " + res.remainderText.replace(/\n/g, ", ") + " Subtraction only, over the lists you pasted: it fetches nothing and says nothing about any address's balance or who owns it. Subtracted locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Address set intersection --- */
+    document.getElementById("addrintersect-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("addrintersect-result");
+      var res = intersectAddressSets(document.getElementById("addrintersect-a").value, document.getElementById("addrintersect-b").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.verdict === "none") {
+        msg = "✓ The two lists share no address at all — of the first list's " + res.distinctCountA + " distinct address(es) and the second list's " + res.distinctCountB + ", not one exact address appears in both. Sharing nothing is an answer, not an error: the lists either overlap or they do not. ";
+        if (res.crossNetworkNearMisses.length > 0) msg += "Cross-network near misses — NOT shared: " + res.crossNetworkNearMisses.map(function (p) { return p[0] + " is only in the first list, because the second list holds only its other-network twin " + p[1] + " (same type and content, different network — a different address)"; }).join("; ") + ". Check those were deliberate before concluding the lists are unrelated. ";
+        msg += "Intersection only, over the lists you pasted: it fetches nothing and says nothing about any address's balance or who owns it. Intersected locally; nothing was fetched, signed or sent.";
+        out.textContent = msg;
+        return;
+      }
+      msg = "✓ Of " + res.distinctCountA + " distinct address(es) in the first list and " + res.distinctCountB + " in the second, " + res.sharedCount + " appear in both (" + res.sharedMainnetCount + " mainnet, " + res.sharedTestnetCount + " testnet), and " + res.onlyACount + " of the first list's are not in the second. ";
+      if (res.duplicateCountA + res.duplicateCountB > 0) msg += "Repeated lines inside a list collapsed to the distinct address before intersecting (" + res.duplicateCountA + " in the first, " + res.duplicateCountB + " in the second) — each list is treated as the set it names. ";
+      if (res.verdict === "full") msg += "Every distinct address in the first list is also in the second — the first list is entirely covered by the second. ";
+      msg += "The set itself does not depend on direction — the second list intersected with the first would name the same addresses — but the order below is the first list's. ";
+      if (res.crossNetworkNearMisses.length > 0) msg += "Cross-network near misses — NOT shared: " + res.crossNetworkNearMisses.map(function (p) { return p[0] + " is only in the first list, because the second list holds only its other-network twin " + p[1] + " (same type and content, different network — a different address)"; }).join("; ") + ". Check those were deliberate before using the shared list. ";
+      msg += "Shared addresses, in the first list's order, ready to paste into tool 97 or a payout list: " + res.sharedText.replace(/\n/g, ", ") + " Intersection only, over the lists you pasted: it fetches nothing and says nothing about any address's balance or who owns it. Intersected locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

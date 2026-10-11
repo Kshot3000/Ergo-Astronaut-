@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 100 tools on one page it beats scrolling.
+headers) — with 101 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -2182,6 +2182,46 @@ headers) — with 100 tools on one page it beats scrolling.
   identical, disjoint, subset and
   twin-only cases, strict refusals on
   both sides, and the reverse direction).
+- **Address set merger** —
+  the addresses either of two lists
+  holds: the union two partial lists
+  merge into (two address books folded
+  into one, a payout list and an
+  allowlist combined), handed back as
+  the first list's distinct addresses
+  in the first list's own order followed
+  by the second-list-only ones in the
+  second list's order, ready to paste
+  onward. Identity is exact: only the
+  same string on the same network is
+  the same address, so when the two
+  lists hold the two networks' forms
+  of one address between them, both
+  cross-network twins land in the union
+  and are named as a twin pair instead
+  of silently looking like a duplicate.
+  Like the difference, intersection and
+  symmetric difference, an invalid line
+  on either side refuses the whole
+  merge — a skipped line could silently
+  drop an address the merged list
+  claims to cover — and the merge is
+  cross-checked against the subtraction,
+  intersection and symmetric-difference
+  tools and re-summarized by the
+  summarizer itself before it is shown
+  (a union past the summarizer's own
+  100-line cap is verified by decoding
+  every merged address instead, and
+  the report says so). The set is
+  direction-free; only the order
+  follows the lists. Verified against
+  an independent Python oracle over the
+  hub's pinned vectors (overlap,
+  identical, single, disjoint, subset
+  and twin-only cases, strict refusals
+  on both sides, and the reverse
+  direction).
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

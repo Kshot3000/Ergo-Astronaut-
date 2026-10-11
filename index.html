@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>100 tools and counting — find the one you need:</p>
+    <p>101 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -450,6 +450,17 @@
         <textarea id="addrxor-b" rows="5" spellcheck="false" placeholder="e.g. the other side — a wallet export, a second address book, or the set a contract expects" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Difference the two lists</button>
         <p id="addrxor-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="addrmerge-calc" data-family="addresses">
+        <h3>101 · Address set merger (two lists of addresses → the merged list either list holds)</h3>
+        <p>Tools 97–100 triage one list, subtract two, find what two share and name their disagreement; this is the remaining set question between two — the <strong>union</strong>: which addresses does <em>either</em> list hold? That is the combined address book two partial lists merge into, a payout list and an allowlist folded into one working list. It completes the address set family the way the box, transaction and header mergers anchor theirs. The merged list comes back by itself — the first list's distinct addresses in the <strong>first list's own order</strong>, then the second-list-only ones in the <strong>second list's order</strong> — ready to paste onward. Identity is exact: an address is held only by <em>itself</em>, the same string on the same network. Its cross-network twin — the same type and content under the other network's prefix, tool 13's conversion — is a different address guarding boxes in a different world, so when the two lists hold the two networks' forms between them, <em>both</em> twins land in the merged list, and each such pair is named as a <strong>cross-network twin pair</strong>: they look like &ldquo;the same address&rdquo; listed twice, but both belong. Two deliberate rules carry over from tools 98, 99 and 100. A list meant to be used as-is cannot skip lines silently, so an invalid line on <em>either</em> side refuses the whole merge, with the side, line and tool 2's reason named — a skipped line could silently drop an address the merged list claims to cover, and an omission is the one error a union cannot show. And repeated lines inside a list collapse to the distinct address (each list is the set it names) and are counted, so a duplicate cannot make an address look &ldquo;more held&rdquo;. The verdicts: a single shared address, identical lists (the union is each side exactly), one list sitting wholly inside the other, disjoint lists, or a plain partial overlap. The merge is cross-checked against tools 98, 99 and 100 and re-summarized by tool 97 itself before anything is shown, so the tools can never disagree about it — one honest exception: a union of two full 100-line lists can pass tool 97's own paste cap, and then every merged address is verified by decoding it with tool 2's decoder instead, and the report says which path verified it. The set itself does not depend on direction — the second list merged with the first names the same addresses — but the first block always follows whichever list was pasted first, and every report says so. The honest boundary: this merges the strings you pasted — it fetches nothing, and it proves nothing about any address's balance or who owns it. Merged locally: it signs nothing and sends nothing.</p>
+        <label for="addrmerge-a">First list — Ergo addresses (one per line, up to 100)</label>
+        <textarea id="addrmerge-a" rows="5" spellcheck="false" placeholder="e.g. one partial list — a payout list, an address-book export, or tool 31's derived set" autocomplete="off"></textarea>
+        <label for="addrmerge-b">Second list — Ergo addresses (one per line, up to 100)</label>
+        <textarea id="addrmerge-b" rows="5" spellcheck="false" placeholder="e.g. the other partial list — an allowlist, a wallet export, or a second address book" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Merge the two lists</button>
+        <p id="addrmerge-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxid-calc" data-family="boxes">
@@ -1490,6 +1501,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=101"></script>
+<script src="app.js?v=102"></script>
 </body>
 </html>

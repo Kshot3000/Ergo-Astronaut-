@@ -2240,6 +2240,138 @@ function xorAddressSets(aText, bText) {
   };
 }
 
+/* ---------- Address set merger (tool 101) ----------
+   Tools 97–100 triage one address list, subtract two, intersect them
+   and difference them; this is the remaining set question between
+   two lists: which addresses does EITHER list hold — the union, the
+   combined address book two partial lists merge into, a payout list
+   and an allowlist folded into one working list. It completes the
+   address set-op family the box (81), transaction (80) and header
+   (77) mergers already anchor in their families. The merged list
+   comes back as the FIRST list's distinct addresses in the first
+   list's order, followed by the second-list-only addresses in the
+   second list's order, ready to paste onward. The SET is
+   direction-free — A ∪ B and B ∪ A hold the same addresses — but
+   the order is not: the first block always follows whichever list
+   was pasted first, and the report says so. Two rules carry over
+   from tools 98/99/100, for the same reasons. First, strict: the
+   merged list is handed back meant to be used as-is, so an invalid
+   line on either side refuses the whole merge, with the side, line
+   and tool 2's reason named — a skipped line could silently drop an
+   address the merged list claims to cover, and the reader cannot
+   see an omission. Second, identity: an address is held only by
+   ITSELF, the exact string. Its cross-network twin (same type and
+   content under the other network's prefix, tool 13's conversion)
+   is a different address guarding boxes on a different world — so
+   when the two lists hold the two networks' forms between them,
+   BOTH twins land in the union, and each such pair is reported
+   (tool 97's own cross-network pairs of the merged list): they look
+   like "the same address" listed twice, but both belong. Duplicates
+   inside a side collapse to the distinct address and are counted.
+   The verdicts: single-address when the union collapses to one,
+   identical-sets when the union is each side exactly, subset-first /
+   subset-second when one list sits wholly inside the other (the
+   union is the larger list), disjoint when nothing is shared, and
+   merged for a plain partial overlap. Verified before showing four
+   ways: the accounting must close, tool 99's shared count must
+   equal the common count, tool 100's difference count must equal
+   the two only-counts summed, tool 98 must hand back exactly the
+   two only-blocks when the merged list is subtracted by each side,
+   and the union is re-summarized by tool 97 itself. One honest
+   exception: a union of two full lists can pass tool 97's own
+   100-line paste cap, and then the merged entries are verified by
+   decoding each one with tool 2's decoder instead, and the report
+   says which path verified it (the result carries oversizeUnion).
+   Verified against an independent Python oracle
+   (oracle-addrmerge.py) over the hub's pinned vectors before
+   coding. */
+function mergeAddressSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, distinctCountA: null, distinctCountB: null, duplicateCountA: null, duplicateCountB: null, mergedCount: null, sharedCount: null, onlyACount: null, onlyBCount: null, mergedAddresses: null, onlyAAddresses: null, onlyBAddresses: null, mergedEntries: null, mergedText: null, crossNetworkTwinPairs: null, mergedMainnetCount: null, mergedTestnetCount: null, oversizeUnion: null };
+  };
+  var strict = function (text, side) {
+    var s = summarizeAddressSet(text);
+    if (!s.valid) return { error: "The " + side + " list is refused: " + s.reason };
+    if (s.invalidCount > 0) {
+      var iv = s.invalid[0];
+      return { error: "The " + side + " list is refused: line " + iv.line + " (" + iv.input + ") is not a valid payment address — " + iv.reason + " A merger hands back the combined list meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line could silently drop an address the merged list claims to cover, and an omission is the one error a union cannot show." };
+    }
+    return { summary: s };
+  };
+  var pa = strict(aText, "FIRST");
+  if (pa.error) return fail(pa.error);
+  var pb = strict(bText, "SECOND");
+  if (pb.error) return fail(pb.error);
+  var a = pa.summary, b = pb.summary;
+  var inA = {}, inB = {};
+  a.entries.forEach(function (e) { inA[e.address] = true; });
+  b.entries.forEach(function (e) { inB[e.address] = true; });
+  var onlyAAddresses = a.entries.filter(function (e) { return !inB[e.address]; }).map(function (e) { return e.address; });
+  var onlyBEntries = b.entries.filter(function (e) { return !inA[e.address]; });
+  var onlyBAddresses = onlyBEntries.map(function (e) { return e.address; });
+  var sharedCount = a.distinctCount - onlyAAddresses.length;
+  if (sharedCount !== b.distinctCount - onlyBAddresses.length || sharedCount < 0) return fail("Internal error: the merge accounting does not close — nothing was shown rather than an unverified merged list.");
+  var mergedAddresses = a.entries.map(function (e) { return e.address; }).concat(onlyBAddresses);
+  if (mergedAddresses.length !== a.distinctCount + onlyBAddresses.length || mergedAddresses.length !== b.distinctCount + onlyAAddresses.length) return fail("Internal error: the merge accounting does not close — nothing was shown rather than an unverified merged list.");
+  var inter = intersectAddressSets(aText, bText);
+  if (!inter.valid) return fail("Internal error: the cross-check tool refused lists this tool accepted — nothing was shown rather than an unverified merged list.");
+  if (inter.sharedCount !== sharedCount) return fail("Internal error: the merge disagrees with tool 99 — nothing was shown rather than an unverified merged list.");
+  if (onlyAAddresses.length + onlyBAddresses.length <= 100) {
+    var xor = xorAddressSets(aText, bText);
+    if (!xor.valid || xor.diffCount !== onlyAAddresses.length + onlyBAddresses.length) return fail("Internal error: the merge disagrees with tool 100 — nothing was shown rather than an unverified merged list.");
+  }
+  var mergedText = mergedAddresses.join("\n");
+  var mergedEntries = [], mergedMainnetCount = 0, mergedTestnetCount = 0, twinPairs = [];
+  if (mergedAddresses.length <= 100) {
+    var minusB = subtractAddressSets(mergedText, bText);
+    var minusA = subtractAddressSets(mergedText, aText);
+    if (!minusB.valid || !minusA.valid) return fail("Internal error: the cross-check tool refused the merged list — nothing was shown rather than an unverified merged list.");
+    if (minusB.remainderAddresses.join("\n") !== onlyAAddresses.join("\n") || minusA.remainderAddresses.join("\n") !== onlyBAddresses.join("\n")) return fail("Internal error: the merge disagrees with tool 98 — nothing was shown rather than an unverified merged list.");
+    var s = summarizeAddressSet(mergedText);
+    if (!s.valid || s.distinctCount !== mergedAddresses.length || s.invalidCount !== 0) return fail("Internal error: the merged list does not re-summarize as itself — nothing was shown rather than an unverified merged list.");
+    mergedEntries = s.entries;
+    mergedMainnetCount = s.mainnetCount;
+    mergedTestnetCount = s.testnetCount;
+    twinPairs = s.crossNetworkPairs;
+  } else {
+    /* A union of two full 100-line lists can hold up to 200 addresses
+       — past tool 97's own 100-line paste cap, so the re-summary
+       cross-checks above cannot run on it. The merged entries are
+       then verified directly, decoding every merged address with
+       tool 2's decoder (the same decoder tool 97 uses). */
+    var byContent = {}, contentOrder = [];
+    for (var mi = 0; mi < mergedAddresses.length; mi++) {
+      var dec = decodeErgoAddress(mergedAddresses[mi]);
+      if (!dec.valid) return fail("Internal error: a merged address does not decode — nothing was shown rather than an unverified merged list.");
+      mergedEntries.push({ address: mergedAddresses[mi], network: dec.network, type: dec.type, typeCode: dec.typeCode, contentHex: dec.contentHex });
+      if (dec.network === "Mainnet") mergedMainnetCount++; else mergedTestnetCount++;
+      var mkey = dec.typeCode + ":" + dec.contentHex;
+      if (!Object.prototype.hasOwnProperty.call(byContent, mkey)) { byContent[mkey] = []; contentOrder.push(mkey); }
+      byContent[mkey].push(mergedAddresses[mi]);
+    }
+    twinPairs = contentOrder.map(function (k) { return byContent[k]; }).filter(function (g) { return g.length > 1; });
+  }
+  var verdict;
+  if (mergedAddresses.length === 1) verdict = "single-address";
+  else if (onlyAAddresses.length === 0 && onlyBAddresses.length === 0) verdict = "identical-sets";
+  else if (onlyAAddresses.length === 0) verdict = "subset-first";
+  else if (onlyBAddresses.length === 0) verdict = "subset-second";
+  else if (sharedCount === 0) verdict = "disjoint";
+  else verdict = "merged";
+  return {
+    valid: true, reason: null, verdict: verdict,
+    distinctCountA: a.distinctCount, distinctCountB: b.distinctCount,
+    duplicateCountA: a.duplicateCount, duplicateCountB: b.duplicateCount,
+    mergedCount: mergedAddresses.length, sharedCount: sharedCount,
+    onlyACount: onlyAAddresses.length, onlyBCount: onlyBAddresses.length,
+    mergedAddresses: mergedAddresses, onlyAAddresses: onlyAAddresses, onlyBAddresses: onlyBAddresses,
+    mergedEntries: mergedEntries, mergedText: mergedText,
+    crossNetworkTwinPairs: twinPairs,
+    mergedMainnetCount: mergedMainnetCount, mergedTestnetCount: mergedTestnetCount,
+    oversizeUnion: mergedAddresses.length > 100
+  };
+}
+
 /* ---------- Babel fee calculator ---------- */
 /* Babel fees let a transaction pay its fee in a native token instead of
    ERG: a babel box holds ERG and its contract swaps tokens for that ERG
@@ -10955,7 +11087,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -11621,6 +11753,34 @@ if (typeof document !== "undefined") {
       msg += "The set itself does not depend on direction — the second list differenced with the first would name the same addresses — but the order below is the first-list-only addresses in the first list's order, then the second-list-only ones in the second list's. ";
       if (res.crossNetworkTwinPairs.length > 0) msg += "Cross-network twin pairs — BOTH in the difference, NOT agreements: " + res.crossNetworkTwinPairs.map(function (p) { return p[0] + " (first list only) and " + p[1] + " (second list only) carry the same type and content under different networks — different addresses guarding boxes in different worlds"; }).join("; ") + ". Check those were deliberate before treating the lists as reconciled. ";
       msg += "Only in the first: " + (res.onlyAAddresses.length ? res.onlyAAddresses.join(", ") : "none") + ". Only in the second: " + (res.onlyBAddresses.length ? res.onlyBAddresses.join(", ") : "none") + ". The full difference, in that order, ready to paste into tool 97 or a payout list: " + res.diffText.replace(/\n/g, ", ") + " Difference only, over the lists you pasted: it fetches nothing and says nothing about any address's balance or who owns it. Differenced locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Address set merger --- */
+    document.getElementById("addrmerge-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("addrmerge-result");
+      var res = mergeAddressSets(document.getElementById("addrmerge-a").value, document.getElementById("addrmerge-b").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.verdict === "single-address") {
+        msg = "✓ Both lists name one and the same address — the merged list is that single address: " + res.mergedText + " ";
+      } else if (res.verdict === "identical-sets") {
+        msg = "✓ The two lists hold exactly the same " + res.distinctCountA + " distinct address(es) — the merged list adds nothing from either side, and it is handed back in the first list's order. ";
+      } else {
+        msg = "✓ Of " + res.distinctCountA + " distinct address(es) in the first list and " + res.distinctCountB + " in the second, " + res.sharedCount + " appear in both, so the merged list holds " + res.mergedCount + " distinct address(es) (" + res.mergedMainnetCount + " mainnet, " + res.mergedTestnetCount + " testnet): every address from the first list, plus " + res.onlyBCount + " that only the second list held. ";
+        if (res.verdict === "subset-first") msg += "Every distinct address in the first list is also in the second — the merged list is the second list's set. ";
+        else if (res.verdict === "subset-second") msg += "Every distinct address in the second list is also in the first — the merged list is the first list's set, exactly as pasted. ";
+        else if (res.verdict === "disjoint") msg += "The lists share nothing at all — the merged list is everything in both. ";
+      }
+      if (res.duplicateCountA + res.duplicateCountB > 0) msg += "Repeated lines inside a list collapsed to the distinct address before merging (" + res.duplicateCountA + " in the first, " + res.duplicateCountB + " in the second) — each list is treated as the set it names. ";
+      if (res.verdict !== "single-address" && res.verdict !== "identical-sets") msg += "The set itself does not depend on direction — the second list merged with the first would name the same addresses — but the order below is the first list's addresses in the first list's order, then the second-list-only ones in the second list's. ";
+      if (res.crossNetworkTwinPairs.length > 0) msg += "Cross-network twin pairs — BOTH in the merged list, NOT duplicates: " + res.crossNetworkTwinPairs.map(function (p) { return p.join(" and ") + " carry the same type and content under different networks — different addresses guarding boxes in different worlds"; }).join("; ") + ". Check those were deliberate before using the merged list. ";
+      if (res.oversizeUnion) msg += "This union passes tool 97's 100-line paste cap, so instead of a re-summary its entries were verified by decoding every merged address with tool 2's decoder. ";
+      msg += "Merged list, ready to paste into tool 97 or a payout list: " + res.mergedText.replace(/\n/g, ", ") + " Merge only, over the lists you pasted: it fetches nothing and says nothing about any address's balance or who owns it. Merged locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

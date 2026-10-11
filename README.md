@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 101 tools on one page it beats scrolling.
+headers) — with 102 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -2222,6 +2222,40 @@ headers) — with 101 tools on one page it beats scrolling.
   and twin-only cases, strict refusals
   on both sides, and the reverse
   direction).
+- **Address list network converter** —
+  tool 13's batch form: a whole list of
+  addresses brought onto one chosen
+  target network (a mainnet address book
+  mirrored to testnet for development, a
+  testnet payout list re-issued for
+  mainnet), handed back in the list's own
+  first-appearance order. Addresses
+  already on the target pass through
+  unchanged and are counted; the rest are
+  converted by the single-address
+  converter itself, so the list can never
+  disagree with it. Like the set tools,
+  an invalid line refuses the whole
+  conversion — a skipped line could
+  silently drop an address the converted
+  list claims to cover. The one behaviour
+  a single conversion cannot have is
+  named plainly: a list holding both
+  cross-network twins of one content
+  collapses to a single target-network
+  address, reported as a twin collision
+  with both source addresses named.
+  Every output is verified by decoding
+  it onto the target network with its
+  source's type and content, flipping it
+  back through the single converter, and
+  re-summarizing the converted list with
+  the summarizer itself. Verified
+  against an independent Python oracle
+  over the hub's pinned vectors
+  (all-converted, already-on-target,
+  twin-collision, duplicate, strict
+  refusal and round-trip cases).
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

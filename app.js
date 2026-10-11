@@ -2372,6 +2372,86 @@ function mergeAddressSets(aText, bText) {
   };
 }
 
+/* ---------- Address list network converter (tool 102) ----------
+   Tool 13 converts ONE address to the other network; tools 97–101
+   work on whole lists but never change a single string. This is
+   tool 13's batch form with a chosen TARGET network: a mainnet
+   address book that needs its testnet mirror for development, a
+   testnet payout list that has to be re-issued for mainnet. Every
+   distinct address comes back on the target network, in the list's
+   own first-appearance order — addresses already on the target pass
+   through unchanged and are counted, the rest are converted by tool
+   13 itself, so the list can never disagree with the single-address
+   converter. One rule carries over from tools 98–101: strict. The
+   converted list is handed back meant to be used as-is, so an
+   invalid line refuses the whole conversion, with the line and
+   tool 2's reason named — a skipped line could silently drop an
+   address the converted list claims to cover. Duplicates collapse
+   to the distinct address and are counted, as everywhere on this
+   hub. The one behaviour a single conversion cannot have: a list
+   holding BOTH cross-network twins of one content (the mainnet and
+   testnet forms of the same key or script) collapses to ONE
+   target-network address, so the converted list is shorter than
+   the list pasted in — each such group is reported as a collision,
+   naming both source addresses, because two entries becoming one
+   is exactly the kind of quiet change a list owner must see.
+   Converting changes no ownership and moves no funds: the output
+   guards boxes on the target network only. Verified before showing
+   three ways: every output decodes (tool 2) onto the target network
+   with its source's exact type and content, every converted output
+   flips back through tool 13 to its exact source, and the converted
+   list is re-summarized by tool 97 itself. Verified against an
+   independent Python oracle (oracle-addrnet.py) over the hub's
+   pinned vectors before coding. */
+function convertAddressListNetwork(addressesText, targetStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, target: null, distinctIn: null, distinctOut: null, duplicateCount: null, convertedCount: null, alreadyCount: null, collisionCount: null, collisions: null, pairs: null, convertedAddresses: null, convertedText: null };
+  };
+  var target = targetStr === "Mainnet" ? "Mainnet" : targetStr === "Testnet" ? "Testnet" : null;
+  if (target === null) return fail("Choose the target network — Mainnet or Testnet. The whole list is brought onto that one network; nothing was converted.");
+  var s = summarizeAddressSet(addressesText);
+  if (!s.valid) return fail(s.reason);
+  if (s.invalidCount > 0) {
+    var iv = s.invalid[0];
+    return fail("The list is refused: line " + iv.line + " (" + iv.input + ") is not a valid payment address — " + iv.reason + " A converter hands back the whole list meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line could silently drop an address the converted list claims to cover.");
+  }
+  var pairs = [], convertedAddresses = [], byOut = {}, outOrder = [];
+  var convertedCount = 0, alreadyCount = 0;
+  for (var i = 0; i < s.entries.length; i++) {
+    var e = s.entries[i];
+    var to, changed;
+    if (e.network === target) { to = e.address; changed = false; alreadyCount++; }
+    else {
+      var one = convertAddressNetwork(e.address);
+      if (!one.valid || one.convertedNetwork !== target) return fail("Internal error: tool 13 refused an address tool 2 accepted — nothing was shown rather than an unverified converted list.");
+      to = one.converted; changed = true; convertedCount++;
+      var back = convertAddressNetwork(to);
+      if (!back.valid || back.converted !== e.address) return fail("Internal error: a converted address does not flip back to its source through tool 13 — nothing was shown rather than an unverified converted list.");
+    }
+    var dec = decodeErgoAddress(to);
+    if (!dec.valid || dec.network !== target || dec.typeCode !== e.typeCode || dec.contentHex !== e.contentHex) return fail("Internal error: a converted address does not decode onto the target network with its source's type and content — nothing was shown rather than an unverified converted list.");
+    pairs.push({ from: e.address, to: to, changed: changed, type: e.type });
+    if (!Object.prototype.hasOwnProperty.call(byOut, to)) { byOut[to] = []; outOrder.push(to); convertedAddresses.push(to); }
+    byOut[to].push(e.address);
+  }
+  var collisions = outOrder.map(function (o) { return byOut[o]; }).filter(function (g) { return g.length > 1; });
+  var collisionExtra = collisions.reduce(function (n, g) { return n + g.length - 1; }, 0);
+  if (convertedAddresses.length !== s.distinctCount - collisionExtra) return fail("Internal error: the conversion accounting does not close — nothing was shown rather than an unverified converted list.");
+  var convertedText = convertedAddresses.join("\n");
+  var re = summarizeAddressSet(convertedText);
+  if (!re.valid || re.distinctCount !== convertedAddresses.length || re.invalidCount !== 0) return fail("Internal error: the converted list does not re-summarize as itself — nothing was shown rather than an unverified converted list.");
+  if (target === "Mainnet" ? re.mainnetCount !== convertedAddresses.length : re.testnetCount !== convertedAddresses.length) return fail("Internal error: the converted list is not wholly on the target network — nothing was shown rather than an unverified converted list.");
+  var verdict = convertedCount === 0 ? "already-on-target" : alreadyCount === 0 ? "all-converted" : "mixed";
+  return {
+    valid: true, reason: null, verdict: verdict, target: target,
+    distinctIn: s.distinctCount, distinctOut: convertedAddresses.length,
+    duplicateCount: s.duplicateCount,
+    convertedCount: convertedCount, alreadyCount: alreadyCount,
+    collisionCount: collisions.length, collisions: collisions,
+    pairs: pairs, convertedAddresses: convertedAddresses, convertedText: convertedText
+  };
+}
+
 /* ---------- Babel fee calculator ---------- */
 /* Babel fees let a transaction pay its fee in a native token instead of
    ERG: a babel box holds ERG and its contract swaps tokens for that ERG
@@ -11087,7 +11167,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -11781,6 +11861,29 @@ if (typeof document !== "undefined") {
       if (res.crossNetworkTwinPairs.length > 0) msg += "Cross-network twin pairs — BOTH in the merged list, NOT duplicates: " + res.crossNetworkTwinPairs.map(function (p) { return p.join(" and ") + " carry the same type and content under different networks — different addresses guarding boxes in different worlds"; }).join("; ") + ". Check those were deliberate before using the merged list. ";
       if (res.oversizeUnion) msg += "This union passes tool 97's 100-line paste cap, so instead of a re-summary its entries were verified by decoding every merged address with tool 2's decoder. ";
       msg += "Merged list, ready to paste into tool 97 or a payout list: " + res.mergedText.replace(/\n/g, ", ") + " Merge only, over the lists you pasted: it fetches nothing and says nothing about any address's balance or who owns it. Merged locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Address list network converter --- */
+    document.getElementById("addrnet-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("addrnet-result");
+      var res = convertAddressListNetwork(document.getElementById("addrnet-in").value, document.getElementById("addrnet-target").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.verdict === "already-on-target") {
+        msg = "✓ Every one of the " + res.distinctIn + " distinct address(es) is already on " + res.target + " — nothing needed converting, and the list is handed back exactly as pasted. ";
+      } else if (res.verdict === "all-converted") {
+        msg = "✓ All " + res.distinctIn + " distinct address(es) were converted to " + res.target + " — each is the same type and content under the " + res.target + " prefix, with its checksum recomputed, exactly as tool 13 converts one. ";
+      } else {
+        msg = "✓ Of " + res.distinctIn + " distinct address(es), " + res.convertedCount + " were converted to " + res.target + " and " + res.alreadyCount + " were already on " + res.target + " and pass through unchanged. ";
+      }
+      if (res.duplicateCount > 0) msg += "Repeated lines collapsed to the distinct address before converting (" + res.duplicateCount + " repeat(s)) — the list is treated as the set it names. ";
+      if (res.collisionCount > 0) msg += "Twin collisions — " + res.collisionCount + " group(s) of source entries became ONE " + res.target + " address, because the list held both networks' forms of the same content: " + res.collisions.map(function (g) { return g.join(" and ") + " both convert to the same " + res.target + " address"; }).join("; ") + ". That is why the converted list holds " + res.distinctOut + " address(es) from " + res.distinctIn + " distinct pasted ones — check those merges were deliberate before using it. ";
+      msg += "Converted list, all on " + res.target + ", ready to paste into tool 97 or an address book: " + res.convertedText.replace(/\n/g, ", ") + " Converting changes no ownership and moves no funds — a converted address guards boxes on " + res.target + " only, and sending ERG across networks loses it. Conversion only, over the list you pasted: it fetches nothing and says nothing about any address's balance or who owns it. Converted locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

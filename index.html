@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>101 tools and counting — find the one you need:</p>
+    <p>102 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -461,6 +461,19 @@
         <textarea id="addrmerge-b" rows="5" spellcheck="false" placeholder="e.g. the other partial list — an allowlist, a wallet export, or a second address book" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Merge the two lists</button>
         <p id="addrmerge-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="addrnet-calc" data-family="addresses">
+        <h3>102 · Address list network converter (a list of addresses → the same list on one network)</h3>
+        <p>Tool 13 converts one address to the other network; tools 97–101 work on whole lists but never change a single string. This is tool 13's batch form with a chosen <strong>target network</strong>: a mainnet address book that needs its testnet mirror for development, a testnet payout list that has to be re-issued for mainnet. Every distinct address comes back on the target network, in the list's <strong>own first-appearance order</strong> — addresses already on the target pass through unchanged and are counted, the rest are converted by tool 13 itself, so the list can never disagree with the single-address converter. One rule carries over from tools 98–101: a list meant to be used as-is cannot skip lines silently, so an invalid line refuses the whole conversion, with the line and tool 2's reason named — a skipped line could silently drop an address the converted list claims to cover. Repeated lines collapse to the distinct address and are counted, as everywhere on this hub. The one behaviour a single conversion cannot have: a list holding <em>both</em> cross-network twins of one content — the mainnet and testnet forms of the same key or script — collapses to <strong>one</strong> target-network address, so the converted list is shorter than the list pasted in; each such group is reported as a <strong>twin collision</strong>, naming both source addresses, because two entries becoming one is exactly the kind of quiet change a list owner must see. Converting changes no ownership and moves no funds: a converted address guards boxes on the target network only, and sending ERG across networks loses it. Every conversion is verified before anything is shown — each output decodes onto the target network with its source's exact type and content, each converted output flips back through tool 13 to its exact source, and the converted list is re-summarized by tool 97 itself. The honest boundary: this converts the strings you pasted — it fetches nothing, and it proves nothing about any address's balance or who owns it. Converted locally: it signs nothing and sends nothing.</p>
+        <label for="addrnet-in">List — Ergo addresses (one per line, up to 100)</label>
+        <textarea id="addrnet-in" rows="5" spellcheck="false" placeholder="e.g. an address book to mirror onto the other network, or tool 31's derived set" autocomplete="off"></textarea>
+        <label for="addrnet-target">Target network — the whole list comes back on this network</label>
+        <select id="addrnet-target">
+          <option selected>Testnet</option><option>Mainnet</option>
+        </select>
+        <button type="submit" class="btn primary">Convert the list</button>
+        <p id="addrnet-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxid-calc" data-family="boxes">
@@ -1501,6 +1514,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=102"></script>
+<script src="app.js?v=103"></script>
 </body>
 </html>

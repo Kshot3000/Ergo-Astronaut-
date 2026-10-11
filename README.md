@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 93 tools on one page it beats scrolling.
+headers) — with 94 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -2010,6 +2010,26 @@ headers) — with 93 tools on one page it beats scrolling.
   Python oracle over the miner fee contract,
   the second pinned segregated tree, and an
   oracle-built size-flagged segregated tree.
+- **ErgoTree segregated-constant replacer** —
+  the write side of the extractor above, and
+  sigmastate's own documented use of
+  segregation: swap one segregated constant
+  for a new value of the SAME type (a type
+  change is refused — placeholders are typed),
+  splicing the replacement into the section
+  bytes only, leaving the proposition
+  template byte-identical, and rewriting the
+  VLQ declared size when the header carries
+  the size flag. The retuned tree is read
+  back through the extractor and the P2S
+  builder before it is shown, with its new
+  P2S address. Verified against an independent
+  Python splice over the fee contract, the
+  second pinned segregated tree and a
+  size-flagged tree whose size field grows a
+  byte, and cross-checked against
+  sigmastate-js, which reads the replaced
+  constants back at exactly the new values.
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

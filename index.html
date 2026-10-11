@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>93 tools and counting — find the one you need:</p>
+    <p>94 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -341,6 +341,23 @@
         </select>
         <button type="submit" class="btn primary">Extract the segregated constants</button>
         <p id="segconst-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="constswap-calc" data-family="addresses">
+        <h3>94 · ErgoTree segregated-constant replacer (segregated script hex + a placeholder number + a new value → the retuned tree)</h3>
+        <p>Tool 93 reads a segregated tree's constants out; this one swaps one of them for a new value and hands back the retuned tree. That swap is what constant segregation is <em>for</em>: sigmastate's own substitution exists so a script can circulate as a template — the documented example replaces a template's miner public key with the current miner's before a box is built with it. The rules here are the reference's rules: the replacement must carry the <strong>same Sigma type</strong> as the constant it replaces (a placeholder is typed, so a type change is refused, never coerced), the proposition template bytes are never touched, and when the header carries the size flag the declared size is rewritten for the new body. Give the new value the way tool 18 writes constants — a typed spec like <code>long:100</code>, or one Sigma constant in raw hex exactly as tool 93 displays it. The result is read back through tool 93's extractor and tool 16's P2S builder before it is shown: same constant count, byte-identical template, exactly one constant changed. A swap makes a <em>different</em> tree with a different P2S address — boxes already guarded by the old tree keep the old value. Built locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="constswap-hex">ErgoTree (hex)</label>
+        <input id="constswap-hex" spellcheck="false" placeholder="e.g. 1005040004000e36… (the miner fee contract)" autocomplete="off">
+        <label for="constswap-index">Constant number (0-based, as tool 93 lists them)</label>
+        <input id="constswap-index" spellcheck="false" placeholder="e.g. 4" autocomplete="off">
+        <label for="constswap-value">New value (typed spec like int:1000, or one Sigma constant as hex)</label>
+        <input id="constswap-value" spellcheck="false" placeholder="e.g. int:1000" autocomplete="off">
+        <label for="constswap-network">Network</label>
+        <select id="constswap-network">
+          <option selected>Mainnet</option><option>Testnet</option>
+        </select>
+        <button type="submit" class="btn primary">Replace this constant</button>
+        <p id="constswap-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="addrtree-calc" data-family="addresses">
@@ -1389,6 +1406,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=94"></script>
+<script src="app.js?v=95"></script>
 </body>
 </html>

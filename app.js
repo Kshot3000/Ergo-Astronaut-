@@ -1330,6 +1330,134 @@ function extractErgoTreeConstants(treeHex, networkStr) {
   return base;
 }
 
+/* ---------- ErgoTree segregated-constant replacer ---------- */
+/* The write-side pairing of tool 93, and sigmastate's own documented
+   use of segregation: a constant-segregated tree is a reusable
+   template precisely because its constants can be swapped for new
+   values before the tree is used — the reference serializer's
+   substConstants exists for exactly this ("check that output box
+   have proposition equal to given script bytes, where minerPk
+   (constants(0)) is replaced with currentMinerPk"). The rules the
+   reference enforces are enforced here too: the tree must be
+   segregated, the placeholder number must exist, and the replacement
+   must carry the SAME Sigma type as the constant it replaces —
+   substitution cannot change a constant's type, because the
+   template's placeholders are typed. The replacement is given in
+   tool 18's forms (a typed spec like long:100, or one Sigma constant
+   as raw hex exactly as tool 93 displays it) and encoded by tool
+   18/30's sigmaConstantBytes; the splice itself is byte-exact — the
+   old constant's span in the section (located by tool 93's walk) is
+   cut out and the new constant's bytes dropped in, the proposition
+   template is never touched, and when the header carries the size
+   flag (0x08) the VLQ declared size is rewritten for the new body,
+   even when the size field itself changes length. The result is
+   verified before it is shown: tool 93's extractor must read the
+   new tree back with the same count, the same template bytes and
+   exactly one changed constant, and tool 16's P2S builder must
+   carry the new bytes verbatim (round-tripped through tool 11).
+   Swapping a constant makes a DIFFERENT tree with a different P2S
+   address — boxes already guarded by the old tree are untouched,
+   and nothing here signs or sends anything; it produces the bytes
+   a template user would then build boxes with. Verified in the
+   tests against an independent Python splice (hashlib P2S) over
+   the fee contract, SEG_TREE and a size-flagged tree whose size
+   field grows a byte, and cross-checked against sigmastate-js
+   (the reference implementation compiled to JS), which parses the
+   swapped trees and reads the replaced constants back at exactly
+   the new values. */
+function replaceErgoTreeConstant(treeHex, indexStr, valueSpec, networkStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, header: null, sizeFlag: false, declaredSize: null, newDeclaredSize: null, constantCount: null, index: null, oldConstant: null, newConstant: null, oldTreeHex: null, newTreeHex: null, oldByteLength: null, byteLength: null, deltaBytes: null, templateHex: null, oldP2sAddress: null, p2sAddress: null, verdict: null };
+  };
+  var info = analyzeErgoTree(treeHex, networkStr);
+  if (!info.valid) return fail(info.reason);
+  if (!info.segregated) return fail("This tree segregates no constants — its header carries no segregation flag (0x10), so there is no constants section to swap a value in. Its constants sit inline in its proposition; tools 10, 16 and 20 work with the tree as it stands, and tool 93 shows its whole proposition as the template.");
+  var bytes = hexToBytes(treeHex);
+  var net = info.network === "Mainnet" ? "mainnet" : "testnet";
+  var offset = 1;
+  if (info.sizeFlag) {
+    var sizeVlq = readVlqSize(bytes, offset);
+    if (sizeVlq === null) return fail("The header promises a VLQ-encoded proposition size, but the size field is truncated or overlong.");
+    offset += sizeVlq.length;
+    if (info.declaredSize !== bytes.length - offset) return fail("The declared size (" + info.declaredSize + " bytes) does not match the " + (bytes.length - offset) + " bytes that follow the size field (constants section plus proposition template) — this tree hex is truncated or has extra bytes.");
+  }
+  var sectionStart = offset;
+  var countVlq = readVlqBig(bytes, offset);
+  if (!countVlq) return fail("The tree is marked constant-segregated but its constants section ends in the middle of the constant count — the tree hex is truncated.");
+  offset += countVlq.length;
+  var count = Number(countVlq.value);
+  if (!Number.isSafeInteger(count) || count < 1) return fail("This tree is marked constant-segregated but its constants section lists " + countVlq.value.toString() + " constants — a segregated tree with no constants is not a segregated tree, so these bytes do not parse as one.");
+  if (count > 10000) return fail("Implausible segregated-constant count (" + countVlq.value.toString() + ") — these bytes do not parse as an ErgoTree constants section from there onward.");
+  var spans = [];
+  for (var i = 0; i < count; i++) {
+    var cStart = offset;
+    if (offset >= bytes.length) return fail("The constants section promises " + count + " constants but the bytes end before constant " + i + " (placeholders are numbered from 0) — the tree hex is truncated.");
+    var typeParsed = parseSigmaType(bytes, offset);
+    if (!typeParsed) return fail("Constant " + i + "'s type byte (0x" + bytes[offset].toString(16).padStart(2, "0") + ") is outside the set this replacer decodes (the primitive, collection and tuple types — for example an Option, Box or AvlTree constant). Because a constant's length comes from its type, its span cannot be located safely, so the swap stops rather than guess.");
+    offset += typeParsed.length;
+    var dataParsed = parseSigmaData(typeParsed.node, bytes, offset);
+    if (!dataParsed) return fail("Constant " + i + " (" + sigmaTypeName(typeParsed.node) + ") is truncated or holds a data form this replacer does not decode (a SigmaProp, for example, is only decoded in its ProveDlog form), so its span cannot be located safely — the swap stops rather than guess.");
+    offset += dataParsed.length;
+    spans.push({ index: i, start: cStart, end: offset, type: sigmaTypeName(typeParsed.node), value: dataParsed.value, rawHex: bytesToHex(bytes.subarray(cStart, offset)) });
+  }
+  if (offset >= bytes.length) return fail("The constants section consumes the whole tree — there is no proposition template after the " + count + " constants, and a segregated tree is a template plus its constants, so these bytes do not parse as one.");
+  var templateStart = offset;
+  var idxText = indexStr == null ? "" : String(indexStr).trim();
+  if (!/^\d+$/.test(idxText)) return fail("Give the placeholder number of the constant to replace — a whole number, 0 for the first constant (tool 93 lists them by number). Got \"" + (indexStr == null ? "" : String(indexStr)) + "\".");
+  var index = Number(idxText);
+  if (!Number.isSafeInteger(index) || index >= count) return fail("This tree segregates " + count + " constant(s), numbered 0 to " + (count - 1) + " — there is no constant " + idxText + " to replace.");
+  var target = spans[index];
+  var rep = sigmaConstantBytes(valueSpec);
+  if (!rep.valid) return fail("The replacement is not a usable Sigma constant: " + rep.reason);
+  if (rep.typeName !== target.type) return fail("Type mismatch: constant " + index + " is a " + target.type + " (" + target.value + "), but the replacement is a " + rep.typeName + " (" + rep.value + "). Substitution cannot change a constant's type — the template's placeholder " + index + " is typed " + target.type + ", and the reference substitution refuses a type change for the same reason. Give a " + target.type + " value instead.");
+  if (rep.rawHex === target.rawHex) return fail("The replacement is byte-identical to the constant already there (" + target.type + " = " + target.value + ") — the tree would not change, so there is nothing to build.");
+  var repBytes = Uint8Array.from(rep.bytes);
+  var spliced = new Uint8Array(bytes.length - (target.end - target.start) + repBytes.length);
+  spliced.set(bytes.subarray(0, target.start), 0);
+  spliced.set(repBytes, target.start);
+  spliced.set(bytes.subarray(target.end), target.start + repBytes.length);
+  var newBytes;
+  var newDeclared = null;
+  if (info.sizeFlag) {
+    var body = spliced.subarray(sectionStart);
+    newDeclared = body.length;
+    var sizeBytes = Uint8Array.from(writeVlqBig(BigInt(newDeclared)));
+    newBytes = new Uint8Array(1 + sizeBytes.length + body.length);
+    newBytes.set(spliced.subarray(0, 1), 0);
+    newBytes.set(sizeBytes, 1);
+    newBytes.set(body, 1 + sizeBytes.length);
+  } else {
+    newBytes = spliced;
+  }
+  var newHex = bytesToHex(newBytes);
+  var check = extractErgoTreeConstants(newHex, net);
+  if (!check.valid || !check.segregated || check.constantCount !== count) return fail("Internal round-trip check failed: the spliced tree does not read back through tool 93's extractor — refusing to show it rather than risk a malformed tree.");
+  if (check.templateHex !== bytesToHex(bytes.subarray(templateStart))) return fail("Internal round-trip check failed: the splice changed the proposition template, which a constant swap must never touch — refusing to show the result.");
+  var changedOk = check.constants.every(function (c, j) {
+    return c.rawHex === (j === index ? rep.rawHex : spans[j].rawHex);
+  });
+  if (!changedOk) return fail("Internal round-trip check failed: the spliced tree's constants do not read back as exactly the one requested change — refusing to show it rather than risk a mismatched tree.");
+  var oldP2s = buildP2SAddress(treeHex, net);
+  var newP2s = buildP2SAddress(newHex, net);
+  if (!oldP2s.valid || !newP2s.valid || !newP2s.address) return fail("Internal round-trip check failed: tool 16's P2S builder does not carry the spliced tree — refusing to show it unverified.");
+  var dec = decodeErgoAddress(newP2s.address);
+  if (!dec.valid || dec.ergoTree !== newHex) return fail("Internal round-trip check failed: the new P2S address does not decode back to the spliced tree — refusing to show it unverified.");
+  var delta = newBytes.length - bytes.length;
+  return {
+    valid: true, reason: null,
+    network: info.network, header: info.header, sizeFlag: info.sizeFlag,
+    declaredSize: info.declaredSize, newDeclaredSize: newDeclared,
+    constantCount: count, index: index,
+    oldConstant: { index: index, type: target.type, value: target.value, rawHex: target.rawHex, byteLength: target.end - target.start },
+    newConstant: { index: index, type: rep.typeName, value: rep.value, rawHex: rep.rawHex, byteLength: repBytes.length },
+    oldTreeHex: bytesToHex(bytes), newTreeHex: newHex,
+    oldByteLength: bytes.length, byteLength: newBytes.length, deltaBytes: delta,
+    templateHex: check.templateHex,
+    oldP2sAddress: oldP2s.address, p2sAddress: newP2s.address,
+    verdict: "Constant " + index + " swapped in the section bytes only — the " + check.templateByteLength + "-byte proposition template is byte-identical, so the script's logic is unchanged and only the value it runs with moved. This is a different tree from the one pasted: boxes already guarded by the old tree keep the old constant, and this new tree guards nothing until a box is created with it. The swap follows the reference substitution rule — same placeholder, same type, new value."
+  };
+}
+
 /* ---------- Address -> ErgoTree decoder ---------- */
 /* The inverse direction of tools 8 and 10: an address is
    [prefix byte][content][4-byte checksum] (tool 2 verifies the
@@ -10232,7 +10360,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -10677,6 +10805,24 @@ if (typeof document !== "undefined") {
       msg += "The proposition template (" + res.templateByteLength + " bytes) is: " + res.templateHex + " ";
       msg += res.verdict + " ";
       msg += "The tree's " + res.network + " P2S address (carrying these very bytes) is " + res.p2sAddress + ". Extracted locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- ErgoTree segregated-constant replacer --- */
+    document.getElementById("constswap-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("constswap-result");
+      var res = replaceErgoTreeConstant(document.getElementById("constswap-hex").value, document.getElementById("constswap-index").value, document.getElementById("constswap-value").value, document.getElementById("constswap-network").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Constant " + res.index + " replaced: " + res.oldConstant.type + " = " + res.oldConstant.value + " (" + res.oldConstant.byteLength + " bytes: " + res.oldConstant.rawHex + ") → " +
+        res.newConstant.type + " = " + res.newConstant.value + " (" + res.newConstant.byteLength + " bytes: " + res.newConstant.rawHex + "). ";
+      msg += "The new tree (" + res.byteLength + " bytes, " + (res.deltaBytes === 0 ? "same length" : (res.deltaBytes > 0 ? "+" : "") + res.deltaBytes + " bytes vs the original " + res.oldByteLength) + ") is: " + res.newTreeHex + " ";
+      if (res.sizeFlag) msg += "Its header carries the size flag, so the declared size was rewritten " + res.declaredSize + " → " + res.newDeclaredSize + " bytes. ";
+      msg += res.verdict + " ";
+      msg += "Its " + res.network + " P2S address is " + res.p2sAddress + " (the original tree's was " + res.oldP2sAddress + "). Built locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

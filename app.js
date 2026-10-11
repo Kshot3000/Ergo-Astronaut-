@@ -4823,6 +4823,134 @@ function addPublicKeyPairs(aText, bText) {
   return Object.assign(head, { infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet });
 }
 
+/* ---------- Sigma (Schnorr) proof verifier (proof equation) ---------- */
+/* Tools 103-110 move points around; this tool checks the equation
+   Ergo's signatures actually stand on. A proveDlog statement says:
+   "I know the discrete log x of the public point P" (P = x * G,
+   G the secp256k1 generator). A Schnorr-style Sigma proof carries
+   a commitment A = r * G (r a one-time nonce), a challenge e, and
+   a response z = r + e * x (mod n). The verifier -- who learns
+   neither x nor r -- checks exactly one equation:
+
+       z * G  ==  A + e * P
+
+   Both sides are computed here through tool 103 itself: z * G is
+   tool 103's multiply on the generator, e * P is tool 103's
+   multiply on the statement, and A + e * P is tool 103's addition.
+   The verdict is then verified by a genuinely different route --
+   the rearranged equation z * G - e * P == A, computed by
+   subtracting e * P back off the left side through tool 103 --
+   and the two verdicts must agree before anything is shown; a
+   disagreement is an internal failure, not a verdict. Both
+   scalars are reduced modulo the group order n and the typed and
+   reduced values are both reported, exactly as tool 103 reports
+   its scalar. Edge cases are identities, not errors: a challenge
+   reducing to 0 makes e * P the point at infinity and the
+   equation the claim z * G == A; a response reducing to 0 makes
+   the left side infinity, which holds exactly when A + e * P is
+   infinity too. A proof that does NOT hold is a result, not a
+   refusal: valid inputs with a false verdict return verified
+   false with both sides shown, because telling a holder of a bad
+   proof only "invalid input" would hide the one fact they came
+   for. The honest boundary is stated on the page: this checks the
+   proof EQUATION for a challenge and response the user supplies.
+   It does not parse a serialized Ergo proof (whose challenge is
+   bound by Fiat-Shamir hashing to the message and the context),
+   so a holding equation here does not by itself validate any real
+   transaction or signature -- it proves the response matches this
+   challenge for this statement and commitment, nothing more. The
+   response z is public material by design (a proof is meant to be
+   shared); the secrets behind it -- x and r -- are never entered
+   anywhere, this page included. Verified against an independent
+   Python oracle (oracle-sigproof.py, pure affine curve arithmetic
+   with built-in modular inverses -- a different implementation
+   strategy from this Jacobian code) over a holding proof, a
+   tampered response, a zero challenge, a negative challenge, an
+   infinity-both-sides proof, scalars typed above n, a
+   large-multiple proof, and an invented response against a real
+   key, which must fail, before coding. */
+var SIGMA_GENERATOR = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+function verifySigmaProof(pubkeyHex, commitmentHex, challengeStr, responseStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verified: null, pubkey: null, commitment: null, challenge: null, challengeReduced: null, response: null, responseReduced: null, epInfinity: null, epCompressed: null, lhsInfinity: null, lhsCompressed: null, lhsX: null, lhsY: null, rhsInfinity: null, rhsCompressed: null, mainnet: null, testnet: null };
+  };
+  function parseScalar(str, label) {
+    var s = (str == null ? "" : String(str)).trim();
+    if (!/^-?[0-9]+$/.test(s)) return { ok: false, reason: "The " + label + " must be a whole number written in decimal (digits, with an optional leading minus) — got \"" + s + "\". It is a public proof value of the kind a Sigma proof carries in the open; a private key, a nonce or a seed is never entered anywhere, including here." };
+    if (s.replace("-", "").length > 1000) return { ok: false, reason: "The " + label + " is capped at 1000 digits — more than enough for any proof value (the group order itself has 78). Nothing was computed." };
+    var v = BigInt(s);
+    var red = v % SECP_N;
+    if (red < 0n) red += SECP_N;
+    return { ok: true, typed: v.toString(), reduced: red.toString() };
+  }
+  var ip = inspectPublicKey(pubkeyHex);
+  if (!ip.valid) return fail("The public key P (the statement — the point whose discrete log the proof claims to know) is not a key tool 32 would accept — " + ip.reason);
+  var ia = inspectPublicKey(commitmentHex);
+  if (!ia.valid) return fail("The commitment A is not a key tool 32 would accept — " + ia.reason);
+  var e = parseScalar(challengeStr, "challenge e");
+  if (!e.ok) return fail(e.reason);
+  var z = parseScalar(responseStr, "response z");
+  if (!z.ok) return fail(z.reason);
+  /* e * P through tool 103 (the identity when e reduces to 0). */
+  var epInfinity = e.reduced === "0";
+  var epCompressed = null;
+  if (!epInfinity) {
+    var epR = calculateGroupElement(ip.publicKey, "", "Multiply (k * A)", e.reduced);
+    if (!epR.valid || epR.infinity) return fail("Internal check failed: tool 103 cannot compute e * P for a non-zero reduced challenge — refusing to show a verdict.");
+    epCompressed = epR.compressed;
+  }
+  /* Left side: z * G through tool 103 (the identity when z
+     reduces to 0). */
+  var lhsInfinity = z.reduced === "0";
+  var lhsCompressed = null;
+  if (!lhsInfinity) {
+    var lhsR = calculateGroupElement(SIGMA_GENERATOR, "", "Multiply (k * A)", z.reduced);
+    if (!lhsR.valid || lhsR.infinity) return fail("Internal check failed: tool 103 cannot compute z * G for a non-zero reduced response — refusing to show a verdict.");
+    lhsCompressed = lhsR.compressed;
+  }
+  /* Right side: A + e * P through tool 103 (just A when e * P is
+     the identity; the identity itself when A is e * P's exact
+     negation). */
+  var rhsInfinity = false;
+  var rhsCompressed = null;
+  if (epInfinity) {
+    rhsCompressed = ia.publicKey;
+  } else {
+    var rhsR = calculateGroupElement(ia.publicKey, epCompressed, "Add (A + B)", "");
+    if (!rhsR.valid) return fail("Internal check failed: tool 103 cannot compute A + e * P — refusing to show a verdict.");
+    rhsInfinity = rhsR.infinity === true;
+    rhsCompressed = rhsR.compressed;
+  }
+  var verified = lhsInfinity === rhsInfinity && (lhsInfinity || lhsCompressed === rhsCompressed);
+  /* The rearranged equation as the second route: z * G - e * P
+     must be A exactly when the direct verdict holds. */
+  var rearrangedInfinity = false;
+  var rearrangedCompressed = null;
+  if (epInfinity) {
+    rearrangedInfinity = lhsInfinity;
+    rearrangedCompressed = lhsCompressed;
+  } else if (lhsInfinity) {
+    var negR = calculateGroupElement(epCompressed, "", "Negate (-A)", "");
+    if (!negR.valid || negR.infinity) return fail("Internal check failed: tool 103 cannot negate e * P — refusing to show a verdict.");
+    rearrangedCompressed = negR.compressed;
+  } else {
+    var subR = calculateGroupElement(lhsCompressed, epCompressed, "Subtract (A - B)", "");
+    if (!subR.valid) return fail("Internal check failed: tool 103 cannot compute z * G - e * P — refusing to show a verdict.");
+    rearrangedInfinity = subR.infinity === true;
+    rearrangedCompressed = subR.compressed;
+  }
+  var rearrangedMatches = !rearrangedInfinity && rearrangedCompressed === ia.publicKey;
+  if (rearrangedMatches !== verified) return fail("Internal check failed: the direct equation and its rearrangement disagree — refusing to show a verdict.");
+  var lhsX = null, lhsY = null;
+  if (!lhsInfinity) {
+    var il = inspectPublicKey(lhsCompressed);
+    if (!il.valid) return fail("Internal check failed: the left side z * G does not pass tool 32's inspection — refusing to show a verdict.");
+    lhsX = il.x;
+    lhsY = il.y;
+  }
+  return { valid: true, reason: null, verified: verified, pubkey: ip.publicKey, commitment: ia.publicKey, challenge: e.typed, challengeReduced: e.reduced, response: z.typed, responseReduced: z.reduced, epInfinity: epInfinity, epCompressed: epCompressed, lhsInfinity: lhsInfinity, lhsCompressed: lhsCompressed, lhsX: lhsX, lhsY: lhsY, rhsInfinity: rhsInfinity, rhsCompressed: rhsCompressed, mainnet: ip.mainnet, testnet: ip.testnet };
+}
+
 /* ---------- Box set summarizer (many boxes -> one set of totals) ---------- */
 /* Tool 15 reads one box; a wallet holds many. This reads a whole
    pasted set — one full serialized box per line — and answers for
@@ -11939,7 +12067,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -13601,6 +13729,28 @@ if (typeof document !== "undefined") {
       msg += "As a Sigma constant the total is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
       msg += "Arithmetic only: adding public keys proves no ownership of any of them, and no sum point comes with any claim about who holds its private key. Nothing was fetched, signed or sent.";
       out.textContent = msg;
+    });
+
+    /* --- Sigma (Schnorr) proof verifier --- */
+    document.getElementById("sigproof-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("sigproof-result");
+      var res = verifySigmaProof(document.getElementById("sigproof-pubkey").value, document.getElementById("sigproof-commitment").value, document.getElementById("sigproof-challenge").value, document.getElementById("sigproof-response").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var reducedNote = "";
+      if (res.challenge !== res.challengeReduced) reducedNote += " The challenge was reduced modulo the group order n before use: " + res.challenge + " → " + res.challengeReduced + ".";
+      if (res.response !== res.responseReduced) reducedNote += " The response was reduced modulo the group order n before use: " + res.response + " → " + res.responseReduced + ".";
+      var epText = res.epInfinity ? "e · P is the point at infinity (the challenge reduces to 0), so the right side is the commitment itself" : "e · P is " + res.epCompressed;
+      var lhsText = res.lhsInfinity ? "the point at infinity (the response reduces to 0)" : res.lhsCompressed + " — the point x " + res.lhsX + ", y " + res.lhsY;
+      var rhsText = res.rhsInfinity ? "the point at infinity" : res.rhsCompressed;
+      if (res.verified) {
+        out.textContent = "✓ Checked locally — the proof equation HOLDS. z · G is " + lhsText + ", and A + e · P is " + rhsText + ": the two sides are the same point, so the response z = " + res.responseReduced + " answers the challenge e = " + res.challengeReduced + " for the statement P = " + res.pubkey + " (its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ") and the commitment A = " + res.commitment + " (" + epText + ")." + reducedNote + " Verified two ways before being shown: the direct equation, and its rearrangement z · G − e · P, which must return the commitment A exactly. Stated plainly: this checks the equation for the challenge and response you supplied — it does not parse a serialized Ergo proof, whose challenge is bound to a message and context by Fiat-Shamir hashing, so a holding equation here does not by itself validate any real transaction or signature. Nothing was fetched, signed or sent.";
+        return;
+      }
+      out.textContent = "✗ Checked locally — the proof equation does NOT hold. z · G is " + lhsText + ", but A + e · P is " + rhsText + ": different points, so the response z = " + res.responseReduced + " does not answer the challenge e = " + res.challengeReduced + " for the statement P = " + res.pubkey + " and the commitment A = " + res.commitment + " (" + epText + ")." + reducedNote + " Checked two ways before being shown: the direct equation, and its rearrangement z · G − e · P, which does not return the commitment A. A failing verdict is a result, not an error in your input: whoever assembled this proof either used a different challenge, a different commitment, or a response that was not made from the statement's discrete log. This tool does not parse a serialized Ergo proof and validates no real transaction or signature. Nothing was fetched, signed or sent.";
     });
 
     /* --- Box set summarizer --- */

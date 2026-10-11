@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>110 tools and counting — find the one you need:</p>
+    <p>111 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -872,6 +872,21 @@
         <textarea id="grouppairsum-b" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line — line i is added to line i of the first list)" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Add the pairs</button>
         <p id="grouppairsum-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="sigproof-calc" data-family="addresses">
+        <h3>111 · Sigma (Schnorr) proof verifier (public key + commitment + challenge + response → does the proof equation hold?)</h3>
+        <p>Tools 103 to 110 move public keys around; this tool checks the equation Ergo's signatures actually stand on. A <strong>proveDlog</strong> statement says "I know the discrete log x of the public point P" (P = x · G, with G the secp256k1 generator). Its Schnorr-style Sigma proof carries a commitment A = r · G (r a one-time nonce), a challenge e, and a response z = r + e · x (mod n) — and a verifier who learns <strong>neither x nor r</strong> checks exactly one equation: <strong>z · G = A + e · P</strong>. Paste the statement's public key, the commitment, the challenge and the response, and this tool computes both sides through tool 103 itself — z · G as its multiply on the generator, e · P as its multiply on the statement, A + e · P as its addition — and tells you whether the proof holds. Both scalars are reduced modulo the group order n before use, with the typed and reduced values both reported, exactly as tool 103 reports its scalar. The edge cases are identities, not errors: a challenge reducing to 0 makes e · P the point at infinity and the equation the claim z · G = A, and a response reducing to 0 makes the left side the point at infinity, which holds exactly when A + e · P is the point at infinity too. A proof that does <strong>not</strong> hold is a result, not a refusal: you get both sides shown and the failing verdict, because "invalid input" would hide the one fact you came for. Nothing is shown until the verdict has been verified <strong>two ways</strong> inside the tool: the direct equation, and its rearrangement z · G − e · P, which must return the commitment A exactly when the proof holds; the two verdicts must agree. Stated plainly: this checks the proof equation for a challenge and response <strong>you</strong> supply — it is <strong>not</strong> a serialized Ergo proof checker: a real proof's challenge is bound by Fiat-Shamir hashing to its message and context, so a holding equation here does not by itself validate any real transaction or signature. The response z is public material by design — a proof is meant to be shared — but the secrets behind it, x and r, are never entered anywhere: never type a private key, a nonce or a seed into any website, this one included. Computed locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="sigproof-pubkey">Public key P — the statement (compressed public key, hex, 66 characters)</label>
+        <input id="sigproof-pubkey" spellcheck="false" placeholder="e.g. 0279be667e…f81798 — a public key, never a private key" autocomplete="off">
+        <label for="sigproof-commitment">Commitment A — the proof's first message (compressed public key, hex, 66 characters)</label>
+        <input id="sigproof-commitment" spellcheck="false" placeholder="e.g. 0279be667e…f81798 — a public point, never a private key" autocomplete="off">
+        <label for="sigproof-challenge">Challenge e (whole number in decimal — a public proof value)</label>
+        <input id="sigproof-challenge" spellcheck="false" placeholder="e.g. 11" autocomplete="off">
+        <label for="sigproof-response">Response z (whole number in decimal — a public proof value, safe to share by design)</label>
+        <input id="sigproof-response" spellcheck="false" placeholder="e.g. 62" autocomplete="off">
+        <button type="submit" class="btn primary">Check the proof equation</button>
+        <p id="sigproof-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxset-calc" data-family="boxes">
@@ -1604,6 +1619,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=111"></script>
+<script src="app.js?v=112"></script>
 </body>
 </html>

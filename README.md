@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 110 tools on one page it beats scrolling.
+headers) — with 111 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -673,6 +673,32 @@ headers) — with 110 tools on one page it beats scrolling.
   arithmetic) over mixed, all-opposite, negative,
   cancelling, large-multiple, cancelling-sum and real-key
   list pairs.
+- **Sigma (Schnorr) proof verifier** — the proof equation
+  behind Ergo's proveDlog statements as a tool: a statement
+  P = x · G, a commitment A = r · G, a challenge e and a
+  response z = r + e · x (mod n), checked the way a verifier
+  who learns neither x nor r checks it — z · G = A + e · P,
+  both sides computed through the group element calculator
+  itself. Both scalars are reduced modulo the group order
+  with typed and reduced values reported. The edge cases
+  are identities, not errors: a challenge reducing to 0
+  makes the equation the claim z · G = A, and a response
+  reducing to 0 holds exactly when A + e · P is itself the
+  point at infinity. A proof that does not hold is a result,
+  not a refusal — both sides are shown with the failing
+  verdict. Nothing is shown until the verdict is verified
+  two ways: the direct equation and its rearrangement
+  z · G − e · P, which must return the commitment exactly.
+  Stated plainly on the page: this checks the equation for
+  a supplied challenge and response — it does not parse a
+  serialized Ergo proof, whose challenge is bound to a
+  message and context by Fiat-Shamir hashing, so a holding
+  equation validates no real transaction by itself.
+  Verified against an independent Python oracle (pure
+  affine curve arithmetic) over a holding proof, a tampered
+  response, zero and negative challenges, an infinity
+  proof, scalars typed above n, a large-multiple proof and
+  an invented response against a real key, which fails.
 - **Box set summarizer** — a whole set of boxes at once, one
   full serialized box per line: exact BigInt totals for ERG
   and for each token (aggregated by token ID across every box

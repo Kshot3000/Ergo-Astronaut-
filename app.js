@@ -4727,6 +4727,102 @@ function diffPublicKeyPairs(aText, bText) {
   return Object.assign(head, { infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet });
 }
 
+/* ---------- Public key list pairwise adder (two paired lists -> per-pair sums and their total) ---------- */
+/* Tool 109 differences two lists line by line; this is its
+   addition twin: S_i = A_i + B_i, the shape of combining two
+   batches of script constants position by position, or of
+   merging two snapshots of one key list key by key. The
+   pairing is positional and strict for the same reasons as in
+   tool 109: each side is composed from tool 104 itself (whose
+   refusal names the side and the line), and lists of different
+   lengths refuse outright naming both counts. A pair whose
+   second key is the exact negation of its first sums to the
+   point at infinity: a genuine pair, counted and reported as
+   the identity it contributes, never silently dropped. Nothing
+   is shown until the addition pairing law itself has been
+   verified three ways inside the tool: each sum is computed by
+   tool 103 and has its own second key subtracted back off it
+   through tool 103 to return its first key (an infinity pair is
+   checked as an exact negation through tool 103's negate
+   instead), the sums are added forward and in reverse, and --
+   separately -- the total must equal the two lists' sums added
+   together: sumA + sumB, computed through tool 103 with the
+   identity sums handled as identities (a cancelling sum
+   contributes the other sum unchanged). The honest boundary is
+   stated on the page: adding public keys proves no ownership
+   of any of them, and a sum point may have no known private key
+   at all. Public keys only: no private key or seed is ever
+   entered anywhere. Verified against an independent Python
+   oracle (oracle-grouppairsum.py, pure affine curve arithmetic
+   with built-in modular inverses -- a different implementation
+   strategy from this Jacobian code) over a mixed list, all-
+   opposite pairs, a negative sum, a cancelling total, a real
+   key, a large-multiple pair, a cancelling first sum, and two
+   cancelling sums whose pair sums still cancel, before coding. */
+function addPublicKeyPairs(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, count: null, pairs: null, oppositeCount: null, sumAInfinity: null, sumACompressed: null, sumBInfinity: null, sumBCompressed: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
+  };
+  var a = aggregatePublicKeys(aText);
+  if (!a.valid) return fail("The FIRST list is refused: " + a.reason);
+  var b = aggregatePublicKeys(bText);
+  if (!b.valid) return fail("The SECOND list is refused: " + b.reason);
+  if (a.count !== b.count) return fail("The lists do not pair up: the first list holds " + a.count + (a.count === 1 ? " key" : " keys") + " and the second holds " + b.count + (b.count === 1 ? " key" : " keys") + " — pairing is line by line, so both lists must name the same number of keys. Add or remove lines until they match; nothing was computed, because pairing a longer list against a shorter one would invent a partner for the extra keys.");
+  var pairs = [];
+  var contributions = [];
+  var oppositeCount = 0;
+  for (var i = 0; i < a.keys.length; i++) {
+    var ia = inspectPublicKey(a.keys[i]);
+    var ib = inspectPublicKey(b.keys[i]);
+    if (!ia.valid || !ib.valid) return fail("Internal check failed: pair " + (i + 1) + ", accepted by tool 104, does not pass tool 32's inspection — refusing to show an added list.");
+    var negA = calculateGroupElement(ia.publicKey, "", "Negate (-A)", "");
+    if (!negA.valid) return fail("Internal check failed: tool 103 cannot negate pair " + (i + 1) + "'s first key — refusing to show an added list.");
+    if (negA.compressed === ib.publicKey) {
+      oppositeCount++;
+      pairs.push({ line: i + 1, a: ia.publicKey, b: ib.publicKey, sum: null, infinity: true });
+      contributions.push(null);
+      continue;
+    }
+    var s = calculateGroupElement(ia.publicKey, ib.publicKey, "Add (A + B)", "");
+    if (!s.valid || s.infinity) return fail("Internal check failed: tool 103 cannot add pair " + (i + 1) + " of two keys that are not exact negations — refusing to show an added list.");
+    var back = calculateGroupElement(s.compressed, ib.publicKey, "Subtract (A - B)", "");
+    if (!back.valid || back.compressed !== ia.publicKey) return fail("Internal check failed: subtracting pair " + (i + 1) + "'s second key back off its sum through tool 103 does not return its first key — refusing to show an added list.");
+    pairs.push({ line: i + 1, a: ia.publicKey, b: ib.publicKey, sum: s.compressed, infinity: false });
+    contributions.push([BigInt("0x" + s.x), BigInt("0x" + s.y), 1n]);
+  }
+  var fwd = null;
+  for (var f = 0; f < contributions.length; f++) fwd = secpAdd(fwd, contributions[f]);
+  var rev = null;
+  for (var r = contributions.length - 1; r >= 0; r--) rev = secpAdd(rev, contributions[r]);
+  var totalC = secpCompressJacobian(fwd);
+  if (secpCompressJacobian(rev) !== totalC) return fail("Internal check failed: summing the pair sums in input order and in reverse order disagree — refusing to show a total.");
+  /* The addition pairing law, checked the other way around: the
+     total of the per-pair sums is the two lists' sums added
+     together (sumA + sumB), identities included. */
+  var expectedInf = false;
+  var expectedC = null;
+  if (a.infinity && b.infinity) {
+    expectedInf = true;
+  } else if (a.infinity) {
+    expectedC = b.compressed;
+  } else if (b.infinity) {
+    expectedC = a.compressed;
+  } else {
+    var ssum = calculateGroupElement(a.compressed, b.compressed, "Add (A + B)", "");
+    if (!ssum.valid) return fail("Internal check failed: tool 103 cannot add the two lists' sums — refusing to show a total.");
+    expectedInf = ssum.infinity === true;
+    expectedC = ssum.compressed;
+  }
+  if ((totalC === null) !== expectedInf || (totalC !== null && totalC !== expectedC)) return fail("Internal check failed: adding the lists pair by pair and adding their sums together disagree — the pairing check failed, refusing to show a total.");
+  var head = { valid: true, reason: null, count: a.count, pairs: pairs, oppositeCount: oppositeCount, sumAInfinity: a.infinity, sumACompressed: a.compressed, sumBInfinity: b.infinity, sumBCompressed: b.compressed };
+  if (fwd === null) {
+    return Object.assign(head, { infinity: true, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null });
+  }
+  var ir = inspectPublicKey(totalC);
+  if (!ir.valid) return fail("Internal check failed: the pair sums' total does not pass tool 32's inspection — refusing to show it.");
+  return Object.assign(head, { infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet });
+}
+
 /* ---------- Box set summarizer (many boxes -> one set of totals) ---------- */
 /* Tool 15 reads one box; a wallet holds many. This reads a whole
    pasted set — one full serialized box per line — and answers for
@@ -11843,7 +11939,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -13480,6 +13576,30 @@ if (typeof document !== "undefined") {
       var msg = "✓ Differenced locally. " + sumAText + sumBText + " The " + counts + " differ to a total of " + res.compressed + " — the point x " + res.x + ", y " + res.y + " (" + res.yParity + "), verified three ways before being shown: every difference was added back onto its own second key through tool 103 to return its first key, the differences were summed forward and in reverse, and the total agrees with tool 106's difference of the two sums (the pairing law — both paths must land on the same point)." + pairList + equalNote + " ";
       msg += "As a Sigma constant the total is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
       msg += "Arithmetic only: differencing public keys proves no ownership of any of them, and no difference point comes with any claim about who holds its private key. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Public key list pairwise adder --- */
+    document.getElementById("grouppairsum-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("grouppairsum-result");
+      var res = addPublicKeyPairs(document.getElementById("grouppairsum-a").value, document.getElementById("grouppairsum-b").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var counts = res.count + (res.count === 1 ? " pair" : " pairs");
+      var pairList = " Per pair: " + res.pairs.map(function (p) { return "line " + p.line + " — " + p.a + " + " + p.b + " = " + (p.infinity ? "the point at infinity (the pair holds exact negations of each other, so the two cancel)" : p.sum); }).join("; ") + ".";
+      var oppositeNote = res.oppositeCount ? " " + res.oppositeCount + (res.oppositeCount === 1 ? " pair holds" : " pairs hold") + " exact negations and contributes the identity." : "";
+      var sumAText = res.sumAInfinity ? "The first list's sum (tool 104) is the point at infinity — its terms cancel." : "The first list's sum (tool 104) is " + res.sumACompressed + ".";
+      var sumBText = res.sumBInfinity ? " The second list's sum (tool 104) is the point at infinity — its terms cancel." : " The second list's sum (tool 104) is " + res.sumBCompressed + ".";
+      if (res.infinity) {
+        out.textContent = "✓ Added locally. " + sumAText + sumBText + " The " + counts + " add to a total of the point at infinity — the secp256k1 group's identity element: the pair sums cancel exactly. That is a genuine result, not an error, but it has no compressed form, no Sigma group-element constant and no P2PK address — Ergo's 33-byte group-element encoding cannot write it." + pairList + oppositeNote + " Verified three ways before being shown: every sum had its own second key subtracted back off it through tool 103 to return its first key, the sums were added forward and in reverse, and the total agrees with the two lists' sums added together. Nothing was fetched, signed or sent.";
+        return;
+      }
+      var msg = "✓ Added locally. " + sumAText + sumBText + " The " + counts + " add to a total of " + res.compressed + " — the point x " + res.x + ", y " + res.y + " (" + res.yParity + "), verified three ways before being shown: every sum had its own second key subtracted back off it through tool 103 to return its first key, the sums were added forward and in reverse, and the total agrees with the two lists' sums added together (the pairing law — both paths must land on the same point)." + pairList + oppositeNote + " ";
+      msg += "As a Sigma constant the total is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
+      msg += "Arithmetic only: adding public keys proves no ownership of any of them, and no sum point comes with any claim about who holds its private key. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

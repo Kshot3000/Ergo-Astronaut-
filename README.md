@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 109 tools on one page it beats scrolling.
+headers) — with 110 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -646,6 +646,33 @@ headers) — with 109 tools on one page it beats scrolling.
   against an independent Python oracle (pure affine curve
   arithmetic) over mixed, identical, negative, cancelling,
   large-multiple, cancelling-sum and real-key list pairs.
+- **Public key list pairwise adder** — the addition twin of
+  the pairwise differencer: two lists of compressed public
+  keys naming the same number of keys, added line by line
+  (Sᵢ = Aᵢ + Bᵢ), returning every pair's sum, each list's
+  plain sum by the list aggregator itself, and the pair
+  sums' total. It is the addition pairing law as a tool —
+  (A₁ + B₁) + … + (Aₙ + Bₙ) = (A₁ + … + Aₙ) + (B₁ + … + Bₙ) —
+  the operation behind combining two batches of script
+  constants position by position. Lists of different lengths
+  refuse outright naming both counts, since pairing would
+  invent a partner for the extra keys, and each side is
+  strict — an invalid line refuses the whole adding with
+  the side and line named, since a skipped key would
+  misalign every pair after it. A pair whose second key is
+  the exact negation of its first sums to the point at
+  infinity, counted and reported as the identity. The
+  total is verified three ways before it is shown: every
+  sum has its own second key subtracted back off it through
+  the group element calculator to return its first key, the
+  sums are added forward and in reverse, and the total must
+  agree with the two lists' sums added together through the
+  same calculator. Stated plainly on the page: adding
+  public keys proves no ownership of any of them. Verified
+  against an independent Python oracle (pure affine curve
+  arithmetic) over mixed, all-opposite, negative,
+  cancelling, large-multiple, cancelling-sum and real-key
+  list pairs.
 - **Box set summarizer** — a whole set of boxes at once, one
   full serialized box per line: exact BigInt totals for ERG
   and for each token (aggregated by token ID across every box

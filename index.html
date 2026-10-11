@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>109 tools and counting — find the one you need:</p>
+    <p>110 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -861,6 +861,17 @@
         <textarea id="grouppair-b" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line — line i is subtracted from line i of the first list)" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Difference the pairs</button>
         <p id="grouppair-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="grouppairsum-calc" data-family="addresses">
+        <h3>110 · Public key list pairwise adder (two lists of public keys → the per-pair sums, and what they add up to)</h3>
+        <p>Tool 109 differences two lists line by line; this tool is its addition twin: line 1 of the second list is added to line 1 of the first, line 2 to line 2, and so on — S<sub>i</sub> = A<sub>i</sub> + B<sub>i</sub> — the shape of combining two batches of script constants position by position, or of merging two snapshots of one key list key by key. Paste both lists, one compressed key per line; the lists must name the <strong>same number of keys</strong>, and lists of different lengths refuse outright naming both counts, because pairing a longer list against a shorter one would invent a partner for the extra keys. Each side is <strong>strict</strong>, exactly as in tool 104: a line that is not a real point on the curve refuses the whole adding with the side and the line named, because a silently skipped key would misalign every pair after it. A pair whose second key is the exact negation of its first sums to the <strong>point at infinity</strong>: a genuine pair, counted and reported as the identity it contributes, never silently dropped. Alongside the per-pair sums the tool returns each list's plain sum by tool 104 itself and the pair sums' total — and the governing law is the <strong>pairing law</strong>: the sums add up to exactly the sum of the sums, sumA + sumB. Nothing is shown until that law has been verified three ways inside the tool: each sum is computed by tool 103 and has its own second key subtracted back off it through tool 103 to return its first key, the sums are added forward and in reverse, and the total must agree with the two lists' sums added together through tool 103, with cancelling sums checked as identities. Stated plainly: adding public keys does <strong>not</strong> prove ownership of any of them, and no sum point comes with any claim about who holds its private key. Public keys only: never type a private key or seed into any website, this one included. Computed locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="grouppairsum-a">First list — compressed public keys (hex — one 66-character key per line, up to 100)</label>
+        <textarea id="grouppairsum-a" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line)" autocomplete="off"></textarea>
+        <label for="grouppairsum-b">Second list — compressed public keys (hex — one 66-character key per line, the same count as the first list)</label>
+        <textarea id="grouppairsum-b" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line — line i is added to line i of the first list)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Add the pairs</button>
+        <p id="grouppairsum-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxset-calc" data-family="boxes">
@@ -1593,6 +1604,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=110"></script>
+<script src="app.js?v=111"></script>
 </body>
 </html>

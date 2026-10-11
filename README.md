@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 91 tools on one page it beats scrolling.
+headers) — with 92 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -1973,6 +1973,24 @@ headers) — with 91 tools on one page it beats scrolling.
   Kyle's own P2PK address and the fleet python
   cross-check vectors, and whose single-key P2SH
   matches tool 10 exactly.
+- **ErgoTree guard builder** — the encode-side
+  inverse of the guard explainer: signers' public
+  keys plus a spending rule (single key, all-of,
+  any-of, or a k-of-n threshold) assembled into
+  the pure sigma ErgoTree in the reference
+  serialization, with its P2SH and P2S addresses.
+  Every key passes the full secp256k1 curve check
+  first — a key naming no point on the curve can
+  never sign, so it is refused rather than baked
+  into an unspendable guard — and a duplicated
+  key is refused because one signer listed twice
+  would misstate the quorum. The built tree is
+  shown only after the guard explainer reads it
+  back as exactly the requested rule over exactly
+  the requested keys. Verified against an
+  independent Python oracle reproducing the
+  explainer's pinned single / all-of / any-of /
+  2-of-3 trees and addresses byte-for-byte.
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>91 tools and counting — find the one you need:</p>
+    <p>92 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -309,6 +309,25 @@
         </select>
         <button type="submit" class="btn primary">Explain this guard</button>
         <p id="guard-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="guardbuild-calc" data-family="addresses">
+        <h3>92 · ErgoTree guard builder (public keys + a spending rule → the shared guard's ErgoTree)</h3>
+        <p>Tool 91 explains a pure sigma guard and tool 19 builds the single-key tree, but nothing built the <em>shared</em> guards — the all-of, any-of and k-of-n multisigs a shared treasury, a multisig coordinator or two partners opening a joint box actually need as bytes. Paste each signer's compressed <strong>public key</strong> (one per line, 66 hex characters starting 02 or 03 — get every key from its owner, never type a private key or seed phrase anywhere), pick the spending rule, and I assemble the ErgoTree locally in the reference serialization: header <strong>0x00</strong>, the SigmaProp marker <strong>0x08</strong>, then a ProveDlog (0xcd) per key under an <strong>AND</strong> (0x96), an <strong>OR</strong> (0x97) or an <strong>ATLEAST</strong> threshold (0x98, a u16 k then a u16 count). Every key is put through tool 32's full curve check first — a key whose x names no point on secp256k1 can never sign, and a guard built around one can never be spent, so it is refused, not baked in — and a duplicated key is refused too, because one signer listed twice would misstate the quorum. The finished tree is shown with its <strong>P2SH</strong> and <strong>P2S</strong> addresses only after tool 91's explainer has read it back as exactly the rule and the keys you asked for. Building a guard proves nothing about who owns a key: check each key's P2PK address against its owner through a second channel before funding a box it guards, because a multisig with a stranger's key in it is a multisig you do not control. Built locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="guardbuild-keys">Signers' public keys (one per line)</label>
+        <textarea id="guardbuild-keys" rows="4" spellcheck="false" placeholder="e.g. 028fb2952e7373271f598b6a993038c4058e8d9f67f8f2a23ed6acfbc51446b455" autocomplete="off"></textarea>
+        <label for="guardbuild-mode">Spending rule</label>
+        <select id="guardbuild-mode">
+          <option selected>Single key</option><option>All of the keys</option><option>Any one key</option><option>Threshold k-of-n</option>
+        </select>
+        <label for="guardbuild-k">Threshold k (only for the k-of-n rule)</label>
+        <input id="guardbuild-k" spellcheck="false" placeholder="e.g. 2" autocomplete="off">
+        <label for="guardbuild-network">Network</label>
+        <select id="guardbuild-network">
+          <option selected>Mainnet</option><option>Testnet</option>
+        </select>
+        <button type="submit" class="btn primary">Build this guard</button>
+        <p id="guardbuild-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="addrtree-calc" data-family="addresses">
@@ -1357,6 +1376,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=92"></script>
+<script src="app.js?v=93"></script>
 </body>
 </html>

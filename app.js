@@ -1141,6 +1141,102 @@ function explainErgoTreeGuard(treeHex, networkStr) {
   return out;
 }
 
+/* ---------- ErgoTree guard builder (keys + spending rule -> pure sigma ErgoTree) ---------- */
+/* The encode-side inverse of tool 91: tool 91 explains a pure sigma
+   guard, tool 19 builds only the single-key P2PK tree, and nothing
+   built the shared guards — all-of, any-of and k-of-n threshold
+   multisigs — whose bytes a multisig coordinator, a shared-treasury
+   setup or anyone checking a counterparty's proposed guard actually
+   needs. The construction is the exact inverse of tool 91's grammar
+   (sigma-rust ergotree-ir sigmaboolean.rs / op_code.rs): the tree is
+   header 0x00 (version 0, no size field, no constant segregation)
+   + the SigmaProp constant marker 0x08 + one SigmaBoolean —
+   ProveDlog 0xcd + the 33-byte point for a single key, Cand 0x96 /
+   Cor 0x97 + a u16be item count + one ProveDlog per key for all-of /
+   any-of, Cthreshold 0x98 + u16be k + u16be count + the ProveDlogs
+   for a threshold. Item counts are the reference BoundedVec 1..=255.
+   Every key is run through tool 32's full curve check first (x < p
+   and x^3+7 a residue, recovered y at the claimed parity): a guard
+   built around a non-point can never be spent, exactly the trap
+   tool 32 exists to catch, so an off-curve key is refused rather
+   than baked into a tree. A duplicated key is refused too: it is
+   still one signer, and listing it twice would misstate the quorum
+   the tree claims. The built tree is never trusted on construction
+   alone — it is round-tripped through tool 10's parser (which must
+   derive the same P2SH), tool 16's P2S builder, and tool 91's
+   explainer, which must read back exactly these keys, in order,
+   under exactly the requested rule, before anything is shown.
+   Verified against an independent Python oracle
+   (hidden_files/oracle-guardbuild.py) whose trees, P2SH and P2S
+   values reproduce tool 91's pinned vectors byte-for-byte.
+   Building a guard proves nothing about who owns any key: get every
+   key from its owner through a second channel and check each P2PK
+   address tool 91 lists before funding a box it guards. Public keys
+   only — never a private key or seed phrase, here or anywhere. */
+function buildErgoTreeGuard(keysStr, modeStr, kStr, networkStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, mode: null, kind: null, k: null, keyCount: 0, keys: [], ergoTree: null, propositionHex: null, treeBytes: null, p2shAddress: null, p2sAddress: null, verdict: null };
+  };
+  var net = (networkStr == null ? "" : String(networkStr)).trim().toLowerCase();
+  if (net !== "mainnet" && net !== "testnet") return fail("Unknown network — pick mainnet or testnet. The ErgoTree itself is the same on both; only the addresses derived from it differ.");
+  var mode = (modeStr == null ? "" : String(modeStr)).trim().toLowerCase();
+  if (mode !== "single" && mode !== "all" && mode !== "any" && mode !== "threshold") return fail("Unknown spending rule — pick single key, all of the keys, any one key, or a k-of-n threshold.");
+  var tokens = (keysStr == null ? "" : String(keysStr)).split(/[\s,;]+/).filter(function (t) { return t.length > 0; });
+  if (tokens.length === 0) return fail("Enter at least one compressed public key (66 hex characters starting 02 or 03), one per line — public keys only: never enter a private key or seed phrase anywhere, including here. Tools 8 and 32 read a key out of an address and check a key, and every signer's wallet shows its own public key.");
+  if (tokens.length > 255) return fail("That is " + tokens.length + " keys — a sigma conjecture carries at most 255 items in the reference serialization, and no real guard has anywhere near that many signers. List the actual signers only.");
+  var keys = [];
+  var seen = {};
+  for (var i = 0; i < tokens.length; i++) {
+    var s = tokens[i].toLowerCase();
+    if (s.indexOf("0x") === 0) s = s.slice(2);
+    if (!/^[0-9a-f]{66}$/.test(s)) return fail("Key " + (i + 1) + " is not a compressed public key as 66 hex characters (33 bytes) — check for a truncated paste, an address pasted instead of a key, or an uncompressed key (65 bytes starting 04), which is not the form Ergo guards carry.");
+    if (s.slice(0, 2) !== "02" && s.slice(0, 2) !== "03") return fail("Key " + (i + 1) + " does not start 02 or 03 — a compressed secp256k1 public key is 33 bytes and starts 02 (even y) or 03 (odd y).");
+    if (seen[s]) return fail("Key " + (i + 1) + " is the same key as key " + seen[s] + " listed again. A duplicated key is still one signer — listing it twice would misstate the quorum this guard claims — so each signer is listed once.");
+    seen[s] = i + 1;
+    var insp = inspectPublicKey(s);
+    if (!insp.valid) return fail("Key " + (i + 1) + " cannot guard anything: " + insp.reason);
+    keys.push(s);
+  }
+  var count = keys.length;
+  var k = null;
+  if (mode === "single" && count !== 1) return fail("A single-key guard takes exactly one key — this lists " + count + ". For more than one signer pick all-of, any-of or a k-of-n threshold.");
+  if ((mode === "all" || mode === "any") && count < 2) return fail("An " + (mode === "all" ? "all-of" : "any-of") + " guard needs at least two keys — with one key there is nothing to combine; use the single-key rule (or tool 19) instead.");
+  if (mode === "threshold") {
+    if (count < 2) return fail("A k-of-n threshold needs at least two keys — with one key there is no quorum to set; use the single-key rule instead.");
+    var ks = (kStr == null ? "" : String(kStr)).trim();
+    if (!/^\d+$/.test(ks)) return fail("Enter the threshold k as a whole number — how many of the " + count + " keys must sign together (1 to " + count + ").");
+    k = parseInt(ks, 10);
+    if (k < 1 || k > count) return fail("A threshold of " + k + "-of-" + count + " can never be the guard it claims to be — a threshold needs 1 <= k <= the number of keys (" + count + ").");
+  }
+  var u16 = function (n) { return [(n >> 8) & 255, n & 255]; };
+  var body = [];
+  var itemBytes = [];
+  keys.forEach(function (pk) { itemBytes.push(SIGMA_OP_DLOG); Array.prototype.push.apply(itemBytes, hexToBytes(pk)); });
+  if (mode === "single") { body = itemBytes; }
+  else if (mode === "all") { body = [SIGMA_OP_AND].concat(u16(count), itemBytes); }
+  else if (mode === "any") { body = [SIGMA_OP_OR].concat(u16(count), itemBytes); }
+  else { body = [SIGMA_OP_ATLEAST].concat(u16(k), u16(count), itemBytes); }
+  var proposition = [0x08].concat(body);
+  var treeBytesArr = [0x00].concat(proposition);
+  var treeHex = bytesToHex(Uint8Array.from(treeBytesArr));
+  var info = analyzeErgoTree(treeHex, net);
+  if (!info.valid || !info.p2shAddress) return fail("Internal round-trip check failed: tool 10's parser does not read the built tree back — refusing to show it rather than risk a mismatched guard.");
+  var p2s = buildP2SAddress(treeHex, net);
+  if (!p2s.valid || !p2s.address) return fail("Internal round-trip check failed: tool 16's P2S builder does not carry the built tree back exactly — refusing to show it rather than risk a mismatched guard.");
+  var ex = explainErgoTreeGuard(treeHex, net);
+  var wantKind = mode === "single" ? "p2pk" : mode === "all" ? "all-of" : mode === "any" ? "any-of" : "threshold";
+  if (!ex.valid || !ex.pureSigma || ex.kind !== wantKind || ex.keyCount !== count || ex.keys.length !== count ||
+      !ex.keys.every(function (kk, j) { return kk.publicKey === keys[j] && kk.address === p2pkAddressFromPublicKey(keys[j], net); }) ||
+      (mode === "threshold" && (!ex.structure || ex.structure.k !== k))) {
+    return fail("Internal round-trip check failed: tool 91's explainer does not read the built tree back as exactly this guard over exactly these keys — refusing to show it rather than risk a mismatched guard.");
+  }
+  return {
+    valid: true, reason: null, network: net === "mainnet" ? "Mainnet" : "Testnet", mode: mode, kind: ex.kind, k: k, keyCount: count,
+    keys: ex.keys, ergoTree: treeHex, propositionHex: bytesToHex(Uint8Array.from(proposition)), treeBytes: treeBytesArr.length,
+    p2shAddress: info.p2shAddress, p2sAddress: p2s.address, verdict: ex.verdict
+  };
+}
+
 /* ---------- Address -> ErgoTree decoder ---------- */
 /* The inverse direction of tools 8 and 10: an address is
    [prefix byte][content][4-byte checksum] (tool 2 verifies the
@@ -10043,7 +10139,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -10445,6 +10541,25 @@ if (typeof document !== "undefined") {
       var msg = "✓ " + head + res.verdict + " The guard, branch by branch: " + res.lines.join(" · ") + " ";
       msg += "Counted in the bytes: " + res.dlogCount + " ProveDlog key(s), " + res.dhTupleCount + " Diffie-Hellman tuple(s), " + res.andCount + " AND(s), " + res.orCount + " OR(s), " + res.thresholdCount + " threshold(s). ";
       msg += "The tree's " + res.network + " P2SH address is " + res.p2shAddress + " — a P2S address for the same tree would carry these very bytes as its content (tool 16). A guard says who CAN spend, never who WILL: check every listed address against its owner through a second channel before sending funds to a shared guard, because a multisig with a stranger's key in it is a multisig you do not control. Explained locally from the bytes you pasted; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- ErgoTree guard builder --- */
+    document.getElementById("guardbuild-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("guardbuild-result");
+      var modeText = document.getElementById("guardbuild-mode").value;
+      var mode = modeText.indexOf("Single") === 0 ? "single" : modeText.indexOf("All") === 0 ? "all" : modeText.indexOf("Any") === 0 ? "any" : "threshold";
+      var res = buildErgoTreeGuard(document.getElementById("guardbuild-keys").value, mode, document.getElementById("guardbuild-k").value, document.getElementById("guardbuild-network").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var rule = res.mode === "single" ? "a single key" : res.mode === "all" ? "all " + res.keyCount + " keys together (" + res.keyCount + "-of-" + res.keyCount + ")" : res.mode === "any" ? "any one of the " + res.keyCount + " keys (1-of-" + res.keyCount + ")" : res.k + " of the " + res.keyCount + " keys (" + res.k + "-of-" + res.keyCount + ")";
+      var msg = "✓ Built a " + res.treeBytes + "-byte ErgoTree for " + rule + ": " + res.ergoTree + " ";
+      msg += "Tool 91 reads it back as: " + res.verdict + " ";
+      msg += "Its " + res.network + " P2SH address is " + res.p2shAddress + " and its P2S address (which carries these very bytes) is " + res.p2sAddress + ". ";
+      msg += "Each signer's own P2PK address on " + res.network + ": " + res.keys.map(function (kk) { return kk.address; }).join(" · ") + " — check every one against its owner through a second channel before funding a box guarded by this tree, because building a guard proves nothing about who owns a key. Built locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

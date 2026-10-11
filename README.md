@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 107 tools on one page it beats scrolling.
+headers) — with 108 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -593,6 +593,33 @@ headers) — with 107 tools on one page it beats scrolling.
   Python oracle (pure affine curve arithmetic) over scaled,
   zero, negative, order-sized, cancelling, duplicated,
   unit-coefficient and real-key lists.
+- **Public key list shifter** — the translation case of the
+  list tools: one shift key Q and a list of compressed public
+  keys, returning every key shifted (Pᵢ + Q), the list's plain
+  sum by the list aggregator itself, the shift's total
+  contribution n · Q, and the shifted total. It is the
+  translation law as a tool — (P₁ + Q) + … + (Pₙ + Q) =
+  (P₁ + … + Pₙ) + n · Q — the operation behind re-randomising
+  a list of commitments by a common offset or applying one
+  tweak to a batch of script constants. The shift is a public
+  key, not a scalar, so there is no identity shift to paste —
+  the 33-byte encoding cannot write the point at infinity —
+  and a key that is exactly the shift's negation shifts to
+  the point at infinity, reported term by term as the
+  identity. Every line is validated by the public key
+  inspector and the list is strict — an invalid line refuses
+  the whole shifting with the line named — and repeated keys
+  are shifted and counted as the separate terms they are.
+  The total is verified two ways before it is shown: every
+  shifted key has the shift subtracted back off it through
+  the group element calculator to return its original key,
+  and the plain sum plus n · Q recomputed through the same
+  calculator must agree with the term-by-term total. Stated
+  plainly on the page: shifting public keys proves no
+  ownership of any of them. Verified against an independent
+  Python oracle (pure affine curve arithmetic) over shifted,
+  cancelling-term, fully cancelling, duplicated,
+  triple-shifted, cancelling-list and real-key lists.
 - **Box set summarizer** — a whole set of boxes at once, one
   full serialized box per line: exact BigInt totals for ERG
   and for each token (aggregated by token ID across every box

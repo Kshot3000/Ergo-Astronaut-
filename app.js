@@ -4547,6 +4547,100 @@ function scalePublicKeyList(keysText, scalarText) {
   return Object.assign(head, { infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet });
 }
 
+/* ---------- Public key list shifter (one key added to many keys) ---------- */
+/* Tools 104/105/107 sum or scale a list; this tool translates it:
+   one shift key Q is added to every key on the list, P_i + Q --
+   the operation behind re-randomising a list of commitments by a
+   common offset, applying one tweak to a whole batch of script
+   constants, or moving a set of points by the same group element.
+   The shift key is a public key, not a scalar, so there is no
+   identity shift to paste: Ergo's 33-byte encoding cannot write
+   the point at infinity. A key equal to -Q shifts to the point at
+   infinity: a genuine term, reported as the identity it
+   contributes, never silently dropped. The list is composed from
+   tool 104 itself (strict aggregation, whose refusal names the
+   line) and the shift key is validated by tool 32 itself,
+   because a silently skipped or misread key would change both
+   sums with no sign it had happened. Repeated keys are terms
+   written twice, exactly as tool 104 established: each occurrence
+   is shifted and counted. Nothing is shown until the translation
+   law itself has been verified two independent ways inside the
+   tool: each shifted key has Q subtracted back off it through
+   tool 103 and must return its original key (an infinity term is
+   checked as the exact negation of Q instead), the shifted terms
+   are summed forward and in reverse, and -- separately -- the
+   total is recomputed as the plain sum plus n * Q, with n * Q
+   itself computed by tool 103's multiply and the final addition
+   by tool 103's add; the two totals must agree, with the identity
+   cases checked as identities. The honest boundary is stated on
+   the page: shifting public keys proves no ownership of any of
+   them, the shifted points come with no claim about who holds
+   their private keys, and no private key or seed is ever entered
+   anywhere. Verified against an independent Python oracle
+   (oracle-groupshift.py, pure affine curve arithmetic with
+   built-in modular inverses -- a different implementation
+   strategy from this Jacobian code) over a shifted generator
+   pair, a cancelling term, a fully cancelling list, a real key,
+   a large-multiple pair, a duplicated key, a triple shifted by
+   a double, and a cancelling list, before coding. */
+function shiftPublicKeyList(keysText, shiftText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, count: null, distinctCount: null, duplicates: null, shift: null, terms: null, plainInfinity: null, plainCompressed: null, shiftMultipleInfinity: null, shiftMultipleCompressed: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
+  };
+  var iq = inspectPublicKey(shiftText == null ? "" : String(shiftText).trim());
+  if (!iq.valid) return fail("The shift key is not a public key tool 32 would accept — " + iq.reason + " Paste the one compressed key (33 bytes, starting 02 or 03) that is added to every key on the list. A shift is a public key, never a private key or seed.");
+  var agg = aggregatePublicKeys(keysText);
+  if (!agg.valid) return fail(agg.reason);
+  var qPt = [BigInt("0x" + iq.x), BigInt("0x" + iq.y), 1n];
+  var terms = [];
+  var contributions = [];
+  for (var i = 0; i < agg.keys.length; i++) {
+    var ik = inspectPublicKey(agg.keys[i]);
+    if (!ik.valid) return fail("Internal check failed: line " + (i + 1) + ", accepted by tool 104, does not pass tool 32's inspection — refusing to show a shifted list.");
+    var pt = [BigInt("0x" + ik.x), BigInt("0x" + ik.y), 1n];
+    var shifted = secpAdd(pt, qPt);
+    var shiftedC = secpCompressJacobian(shifted);
+    if (shifted === null) {
+      /* An infinity term must be exactly the shift's negation. */
+      if (!(ik.x === iq.x && secpMod(BigInt("0x" + ik.y) + BigInt("0x" + iq.y)) === 0n)) return fail("Internal check failed: line " + (i + 1) + " shifted to the point at infinity but is not the shift key's negation — refusing to show a shifted list.");
+    } else {
+      var sk = inspectPublicKey(shiftedC);
+      if (!sk.valid) return fail("Internal check failed: line " + (i + 1) + "'s shifted key does not pass tool 32's inspection — refusing to show it.");
+      var back = calculateGroupElement(shiftedC, iq.publicKey, "Subtract (A - B)", "");
+      if (!back.valid || back.compressed !== ik.publicKey) return fail("Internal check failed: subtracting the shift back off line " + (i + 1) + " through tool 103 does not return its original key — refusing to show a shifted list.");
+    }
+    terms.push({ line: i + 1, publicKey: ik.publicKey, shifted: shiftedC, infinity: shifted === null });
+    contributions.push(shifted);
+  }
+  var fwd = null;
+  for (var f = 0; f < contributions.length; f++) fwd = secpAdd(fwd, contributions[f]);
+  var rev = null;
+  for (var r = contributions.length - 1; r >= 0; r--) rev = secpAdd(rev, contributions[r]);
+  var totalC = secpCompressJacobian(fwd);
+  if (secpCompressJacobian(rev) !== totalC) return fail("Internal check failed: summing the shifted terms in input order and in reverse order disagree — refusing to show a total.");
+  /* The translation law, checked the other way around: the total
+     is the plain sum plus n * Q, both steps through tool 103 --
+     with the identity cases as identities. */
+  var mult = calculateGroupElement(iq.publicKey, "", "Multiply (k * A)", String(agg.count));
+  if (!mult.valid || mult.infinity) return fail("Internal check failed: tool 103 cannot compute the shift key times the list length — refusing to show a total.");
+  var expectedC = null;
+  if (agg.infinity) {
+    expectedC = mult.compressed;
+  } else {
+    var via = calculateGroupElement(agg.compressed, mult.compressed, "Add (A + B)", "");
+    if (!via.valid) return fail("Internal check failed: tool 103 cannot add the shift multiple to the plain sum — refusing to show a total.");
+    expectedC = via.infinity ? null : via.compressed;
+  }
+  if (expectedC !== totalC) return fail("Internal check failed: shifting the list term by term and adding the shift multiple to its plain sum by tool 103 disagree — the translation check failed, refusing to show a total.");
+  var head = { valid: true, reason: null, count: agg.count, distinctCount: agg.distinctCount, duplicates: agg.duplicates, shift: iq.publicKey, terms: terms, plainInfinity: agg.infinity, plainCompressed: agg.compressed, shiftMultipleInfinity: false, shiftMultipleCompressed: mult.compressed };
+  if (fwd === null) {
+    return Object.assign(head, { infinity: true, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null });
+  }
+  var ir = inspectPublicKey(totalC);
+  if (!ir.valid) return fail("Internal check failed: the shifted total does not pass tool 32's inspection — refusing to show it.");
+  return Object.assign(head, { infinity: false, compressed: ir.publicKey, x: ir.x, y: ir.y, yParity: ir.yParity, uncompressedHex: ir.uncompressedHex, sigmaConstantHex: ir.sigmaConstantHex, mainnet: ir.mainnet, testnet: ir.testnet });
+}
+
 /* ---------- Box set summarizer (many boxes -> one set of totals) ---------- */
 /* Tool 15 reads one box; a wallet holds many. This reads a whole
    pasted set — one full serialized box per line — and answers for
@@ -11663,7 +11757,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -13252,6 +13346,30 @@ if (typeof document !== "undefined") {
       var msg = "✓ Scaled locally. " + plainText + " The " + counts + " scaled by " + res.scalar + " total " + res.compressed + " — the point x " + res.x + ", y " + res.y + " (" + res.yParity + "), verified two ways before being shown: every scaled key recomputed in the opposite bit order, the scaled terms summed forward and in reverse, and the plain sum scaled once by tool 103 (the distributive law — both paths must land on the same point)." + termList + dupNote + reducedNote + " ";
       msg += "As a Sigma constant the total is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
       msg += "Arithmetic only: the coefficient is a plain number you supplied, an ordinary public exponent of the kind scripts carry — scaling public keys proves no ownership of any of them. Nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Public key list shifter --- */
+    document.getElementById("groupshift-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("groupshift-result");
+      var res = shiftPublicKeyList(document.getElementById("groupshift-keys").value, document.getElementById("groupshift-shift").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var counts = res.count + (res.count === 1 ? " key" : " keys") + " (" + res.distinctCount + " distinct)";
+      var termList = " Per key: " + res.terms.map(function (t) { return "line " + t.line + " — " + t.publicKey + " + " + res.shift + " = " + (t.infinity ? "the point at infinity (this key is exactly the shift key's negation, so the two cancel)" : t.shifted); }).join("; ") + ".";
+      var dupNote = res.duplicates.length ? " Repeated keys, each occurrence shifted and counted as its own term: " + res.duplicates.map(function (d) { return d.publicKey + " × " + d.count + " (lines " + d.lines.join(", ") + ")"; }).join("; ") + "." : "";
+      var plainText = res.plainInfinity ? "The list's plain sum (tool 104) is the point at infinity — its terms cancel before any shifting." : "The list's plain sum (tool 104) is " + res.plainCompressed + ".";
+      var multText = " The shift added " + res.count + (res.count === 1 ? " time" : " times") + " contributes " + res.shiftMultipleCompressed + " in total.";
+      if (res.infinity) {
+        out.textContent = "✓ Shifted locally. " + plainText + multText + " The shifted total of the " + counts + " is the point at infinity — the secp256k1 group's identity element: the shifted terms cancel exactly. That is a genuine result, not an error, but it has no compressed form, no Sigma group-element constant and no P2PK address — Ergo's 33-byte group-element encoding cannot write it." + termList + dupNote + " Verified two ways before being shown: every shifted key had the shift subtracted back off it through tool 103 to return its original key, and the plain sum plus the shift times the list length agrees with the term-by-term total. Nothing was fetched, signed or sent.";
+        return;
+      }
+      var msg = "✓ Shifted locally. " + plainText + multText + " The " + counts + " shifted by " + res.shift + " total " + res.compressed + " — the point x " + res.x + ", y " + res.y + " (" + res.yParity + "), verified two ways before being shown: every shifted key had the shift subtracted back off it through tool 103 to return its original key, the shifted terms were summed forward and in reverse, and the plain sum plus the shift times the list length (the translation law — both paths must land on the same point) agrees." + termList + dupNote + " ";
+      msg += "As a Sigma constant the total is the SGroupElement " + res.sigmaConstantHex + " (tool 18). Its P2PK addresses: mainnet " + res.mainnet + " — testnet " + res.testnet + ". ";
+      msg += "Arithmetic only: shifting public keys proves no ownership of any of them, and no shifted point comes with any claim about who holds its private key. Nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

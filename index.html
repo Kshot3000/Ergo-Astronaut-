@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>107 tools and counting — find the one you need:</p>
+    <p>108 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -839,6 +839,17 @@
         <textarea id="groupscale-keys" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line)" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Scale the keys</button>
         <p id="groupscale-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="groupshift-calc" data-family="addresses">
+        <h3>108 · Public key list shifter (one public key added to many public keys → every key shifted, and the shifted total)</h3>
+        <p>Tools 104, 105 and 107 sum or scale a list; this tool <strong>translates</strong> it: one shift key Q is added to every key on the list — P₁ + Q, P₂ + Q, … — the operation behind re-randomising a list of commitments by a common offset, applying one tweak to a whole batch of script constants, or moving a set of points by the same group element. The governing law is the translation law: (P₁ + Q) + … + (Pₙ + Q) is the plain sum plus <strong>n · Q</strong>, the shift counted once for every key it was added to, so the shifted total is the plain sum moved by exactly n copies of the shift — never by one, however long the list. Paste the shift key and the compressed keys, one per line, and this tool returns every key shifted, the list's plain sum by tool 104 itself, the shift's total contribution n · Q, and the shifted total. The shift is a <strong>public key, not a scalar</strong>: there is no identity shift to paste, because Ergo's 33-byte group-element encoding cannot write the point at infinity. A key on the list that is exactly the shift's negation shifts to the <strong>point at infinity</strong>: a genuine term, reported as the identity it contributes, never silently dropped. Every line is validated by tool 32 itself and the list is <strong>strict</strong>, exactly as in tool 104: a line that is not a real point on the curve refuses the whole shifting with the line named, because a silently skipped key would change both sums with no sign it had happened. Repeated keys are terms written twice — each occurrence is shifted and counted, as tool 104 established. Nothing is shown until the translation law itself has been verified two ways inside the tool: each shifted key has the shift subtracted back off it through tool 103 and must return its original key (an infinity term is checked as the shift's exact negation instead), the shifted terms are summed forward and in reverse, and — separately — the plain sum plus n · Q is recomputed through tool 103; the two totals must agree. Stated plainly: shifting public keys does <strong>not</strong> prove ownership of any of them, and no shifted point comes with any claim about who holds its private key. Public keys only: never type a private key or seed into any website, this one included. Computed locally: it fetches nothing, signs nothing and sends nothing.</p>
+        <label for="groupshift-shift">Shift key Q — one compressed public key (hex, 66 characters)</label>
+        <input id="groupshift-shift" spellcheck="false" placeholder="e.g. 0279be667e…f81798 — a public key, never a private key" autocomplete="off">
+        <label for="groupshift-keys">Compressed public keys (hex — one 66-character key per line, up to 100)</label>
+        <textarea id="groupshift-keys" rows="5" spellcheck="false" placeholder="e.g. 0279be667e…f81798 (one compressed public key per line)" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Shift the keys</button>
+        <p id="groupshift-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxset-calc" data-family="boxes">
@@ -1571,6 +1582,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=108"></script>
+<script src="app.js?v=109"></script>
 </body>
 </html>

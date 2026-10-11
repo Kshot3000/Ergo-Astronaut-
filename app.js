@@ -962,6 +962,129 @@ function buildErgoInvoice(sellerRaw, itemStr, minerFeeStr, descriptionRaw) {
   };
 }
 
+/* ---------- Ergo split-payment builder (pot split by shares + disclosed service fee) ---------- */
+/* Splits one pot of ERG among several recipients by integer shares —
+   the freelancer/crew/DAO payout case tool 112's single-seller invoice
+   does not cover. Service fee: the hub's standard disclosed fee, the
+   SAME constants as tool 112 — 1% of the pot, rounded UP, minimum
+   0.001 ERG — as its own output to SERVICE_FEE_ADDRESS; the payer's
+   total is pot + service fee + miner fee. The split itself is the
+   largest-remainder method in exact BigInt: each recipient's exact
+   share is pot * shares / totalShares; everyone gets the floor, and
+   the leftover nanoERG (always fewer than the recipient count) go one
+   each to the largest fractional remainders, ties broken by earlier
+   line order, so the outputs re-add to the pot EXACTLY — no nanoERG
+   is created or lost to rounding. Verified a second way inside the
+   tool: outputs must re-add, each must be its floor or floor+1, the
+   +1 count must equal the leftover, and no recipient denied +1 may
+   hold a larger remainder than one who received it. Every address is
+   checksum-verified (tool 2) and all must sit on ONE network — a
+   transaction cannot pay mainnet and testnet boxes at once. A
+   recipient who would receive 0 nanoERG is refused, not silently
+   dropped; outputs below the safe minimum box value are flagged.
+   Planning only: fetches nothing, signs nothing, sends nothing. */
+var SPLIT_MAX_RECIPIENTS = 20;
+var SPLIT_MAX_SHARE = 1000000n;
+function buildSplitPayment(potStr, recipientsRaw, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, potNano: null, potErg: null, totalShares: null, recipients: null, recipientCount: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, splitText: null };
+  };
+  var pot = ergToNano(potStr);
+  if (pot === null || BigInt(pot) <= 0n) return fail("The amount to split must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var potNano = BigInt(pot);
+  var minerNano = BigInt(miner);
+  var rawLines = (recipientsRaw == null ? "" : String(recipientsRaw)).split(/\r?\n/);
+  var entries = [];
+  var seen = {};
+  var network = null;
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — address, shares (e.g. an address followed by \", 2\").");
+    var addr = parts[0].trim();
+    var shareStr = parts[1].trim();
+    if (!/^\d+$/.test(shareStr)) return fail("Line " + lineNo + " is refused: shares must be a whole number of parts (no decimals, no percent signs) — use 2 and 1 for a two-to-one split, not 66.7 and 33.3.");
+    var share = BigInt(shareStr);
+    if (share <= 0n) return fail("Line " + lineNo + " is refused: shares must be above zero — remove a recipient instead of giving them zero shares.");
+    if (share > SPLIT_MAX_SHARE) return fail("Line " + lineNo + " is refused: shares are capped at 1,000,000 parts per recipient so a typo cannot silently swallow the whole pot.");
+    var check = checkErgoAddress(addr);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (seen[addr]) return fail("The address on line " + lineNo + " already appears on line " + seen[addr] + " — combine its shares into one line so each recipient gets exactly one output.");
+    seen[addr] = lineNo;
+    if (network === null) network = check.network;
+    else if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the earlier recipients are " + network + " — one transaction lives on one network, so all recipients must match.");
+    entries.push({ address: addr, network: check.network, type: check.type, shares: share, line: lineNo });
+  }
+  if (entries.length < 2) return fail("A split needs at least two recipients — for a single payee, build a plain invoice with tool 112 instead.");
+  if (entries.length > SPLIT_MAX_RECIPIENTS) return fail("This builder takes at most " + SPLIT_MAX_RECIPIENTS + " recipients (you listed " + entries.length + ") — a transaction with more outputs than that belongs in a dedicated wallet flow, not a copyable plan.");
+  var totalShares = 0n;
+  for (var si = 0; si < entries.length; si++) totalShares += entries[si].shares;
+  /* Largest-remainder split, exact BigInt. */
+  var floors = [], rems = [], sumFloor = 0n;
+  for (var fi = 0; fi < entries.length; fi++) {
+    var prod = potNano * entries[fi].shares;
+    floors.push(prod / totalShares);
+    rems.push(prod % totalShares);
+    sumFloor += floors[fi];
+  }
+  var leftover = potNano - sumFloor; /* 0 <= leftover < recipient count */
+  var order = entries.map(function (_, i) { return i; }).sort(function (a, b) {
+    if (rems[a] !== rems[b]) return rems[a] > rems[b] ? -1 : 1;
+    return a - b;
+  });
+  var bonus = entries.map(function () { return false; });
+  for (var bi = 0; bi < Number(leftover); bi++) bonus[order[bi]] = true;
+  var amounts = floors.map(function (f, i) { return bonus[i] ? f + 1n : f; });
+  /* Second-way verification of the split before anything is shown. */
+  var sumOut = 0n, bonusCount = 0n;
+  for (var vi = 0; vi < amounts.length; vi++) {
+    sumOut += amounts[vi];
+    if (amounts[vi] !== floors[vi] && amounts[vi] !== floors[vi] + 1n) return fail("Internal check failed: a split output is neither its floor nor floor+1 — refusing to show it.");
+    if (bonus[vi]) bonusCount += 1n;
+  }
+  if (sumOut !== potNano) return fail("Internal check failed: the split outputs do not re-add to the amount being split — refusing to show it.");
+  if (bonusCount !== leftover) return fail("Internal check failed: the remainder bonuses do not match the leftover — refusing to show it.");
+  for (var gi = 0; gi < entries.length; gi++) if (bonus[gi]) for (var gj = 0; gj < entries.length; gj++) if (!bonus[gj] && rems[gj] > rems[gi]) return fail("Internal check failed: a larger remainder was denied the extra nanoERG — refusing to show it.");
+  for (var zi = 0; zi < amounts.length; zi++) if (amounts[zi] <= 0n) return fail("Recipient " + (zi + 1) + " (line " + entries[zi].line + ") would receive 0 nanoERG — the pot is too small for that share ratio. Increase the amount or even out the shares.");
+  /* Service fee: same two-route check as tool 112. */
+  var feeA = (potNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = potNano / 100n + (potNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a split rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  var totalNano = potNano + feeNano + minerNano;
+  if (totalNano - minerNano - feeNano !== potNano) return fail("Internal check failed: the totals do not re-add — refusing to show it.");
+  var anyDust = false, includesFeeAddr = false;
+  var recipients = entries.map(function (e, i) {
+    var dust = amounts[i] < SAFE_USER_MIN_BOX_NANO;
+    if (dust) anyDust = true;
+    if (e.address === SERVICE_FEE_ADDRESS) includesFeeAddr = true;
+    return { address: e.address, network: e.network, type: e.type, shares: e.shares.toString(), amountNano: amounts[i].toString(), amountErg: nanoToErg(amounts[i].toString()), gotRemainderBonus: bonus[i], belowSafeMin: dust };
+  });
+  var lines = ["ERGO SPLIT PAYMENT — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Amount split: " + nanoToErg(potNano.toString()) + " ERG (" + potNano.toString() + " nanoERG) among " + recipients.length + " recipients by shares (largest-remainder, exact to the nanoERG):"];
+  recipients.forEach(function (r, i) { lines.push("Recipient " + (i + 1) + " (" + r.shares + " shares): " + r.amountErg + " ERG (" + r.amountNano + " nanoERG) to " + r.address); });
+  lines.push("Service fee (disclosed: 1% of the amount split, rounded up, minimum 0.001 ERG): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+  lines.push("Miner fee: " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG)");
+  lines.push("Total the payer pays: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG)");
+  lines.push("Pay by building a transaction in your own wallet with one output per recipient plus the service-fee output above, plus the miner fee. This split is a plan only: nothing has been signed or sent, and no payment has been made.");
+  return {
+    valid: true, reason: null, network: network,
+    potNano: potNano.toString(), potErg: nanoToErg(potNano.toString()),
+    totalShares: totalShares.toString(), recipients: recipients, recipientCount: recipients.length,
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust, includesServiceAddress: includesFeeAddr,
+    splitText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -12138,7 +12261,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -12505,6 +12628,23 @@ if (typeof document !== "undefined") {
       if (res.sellerBelowSafeMin) msg += "⚠ The item amount is below the recommended 0.001 ERG safe minimum per box (tool 5) — a seller output that small may be impractical to create. ";
       if (res.sellerIsServiceAddress) msg += "Note: the seller address is the service-fee address itself, so both outputs go to the same address and a wallet can combine them into one box of " + nanoToErg((BigInt(res.itemNano) + BigInt(res.serviceFeeNano)).toString()) + " ERG. ";
       msg += "Copyable invoice:\n" + res.invoiceText + "\nInvoice only, built locally: it fetches nothing, signs nothing and sends nothing — no payment has been made until the buyer builds and signs the transaction in their own wallet.";
+      out.textContent = msg;
+    });
+
+    /* --- ErgoTree inspector --- */
+    document.getElementById("splitpay-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("splitpay-result");
+      var res = buildSplitPayment(document.getElementById("splitpay-amount").value, document.getElementById("splitpay-recipients").value, document.getElementById("splitpay-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var parts = res.recipients.map(function (r, i) { return "recipient " + (i + 1) + " gets " + r.amountErg + " ERG (" + r.shares + " shares" + (r.gotRemainderBonus ? ", +1 nanoERG remainder bonus" : "") + ")"; });
+      var msg = "✓ Split built on " + res.network + " — the payer pays " + res.totalErg + " ERG (" + res.totalNano + " nanoERG) in total: the " + res.potErg + " ERG pot splits as " + parts.join("; ") + ", plus a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the pot, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), plus the " + res.minerFeeErg + " ERG miner fee. The outputs re-add to the pot exactly. ";
+      if (res.anyBelowSafeMin) msg += "⚠ At least one recipient output is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.includesServiceAddress) msg += "Note: one recipient is the service-fee address itself, so that address receives its split output plus the service fee, and a wallet can combine them. ";
+      msg += "Copyable split plan:\n" + res.splitText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — no payment has been made until the payer builds and signs the transaction in their own wallet.";
       out.textContent = msg;
     });
 

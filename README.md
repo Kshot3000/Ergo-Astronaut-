@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**112 free Ergo tools, local-first:** the live hub carries 112 tools that run
+**113 free Ergo tools, local-first:** the live hub carries 113 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
-the page and there is no sign-up. The tools are free to use; the one
-tool that earns is the invoice builder below, whose disclosed 1%
-service fee is printed in every invoice it builds.
+the page and there is no sign-up. The tools are free to use; the tools
+that earn are the invoice and split-payment builders below, whose
+disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
 
@@ -77,7 +77,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 112 tools on one page it beats scrolling.
+headers) — with 113 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -147,6 +147,19 @@ headers) — with 112 tools on one page it beats scrolling.
   anything is shown. You get a copyable invoice block; the buyer
   builds the transaction in their own wallet. Invoice only: it
   fetches nothing, signs nothing, and sends nothing.
+- **Ergo split-payment builder** — splitting one ERG payment among
+  several people? List each recipient as address, shares (whole parts)
+  and the pot is divided by the largest-remainder method in exact
+  BigInt maths: floored shares first, then the leftover nanoERG one
+  each to the largest fractional remainders, ties by list order, so
+  the outputs re-add to the pot exactly. Every address is
+  checksum-verified and all must sit on one network; a recipient who
+  would receive 0 nanoERG is refused, not dropped. The payer also
+  pays the hub's disclosed service fee — 1% of the pot, rounded up,
+  minimum 0.001 ERG — as its own output to my Ergo address, printed
+  in the plan itself, plus the miner fee. You get a copyable plan
+  block; the payer builds the transaction in their own wallet.
+  Plan only: it fetches nothing, signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

@@ -891,6 +891,77 @@ function planPayment(boxesStr, paymentStr, feeStr) {
   };
 }
 
+/* ---------- Ergo invoice builder (item + disclosed service fee) ---------- */
+/* A payment invoice with the service fee designed in and disclosed up
+   front, per the hub's profit mandate: the buyer pays three things —
+   the item amount (an output to the seller), a service fee (a separate
+   output to the hub builder's own Ergo address below), and the miner
+   fee (not an output). The service fee is 1% of the item amount,
+   rounded UP to the next nanoERG so it never silently rounds away,
+   with a minimum of 0.001 ERG — the recommended safe minimum box value
+   (SAFE_USER_MIN_BOX_NANO) — so the fee output is a viable box, not
+   dust. Exact BigInt maths throughout. This builds an invoice (a
+   plan + a copyable text block) only: it fetches nothing, signs
+   nothing and sends nothing; the buyer builds the actual transaction
+   in their own wallet with the two outputs shown. */
+var SERVICE_FEE_ADDRESS = "9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy";
+var SERVICE_FEE_BPS = 100n; /* 100 basis points = 1% */
+var SERVICE_FEE_MIN_NANO = 1000000n; /* 0.001 ERG */
+function buildErgoInvoice(sellerRaw, itemStr, minerFeeStr, descriptionRaw) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, sellerAddress: null, sellerNetwork: null, sellerType: null, description: null, itemNano: null, itemErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, sellerBelowSafeMin: null, sellerIsServiceAddress: null, invoiceText: null };
+  };
+  var check = checkErgoAddress(sellerRaw);
+  if (!check.valid) return fail("The seller address is refused: " + check.reason);
+  var seller = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var item = ergToNano(itemStr);
+  if (item === null || BigInt(item) <= 0n) return fail("The item amount must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var description = (descriptionRaw == null ? "" : String(descriptionRaw)).replace(/\s+/g, " ").trim();
+  if (description.length > 140) return fail("The description is " + description.length + " characters — keep it to 140 or fewer so the invoice stays a single copyable block.");
+  if (description === "") description = "(no description)";
+  var itemNano = BigInt(item);
+  var minerNano = BigInt(miner);
+  /* Fee, route A: ceiling of item * bps / 10000. */
+  var feeA = (itemNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  /* Fee, route B (independent): with bps = 100, 1% is item / 100,
+     ceiling via quotient + remainder. The two must agree exactly. */
+  var feeB = itemNano / 100n + (itemNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show an invoice rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  var totalNano = itemNano + feeNano + minerNano;
+  /* The split must re-add exactly: total - miner - fee == item. */
+  if (totalNano - minerNano - feeNano !== itemNano) return fail("Internal check failed: the invoice outputs do not re-add to the item amount — refusing to show it.");
+  var itemErg = nanoToErg(itemNano.toString());
+  var feeErg = nanoToErg(feeNano.toString());
+  var minerErg = nanoToErg(minerNano.toString());
+  var totalErg = nanoToErg(totalNano.toString());
+  var lines = [
+    "ERGO INVOICE — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Item: " + description,
+    "Seller receives: " + itemErg + " ERG (" + itemNano.toString() + " nanoERG) to " + seller,
+    "Service fee (disclosed: 1% of the item, rounded up, minimum 0.001 ERG): " + feeErg + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS,
+    "Miner fee: " + minerErg + " ERG (" + minerNano.toString() + " nanoERG)",
+    "Total the buyer pays: " + totalErg + " ERG (" + totalNano.toString() + " nanoERG)",
+    "Pay by building a transaction in your own wallet with two outputs — the seller amount and the service fee above — plus the miner fee. This invoice is a plan only: nothing has been signed or sent, and no payment has been made."
+  ];
+  return {
+    valid: true, reason: null,
+    sellerAddress: seller, sellerNetwork: check.network, sellerType: check.type,
+    description: description,
+    itemNano: itemNano.toString(), itemErg: itemErg,
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: feeErg,
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    minerFeeNano: minerNano.toString(), minerFeeErg: minerErg,
+    totalNano: totalNano.toString(), totalErg: totalErg,
+    sellerBelowSafeMin: itemNano < SAFE_USER_MIN_BOX_NANO,
+    sellerIsServiceAddress: seller === SERVICE_FEE_ADDRESS,
+    invoiceText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -12067,7 +12138,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -12422,6 +12493,21 @@ if (typeof document !== "undefined") {
     });
 
     /* --- ErgoTree inspector --- */
+    document.getElementById("invoice-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("invoice-result");
+      var res = buildErgoInvoice(document.getElementById("invoice-seller").value, document.getElementById("invoice-amount").value, document.getElementById("invoice-minerfee").value, document.getElementById("invoice-desc").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Invoice built — the buyer pays " + res.totalErg + " ERG (" + res.totalNano + " nanoERG) in total: " + res.itemErg + " ERG to the seller (" + res.sellerAddress + ", " + res.sellerNetwork + " " + res.sellerType + "), a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the item, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), plus the " + res.minerFeeErg + " ERG miner fee. ";
+      if (res.sellerBelowSafeMin) msg += "⚠ The item amount is below the recommended 0.001 ERG safe minimum per box (tool 5) — a seller output that small may be impractical to create. ";
+      if (res.sellerIsServiceAddress) msg += "Note: the seller address is the service-fee address itself, so both outputs go to the same address and a wallet can combine them into one box of " + nanoToErg((BigInt(res.itemNano) + BigInt(res.serviceFeeNano)).toString()) + " ERG. ";
+      msg += "Copyable invoice:\n" + res.invoiceText + "\nInvoice only, built locally: it fetches nothing, signs nothing and sends nothing — no payment has been made until the buyer builds and signs the transaction in their own wallet.";
+      out.textContent = msg;
+    });
+
     document.getElementById("tree-calc").addEventListener("submit", function (ev) {
       ev.preventDefault();
       var out = document.getElementById("tree-result");

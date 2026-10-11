@@ -3,11 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**111 free Ergo tools, local-first:** the live hub carries 111 tools that run
+**112 free Ergo tools, local-first:** the live hub carries 112 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
-the page; there is no sign-up and no fee.
+the page and there is no sign-up. The tools are free to use; the one
+tool that earns is the invoice builder below, whose disclosed 1%
+service fee is printed in every invoice it builds.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
 
@@ -75,7 +77,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 111 tools on one page it beats scrolling.
+headers) — with 112 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -134,6 +136,17 @@ headers) — with 111 tools on one page it beats scrolling.
   would usually fold into the fee. Planning only: it fetches nothing,
   signs nothing, and sends nothing; real wallets may select boxes in
   a different order.
+- **Ergo invoice builder** — selling something for ERG? The seller's
+  address is checksum-verified, then the invoice splits what the buyer
+  pays into three disclosed parts with exact BigInt maths: the item
+  amount to the seller, a service fee of 1% of the item (rounded up to
+  the next nanoERG, minimum 0.001 ERG so the fee output is a viable
+  box) to my Ergo address — printed in the invoice itself, no hidden
+  fees — and the miner fee. The fee is computed two independent ways
+  inside the tool and the outputs must re-add to the total before
+  anything is shown. You get a copyable invoice block; the buyer
+  builds the transaction in their own wallet. Invoice only: it
+  fetches nothing, signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

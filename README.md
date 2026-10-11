@@ -3,6 +3,12 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
+**111 free Ergo tools, local-first:** the live hub carries 111 tools that run
+entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
+checker, storage rent and Autolykos mining estimators, and serialized box,
+transaction and block header parsers and builders. Nothing you paste leaves
+the page; there is no sign-up and no fee.
+
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
 
 > Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) —

@@ -2376,5 +2376,14 @@ check("toolMatchesFilter family gate", app.toolMatchesFilter("headers", "Block h
 check("toolMatchesFilter needle is case-insensitive text search", app.toolMatchesFilter("codecs", "VLQ codec", "all", "vlq") === true && app.toolMatchesFilter("codecs", "VLQ codec", "codecs", "CODEC") === true && app.toolMatchesFilter("codecs", "VLQ codec", "all", "header") === false);
 check("toolMatchesFilter empty needle matches, junk matches nothing", app.toolMatchesFilter("boxes", "", "all", "") === true && app.toolMatchesFilter("boxes", "Box parser", "all", "zzzz") === false && app.toolMatchesFilter("boxes", "Box parser", "transactions", "box") === false);
 
+/* SEO / discoverability (profit mandate: traffic first) */
+const sitemap = fs.readFileSync(path.join(root, "sitemap.xml"), "utf8");
+check("canonical URL is the live hub", html.includes('<link rel="canonical" href="https://kshot3000.github.io/Ergo-Astronaut-/">'));
+check("meta description names the 111 tools and the search-intent tools", html.includes("111 free Ergo tools") && html.includes("address checker") && html.includes("storage rent"));
+check("twitter card present and tagged", html.includes('name="twitter:card"') && html.includes('name="twitter:site" content="@kshot9000"') && html.includes("@ergo_platform"));
+check("JSON-LD WebApplication parses, is free, and names 111 tools", (() => { const m = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/); if (!m) return false; try { const j = JSON.parse(m[1]); return j["@type"] === "WebApplication" && j.isAccessibleForFree === true && j.offers.price === "0" && /111/.test(j.name) && j.author.name === "Kyle Cox" && j.url === "https://kshot3000.github.io/Ergo-Astronaut-/"; } catch { return false; } })());
+check("sitemap lists hub and guide with lastmod", sitemap.includes("<loc>https://kshot3000.github.io/Ergo-Astronaut-/</loc>") && sitemap.includes("guides/getting-started-ergo.md") && sitemap.includes("<lastmod>2026-10-11</lastmod>"));
+check("README leads with the 111 free tools", readme.includes("111 free Ergo tools, local-first"));
+
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

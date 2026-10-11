@@ -155,7 +155,7 @@
 
   <section id="tools" aria-labelledby="tools-h">
     <h2 id="tools-h">Flight tools — right here, nothing leaves your browser</h2>
-    <p>99 tools and counting — find the one you need:</p>
+    <p>100 tools and counting — find the one you need:</p>
     <div class="filter-row" role="group" aria-label="Find a flight tool">
       <label for="tool-q">Find a tool</label>
       <input id="tool-q" type="search" placeholder="e.g. header, token, VLQ, address…" autocomplete="off">
@@ -439,6 +439,17 @@
         <textarea id="addrintersect-b" rows="5" spellcheck="false" placeholder="e.g. the other side — an allowlist, a second address book, or the set a contract expects" autocomplete="off"></textarea>
         <button type="submit" class="btn primary">Intersect the two lists</button>
         <p id="addrintersect-result" role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="tool" id="addrxor-calc" data-family="addresses">
+        <h3>100 · Address set symmetric difference (two lists of addresses → the addresses only one list holds)</h3>
+        <p>Tool 97 triages one list, tool 98 subtracts two and tool 99 finds what two share; this is the remaining symmetric question between two — the <strong>disagreement itself</strong>: which addresses does exactly one list hold? That is what reconciling two address books, a payout list against a wallet export, or the set tool 31 derives against the set a contract expects actually turns on — not the overlap, but everything outside it. The difference comes back by itself — the first-list-only addresses in the <strong>first list's own order</strong>, then the second-list-only ones in the <strong>second list's order</strong> — ready to paste onward. Identity is exact: an address is held only by <em>itself</em>, the same string on the same network. Its cross-network twin — the same type and content under the other network's prefix, tool 13's conversion — is a different address guarding boxes in a different world, so when each list holds only the other network's form, <em>both</em> twins land in the difference, and the pair is named as a <strong>cross-network twin pair</strong>: they look like &ldquo;the same address&rdquo; turning up in both lists, but both are disagreements. Two deliberate rules carry over from tools 98 and 99. A list meant to be used as-is cannot skip lines silently, so an invalid line on <em>either</em> side refuses the whole difference, with the side, line and tool 2's reason named — a skipped line could silently drop an address that really is a disagreement, and an omission is the one error a difference cannot show. And repeated lines inside a list collapse to the distinct address (each list is the set it names) and are counted, so a duplicate cannot make an address look &ldquo;more held&rdquo;. The verdicts mirror the box, transaction and header symmetric differences: identical lists (an answer, not an error), disjoint lists, one list sitting wholly inside the other, or a plain overlap. The difference is cross-checked against tools 98 and 99 and re-summarized by tool 97 itself before anything is shown, so the tools can never disagree about it. The set itself does not depend on direction — the second list differenced with the first names the same addresses — but the two blocks swap places when the lists swap, and every report says so. The honest boundary: this differences the strings you pasted — it fetches nothing, and it proves nothing about any address's balance or who owns it. Differenced locally: it signs nothing and sends nothing.</p>
+        <label for="addrxor-a">First list — Ergo addresses (one per line, up to 100)</label>
+        <textarea id="addrxor-a" rows="5" spellcheck="false" placeholder="e.g. one side of the reconciliation — a payout list, an address-book export, or tool 31's derived set" autocomplete="off"></textarea>
+        <label for="addrxor-b">Second list — Ergo addresses (one per line, up to 100)</label>
+        <textarea id="addrxor-b" rows="5" spellcheck="false" placeholder="e.g. the other side — a wallet export, a second address book, or the set a contract expects" autocomplete="off"></textarea>
+        <button type="submit" class="btn primary">Difference the two lists</button>
+        <p id="addrxor-result" role="status" aria-live="polite"></p>
       </form>
 
       <form class="tool" id="boxid-calc" data-family="boxes">
@@ -1479,6 +1490,6 @@
   <p>Ergo Astronaut · Open source by Kyle Cox (@kshot9000) · Tagging the Ergo team: @ergoplatform (GitHub) · @ergo_platform (X) · Not affiliated with the Ergo Foundation or the Ergo Platform team — an independent builder project.</p>
   <p>ERG donations: 9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy</p>
 </footer>
-<script src="app.js?v=100"></script>
+<script src="app.js?v=101"></script>
 </body>
 </html>

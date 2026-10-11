@@ -69,7 +69,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 99 tools on one page it beats scrolling.
+headers) — with 100 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -2150,6 +2150,38 @@ headers) — with 99 tools on one page it beats scrolling.
   full and none cases, the cross-network
   near miss, strict refusals on both
   sides, and the reverse direction).
+- **Address set symmetric difference** —
+  the addresses two lists disagree on:
+  what exactly one list holds (reconciling
+  two address books, a payout list against
+  a wallet export), handed back as the
+  first-list-only addresses in the first
+  list's own order followed by the
+  second-list-only ones in the second
+  list's order, ready to paste onward.
+  Identity is exact: only the same string
+  on the same network is held by both, so
+  when each list holds only the other
+  network's form of one address, both
+  cross-network twins land in the
+  difference and are named as a twin pair
+  instead of silently looking like an
+  agreement. Like the difference and the
+  intersection, an invalid line on either
+  side refuses the whole difference — a
+  skipped line could silently drop an
+  address that really is a disagreement —
+  and the difference is cross-checked
+  against the subtraction and intersection
+  tools and re-summarized by the summarizer
+  itself before it is shown. The set is
+  direction-free; only the two blocks'
+  order follows the lists. Verified
+  against an independent Python oracle
+  over the hub's pinned vectors (overlap,
+  identical, disjoint, subset and
+  twin-only cases, strict refusals on
+  both sides, and the reverse direction).
 - **Transaction set summarizer** — a set
   of serialized transactions, one per
   line, aggregated as a whole: input,

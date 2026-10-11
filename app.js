@@ -2135,6 +2135,111 @@ function intersectAddressSets(aText, bText) {
   };
 }
 
+/* ---------- Address set symmetric difference (tool 100) ----------
+   Tool 97 triages one list, tool 98 subtracts two and tool 99 finds
+   what two lists share; this is the remaining symmetric question:
+   which addresses does EXACTLY ONE list hold — the disagreement
+   itself, handed back as a list. It is what reconciling two address
+   books, a payout list against a wallet export, or the set tool 31
+   derives against the set a contract expects actually turns on:
+   not the overlap, but everything outside it. The difference comes
+   back as the first-list-only addresses in the first list's order,
+   followed by the second-list-only addresses in the second list's
+   order, ready to paste onward. The SET is direction-free — A △ B
+   and B △ A hold the same addresses — but the two blocks swap
+   places when the lists swap, and the report says so. Two rules
+   carry over from tools 98/99, for the same reasons. First, strict:
+   the difference is handed back meant to be used as-is, so an
+   invalid line on either side refuses the whole difference, with
+   the side, line and tool 2's reason named — a skipped line could
+   silently drop an address that really is a disagreement, and the
+   reader cannot see an omission. Second, identity: an address is
+   held only by ITSELF, the exact string. Its cross-network twin
+   (same type and content under the other network's prefix, tool
+   13's conversion) is a different address guarding boxes on a
+   different world — so when each list holds only the other
+   network's form, BOTH twins land in the difference, and the pair
+   is reported: they look like "the same address" turning up in
+   both lists, but both are disagreements. Duplicates inside a side
+   collapse to the distinct address and are counted. The verdicts
+   mirror the box/transaction/header symmetric differences:
+   identical-sets when nothing differs, disjoint when nothing is
+   shared either, subset-first / subset-second when one list sits
+   wholly inside the other, overlap otherwise. Verified before
+   showing three ways: the accounting must close, tools 98's two
+   subtractions must hand back exactly the two only-blocks, tool
+   99's shared count must equal the common count, and the
+   difference is re-summarized by tool 97 itself.
+   Verified against an independent Python oracle
+   (oracle-addrxor.py) over the hub's pinned vectors before
+   coding. */
+function xorAddressSets(aText, bText) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, verdict: null, distinctCountA: null, distinctCountB: null, duplicateCountA: null, duplicateCountB: null, diffCount: null, onlyACount: null, onlyBCount: null, commonCount: null, diffAddresses: null, onlyAAddresses: null, onlyBAddresses: null, diffEntries: null, diffText: null, crossNetworkTwinPairs: null, diffMainnetCount: null, diffTestnetCount: null };
+  };
+  var strict = function (text, side) {
+    var s = summarizeAddressSet(text);
+    if (!s.valid) return { error: "The " + side + " list is refused: " + s.reason };
+    if (s.invalidCount > 0) {
+      var iv = s.invalid[0];
+      return { error: "The " + side + " list is refused: line " + iv.line + " (" + iv.input + ") is not a valid payment address — " + iv.reason + " A symmetric difference hands back the disagreement meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line could silently drop an address that really is a disagreement, and an omission is the one error a difference cannot show." };
+    }
+    return { summary: s };
+  };
+  var pa = strict(aText, "FIRST");
+  if (pa.error) return fail(pa.error);
+  var pb = strict(bText, "SECOND");
+  if (pb.error) return fail(pb.error);
+  var a = pa.summary, b = pb.summary;
+  var inA = {}, inB = {};
+  a.entries.forEach(function (e) { inA[e.address] = true; });
+  b.entries.forEach(function (e) { inB[e.address] = true; });
+  var onlyAEntries = a.entries.filter(function (e) { return !inB[e.address]; });
+  var onlyBEntries = b.entries.filter(function (e) { return !inA[e.address]; });
+  var onlyAAddresses = onlyAEntries.map(function (e) { return e.address; });
+  var onlyBAddresses = onlyBEntries.map(function (e) { return e.address; });
+  var commonCount = a.distinctCount - onlyAAddresses.length;
+  if (commonCount !== b.distinctCount - onlyBAddresses.length || commonCount < 0) return fail("Internal error: the difference accounting does not close — nothing was shown rather than an unverified difference.");
+  var minusAB = subtractAddressSets(aText, bText);
+  var minusBA = subtractAddressSets(bText, aText);
+  var inter = intersectAddressSets(aText, bText);
+  if (!minusAB.valid || !minusBA.valid || !inter.valid) return fail("Internal error: the cross-check tools refused lists this tool accepted — nothing was shown rather than an unverified difference.");
+  if (minusAB.remainderAddresses.join("\n") !== onlyAAddresses.join("\n") || minusBA.remainderAddresses.join("\n") !== onlyBAddresses.join("\n") || inter.sharedCount !== commonCount) return fail("Internal error: the difference disagrees with tools 98 and 99 — nothing was shown rather than an unverified difference.");
+  var aOnlyByContent = {};
+  onlyAEntries.forEach(function (e) { aOnlyByContent[e.typeCode + ":" + e.contentHex] = e.address; });
+  var twinPairs = [];
+  onlyBEntries.forEach(function (e) {
+    var twin = aOnlyByContent[e.typeCode + ":" + e.contentHex];
+    if (twin && twin !== e.address) twinPairs.push([twin, e.address]);
+  });
+  var diffAddresses = onlyAAddresses.concat(onlyBAddresses);
+  var diffText = diffAddresses.join("\n");
+  var diffEntries = [], diffMainnetCount = 0, diffTestnetCount = 0;
+  if (diffAddresses.length) {
+    var s = summarizeAddressSet(diffText);
+    if (!s.valid || s.distinctCount !== diffAddresses.length || s.invalidCount !== 0) return fail("Internal error: the difference does not re-summarize as itself — nothing was shown rather than an unverified difference.");
+    diffEntries = s.entries;
+    diffMainnetCount = s.mainnetCount;
+    diffTestnetCount = s.testnetCount;
+  }
+  var verdict;
+  if (diffAddresses.length === 0) verdict = "identical-sets";
+  else if (commonCount === 0) verdict = "disjoint";
+  else if (onlyAAddresses.length === 0) verdict = "subset-first";
+  else if (onlyBAddresses.length === 0) verdict = "subset-second";
+  else verdict = "overlap";
+  return {
+    valid: true, reason: null, verdict: verdict,
+    distinctCountA: a.distinctCount, distinctCountB: b.distinctCount,
+    duplicateCountA: a.duplicateCount, duplicateCountB: b.duplicateCount,
+    diffCount: diffAddresses.length, onlyACount: onlyAAddresses.length, onlyBCount: onlyBAddresses.length, commonCount: commonCount,
+    diffAddresses: diffAddresses, onlyAAddresses: onlyAAddresses, onlyBAddresses: onlyBAddresses,
+    diffEntries: diffEntries, diffText: diffText,
+    crossNetworkTwinPairs: twinPairs,
+    diffMainnetCount: diffMainnetCount, diffTestnetCount: diffTestnetCount
+  };
+}
+
 /* ---------- Babel fee calculator ---------- */
 /* Babel fees let a transaction pay its fee in a native token instead of
    ERG: a babel box holds ERG and its contract swaps tokens for that ERG
@@ -10850,7 +10955,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -11488,6 +11593,34 @@ if (typeof document !== "undefined") {
       msg += "The set itself does not depend on direction — the second list intersected with the first would name the same addresses — but the order below is the first list's. ";
       if (res.crossNetworkNearMisses.length > 0) msg += "Cross-network near misses — NOT shared: " + res.crossNetworkNearMisses.map(function (p) { return p[0] + " is only in the first list, because the second list holds only its other-network twin " + p[1] + " (same type and content, different network — a different address)"; }).join("; ") + ". Check those were deliberate before using the shared list. ";
       msg += "Shared addresses, in the first list's order, ready to paste into tool 97 or a payout list: " + res.sharedText.replace(/\n/g, ", ") + " Intersection only, over the lists you pasted: it fetches nothing and says nothing about any address's balance or who owns it. Intersected locally; nothing was fetched, signed or sent.";
+      out.textContent = msg;
+    });
+
+    /* --- Address set symmetric difference --- */
+    document.getElementById("addrxor-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("addrxor-result");
+      var res = xorAddressSets(document.getElementById("addrxor-a").value, document.getElementById("addrxor-b").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.verdict === "identical-sets") {
+        msg = "✓ The two lists hold exactly the same " + res.distinctCountA + " distinct address(es) — nothing is in one list only, so the symmetric difference is empty. Identical lists are an answer, not an error: two lists either disagree somewhere or they do not. ";
+        if (res.duplicateCountA + res.duplicateCountB > 0) msg += "Repeated lines inside a list collapsed to the distinct address before comparing (" + res.duplicateCountA + " in the first, " + res.duplicateCountB + " in the second) — each list is treated as the set it names. ";
+        msg += "Difference only, over the lists you pasted: it fetches nothing and says nothing about any address's balance or who owns it. Differenced locally; nothing was fetched, signed or sent.";
+        out.textContent = msg;
+        return;
+      }
+      msg = "✓ Of " + res.distinctCountA + " distinct address(es) in the first list and " + res.distinctCountB + " in the second, " + res.commonCount + " appear in both and " + res.diffCount + " appear in exactly one (" + res.diffMainnetCount + " mainnet, " + res.diffTestnetCount + " testnet): " + res.onlyACount + " only in the first, " + res.onlyBCount + " only in the second. ";
+      if (res.duplicateCountA + res.duplicateCountB > 0) msg += "Repeated lines inside a list collapsed to the distinct address before comparing (" + res.duplicateCountA + " in the first, " + res.duplicateCountB + " in the second) — each list is treated as the set it names. ";
+      if (res.verdict === "disjoint") msg += "The lists share nothing at all — the difference is everything in both. ";
+      else if (res.verdict === "subset-first") msg += "Every distinct address in the first list is also in the second — the difference is the second list's extras only. ";
+      else if (res.verdict === "subset-second") msg += "Every distinct address in the second list is also in the first — the difference is the first list's extras only. ";
+      msg += "The set itself does not depend on direction — the second list differenced with the first would name the same addresses — but the order below is the first-list-only addresses in the first list's order, then the second-list-only ones in the second list's. ";
+      if (res.crossNetworkTwinPairs.length > 0) msg += "Cross-network twin pairs — BOTH in the difference, NOT agreements: " + res.crossNetworkTwinPairs.map(function (p) { return p[0] + " (first list only) and " + p[1] + " (second list only) carry the same type and content under different networks — different addresses guarding boxes in different worlds"; }).join("; ") + ". Check those were deliberate before treating the lists as reconciled. ";
+      msg += "Only in the first: " + (res.onlyAAddresses.length ? res.onlyAAddresses.join(", ") : "none") + ". Only in the second: " + (res.onlyBAddresses.length ? res.onlyBAddresses.join(", ") : "none") + ". The full difference, in that order, ready to paste into tool 97 or a payout list: " + res.diffText.replace(/\n/g, ", ") + " Difference only, over the lists you pasted: it fetches nothing and says nothing about any address's balance or who owns it. Differenced locally; nothing was fetched, signed or sent.";
       out.textContent = msg;
     });
 

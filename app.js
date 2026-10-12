@@ -1811,6 +1811,132 @@ function buildLoanPlan(lenderRaw, labelRaw, principalStr, rateStr, periodsStr, m
   };
 }
 
+/* Savings goal builder (tool 120): name a target amount and the
+   number of periods to save over, and the target is split into
+   per-period deposits to one savings address. Tools 112-119 split
+   a pot, pay fixed amounts, vest a total OUT (tool 117, cumulative
+   FLOOR differencing, so releases start small) and repay a loan
+   (tool 119, declining balance). This covers the saving-IN case
+   none of them does, with the mirror-image pattern: deposits by
+   cumulative CEILING differencing — the amount saved through each
+   period is ceil(target x i / N), and each deposit is the
+   difference of successive cumulatives — so a deposit is never
+   smaller than the pace the goal needs (floor differencing would
+   leave the saver behind pace until the last period), the deposits
+   differ by at most 1 nanoERG, the larger ones come first, and
+   they re-add to the target exactly. The schedule is verified a
+   second way inside the tool: the amount still to save after
+   period i, target - ceil(target x i / N), must equal
+   floor(target x (N - i) / N) for every period (an exact integer
+   identity), and the deposits are re-summed and required to hit
+   the target. Service fee: the hub's standard disclosed fee, the
+   SAME constants as tools 112-119 — 1% of the TARGET, rounded UP,
+   minimum 0.001 ERG — paid WITH the first deposit. The miner fee
+   is paid once per DEPOSIT transaction. The savings address is
+   checksum-verified (tool 2); a savings address equal to the
+   service-fee address is reported, not refused. A deposit below
+   the safe minimum box value is flagged. Planning only: this is
+   a savings PLAN, not a savings contract or a vault — no script
+   locks the saved boxes or stops the saver spending them early;
+   it fetches nothing, signs nothing, sends nothing. The builder
+   counts periods, not calendar time — what a period is (a week,
+   a month) is the saver's own choice. */
+var SAVINGS_MAX_PERIODS = 48;
+var SAVINGS_MAX_LABEL_CHARS = 60;
+function buildSavingsPlan(addressRaw, labelRaw, targetStr, periodsStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, savingsAddress: null, savingsType: null, label: null, targetNano: null, targetErg: null, periodCount: null, deposits: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, firstDepositTotalNano: null, firstDepositTotalErg: null, lastDepositNano: null, lastDepositErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, addressIsServiceAddress: null, savingsText: null };
+  };
+  var lenCheck = checkErgoAddress(addressRaw);
+  if (!lenCheck.valid) return fail("The savings address is refused: " + lenCheck.reason);
+  var savingsAddress = typeof addressRaw === "string" ? addressRaw.trim() : "";
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > SAVINGS_MAX_LABEL_CHARS) return fail("The goal name is " + label.length + " characters — keep it to " + SAVINGS_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed savings goal)";
+  var target = ergToNano(targetStr);
+  if (target === null || BigInt(target) <= 0n) return fail("The savings target must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var targetNano = BigInt(target);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var periodsTxt = (periodsStr == null ? "" : String(periodsStr)).trim();
+  if (!/^\d+$/.test(periodsTxt)) return fail("The period count must be a whole number of periods (e.g. 12) — no decimals, no sign.");
+  var periodCount = parseInt(periodsTxt, 10);
+  if (periodCount < 1) return fail("A savings plan needs at least 1 period.");
+  if (periodCount > SAVINGS_MAX_PERIODS) return fail("This builder takes at most " + SAVINGS_MAX_PERIODS + " periods (you asked for " + periodCount + ") — a longer plan belongs in a dedicated contract, not a copyable schedule.");
+  if (targetNano < BigInt(periodCount)) return fail("The target is too small for " + periodCount + " periods — every period must deposit at least 1 nanoERG. Increase the target or use fewer periods.");
+  /* Deposits by cumulative ceiling differencing: the amount saved
+     through period i is ceil(T x i / N) = (T x i + N - 1) / N in
+     integer division, and deposit i is that minus the amount saved
+     through period i-1, so the deposits re-add to the target
+     exactly and the saver is never behind pace. */
+  var rawDeposits = [];
+  var saved = 0n;
+  for (var pi = 1; pi <= periodCount; pi++) {
+    var cum = (targetNano * BigInt(pi) + BigInt(periodCount) - 1n) / BigInt(periodCount);
+    var deposit = cum - saved;
+    if (deposit <= 0n) return fail("Period " + pi + " would deposit 0 nanoERG — the target is too small for that many periods.");
+    /* Second route: the amount still to save after this period,
+       target - cum, must equal floor(T x (N - i) / N) exactly. */
+    var stillToSave = targetNano - cum;
+    var stillCheck = (targetNano * BigInt(periodCount - pi)) / BigInt(periodCount);
+    if (stillToSave !== stillCheck) return fail("Internal check failed: the forward and reverse savings computations disagree at period " + pi + " — refusing to show a plan rather than risk a wrong deposit.");
+    rawDeposits.push({ period: pi, depositNano: deposit, savedAfterNano: cum });
+    saved = cum;
+  }
+  if (saved !== targetNano) return fail("Internal check failed: the deposits do not re-add to the target — refusing to show a plan rather than risk a wrong total.");
+  /* Service fee: same two-route check as tools 112-119, on the
+     TARGET. */
+  var feeA = (targetNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = targetNano / 100n + (targetNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  var minerTotalNano = minerNano * BigInt(periodCount);
+  var totalOutNano = targetNano + feeNano + minerTotalNano;
+  /* Per-deposit totals (each deposit plus its miner fee; the first
+     also carries the service fee), verified against the grand total. */
+  var depositsFull = rawDeposits.map(function (d, i) {
+    var depositTotal = d.depositNano + minerNano + (i === 0 ? feeNano : 0n);
+    return { period: d.period, depositNano: d.depositNano, savedAfterNano: d.savedAfterNano, depositTotalNano: depositTotal, includesServiceFee: i === 0 };
+  });
+  var sumDepositTotals = 0n;
+  for (var ti = 0; ti < depositsFull.length; ti++) sumDepositTotals += depositsFull[ti].depositTotalNano;
+  if (sumDepositTotals !== totalOutNano) return fail("Internal check failed: the per-deposit totals do not re-add to the grand total — refusing to show it.");
+  var anyDust = false;
+  var depositOut = depositsFull.map(function (d) {
+    var dust = d.depositNano < SAFE_USER_MIN_BOX_NANO;
+    if (dust) anyDust = true;
+    return { period: d.period, depositNano: d.depositNano.toString(), depositErg: nanoToErg(d.depositNano.toString()), savedAfterNano: d.savedAfterNano.toString(), savedAfterErg: nanoToErg(d.savedAfterNano.toString()), depositTotalNano: d.depositTotalNano.toString(), depositTotalErg: nanoToErg(d.depositTotalNano.toString()), includesServiceFee: d.includesServiceFee, belowSafeMin: dust };
+  });
+  var lines = ["ERGO SAVINGS GOAL PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Goal: " + label,
+    "Savings address (receives every deposit): " + savingsAddress,
+    "Target: " + nanoToErg(targetNano.toString()) + " ERG (" + targetNano.toString() + " nanoERG), saved over " + periodCount + " period(s). The deposits are set by cumulative ceiling differencing, so after every period the amount saved is at least the pace the goal needs, the deposits differ by at most 1 nanoERG with the larger ones first, and they re-add to the target exactly — verified a second way inside the tool, from the amount still to save, which agreed exactly:"];
+  depositOut.forEach(function (d) { lines.push("Period " + d.period + " — deposit " + d.depositErg + " ERG (" + d.depositNano + " nanoERG); saved after this deposit " + d.savedAfterErg + " ERG (" + d.savedAfterNano + " nanoERG); the saver pays " + d.depositTotalErg + " ERG in this period's transaction" + (d.includesServiceFee ? ", including the service fee below and the miner fee" : ", including the miner fee") + "."); });
+  lines.push("Service fee (disclosed: 1% of the savings target, rounded up, minimum 0.001 ERG), paid with the first deposit: " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+  lines.push("Miner fee: " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) per deposit transaction, " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG) across all " + periodCount + " deposits");
+  lines.push("Total the saver pays across the whole plan: " + nanoToErg(totalOutNano.toString()) + " ERG (" + totalOutNano.toString() + " nanoERG) — of which the target itself, " + nanoToErg(targetNano.toString()) + " ERG, lands in the saver's own savings address");
+  lines.push("This is a savings plan, not a savings contract or a vault: no script locks the saved boxes, earns interest on them or stops the saver spending them early — the saver builds and signs each period's transaction in their own wallet when that period arrives. The builder counts periods, not calendar time; what a period is (a week, a month) is the saver's own choice. Plan only: nothing has been signed or sent, and no deposit has been made.");
+  return {
+    valid: true, reason: null, network: lenCheck.network,
+    savingsAddress: savingsAddress, savingsType: lenCheck.type,
+    label: label,
+    targetNano: targetNano.toString(), targetErg: nanoToErg(targetNano.toString()),
+    periodCount: periodCount,
+    deposits: depositOut,
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    firstDepositTotalNano: depositsFull[0].depositTotalNano.toString(), firstDepositTotalErg: nanoToErg(depositsFull[0].depositTotalNano.toString()),
+    lastDepositNano: depositsFull[depositsFull.length - 1].depositNano.toString(), lastDepositErg: nanoToErg(depositsFull[depositsFull.length - 1].depositNano.toString()),
+    totalNano: totalOutNano.toString(), totalErg: nanoToErg(totalOutNano.toString()),
+    anyBelowSafeMin: anyDust, addressIsServiceAddress: savingsAddress === SERVICE_FEE_ADDRESS,
+    savingsText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -12987,7 +13113,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -13467,6 +13593,22 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ At least one period's payment is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       if (res.lenderIsServiceAddress) msg += "Note: the lender address is the service-fee address itself, so that address receives each payment plus the service fee in the first one, and a wallet can combine them. ";
       msg += "Copyable loan repayment schedule:\n" + res.loanText + "\nSchedule only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a loan contract, and no payment has been made until the borrower builds and signs each period's transaction in their own wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("savegoal-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("savegoal-result");
+      var res = buildSavingsPlan(document.getElementById("savegoal-address").value, document.getElementById("savegoal-label").value, document.getElementById("savegoal-target").value, document.getElementById("savegoal-periods").value, document.getElementById("savegoal-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var first = res.deposits[0], last = res.deposits[res.deposits.length - 1];
+      var msg = "✓ Savings goal plan built on " + res.network + " for \"" + res.label + "\" — a target of " + res.targetErg + " ERG (" + res.targetNano + " nanoERG) saved to " + res.savingsAddress + " over " + res.periodCount + " period(s): the first deposit is " + first.depositErg + " ERG and the last is " + last.depositErg + " ERG, and the deposits re-add to the target exactly, with the saver never behind pace after any period. The saver pays " + res.totalErg + " ERG (" + res.totalNano + " nanoERG) across the whole plan, including a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the savings target, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), paid with the first deposit, plus the " + res.minerFeeErg + " ERG miner fee per deposit. The first deposit transaction totals " + res.firstDepositTotalErg + " ERG. ";
+      if (res.anyBelowSafeMin) msg += "⚠ At least one period's deposit is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.addressIsServiceAddress) msg += "Note: the savings address is the service-fee address itself, so that address receives each deposit plus the service fee in the first one, and a wallet can combine them. ";
+      msg += "Copyable savings goal plan:\n" + res.savingsText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a savings contract or a vault, and no deposit has been made until the saver builds and signs each period's transaction in their own wallet.";
       out.textContent = msg;
     });
 

@@ -1222,6 +1222,109 @@ function buildMilestonePlan(sellerRaw, contractStr, milestonesRaw, minerFeeStr) 
   };
 }
 
+/* ---------- Ergo payroll builder (fixed pay amounts to many employees + disclosed service fee) ---------- */
+/* Tools 112-114 cover one seller once, one pot split by shares, and
+   one seller in stages. This covers the payroll case none of them
+   does: MANY employees, each owed a FIXED ERG amount (wages,
+   bounties, regular contributor pay) — the amounts are the inputs,
+   not shares of a pot, so there is no division and no rounding in
+   the pay itself. All employees are paid in ONE transaction (one
+   output each), so the employer pays the entered miner fee ONCE
+   for the whole payroll, not per person. The total payroll is the
+   plain sum of the fixed amounts, verified a second way inside the
+   tool: the amounts are summed forwards and in reverse and the two
+   sums must agree, and the grand total minus fee minus miner fee
+   must re-add to the payroll EXACTLY. Service fee: the hub's
+   standard disclosed fee, the SAME constants as tools 112-114 — 1%
+   of the total payroll, rounded UP, minimum 0.001 ERG — as its own
+   output to SERVICE_FEE_ADDRESS. Every address is checksum-
+   verified (tool 2) and all must sit on ONE network — a transaction
+   cannot pay mainnet and testnet boxes at once. Duplicate names
+   (case-insensitive) and duplicate addresses are refused, so nobody
+   is paid twice by accident; equal pay amounts for different people
+   are fine. Amounts below the safe minimum box value are flagged.
+   Planning only: fetches nothing, signs nothing, sends nothing. */
+var PAYROLL_MAX_EMPLOYEES = 20;
+var PAYROLL_MAX_NAME_CHARS = 40;
+function buildPayrollPlan(entriesRaw, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, employees: null, employeeCount: null, payrollNano: null, payrollErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, payrollText: null };
+  };
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenAddr = {};
+  var seenNames = {};
+  var network = null;
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, amount in ERG (e.g. \"Ada, an address, 2.5\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addr = parts[1].trim();
+    var amountStr = parts[2].trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the employee a name before the first comma, so the plan says who each payment is for.");
+    if (name.length > PAYROLL_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + PAYROLL_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each employee once, so nobody is paid twice by accident.");
+    seenNames[nameKey] = lineNo;
+    var check = checkErgoAddress(addr);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (seenAddr[addr]) return fail("The address on line " + lineNo + " already appears on line " + seenAddr[addr] + " — list each address once and add its pay into one line, so each employee gets exactly one output.");
+    seenAddr[addr] = lineNo;
+    if (network === null) network = check.network;
+    else if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the earlier employees are " + network + " — one transaction lives on one network, so all employees must match.");
+    var amt = ergToNano(amountStr);
+    if (amt === null || BigInt(amt) <= 0n) return fail("Line " + lineNo + "'s amount is refused: pay amounts must be ERG amounts above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+    entries.push({ name: name, address: addr, network: check.network, type: check.type, amountNano: BigInt(amt), line: lineNo });
+  }
+  if (entries.length < 2) return fail("A payroll needs at least two employees — for a single payee, build a plain invoice with tool 112 instead.");
+  if (entries.length > PAYROLL_MAX_EMPLOYEES) return fail("This builder takes at most " + PAYROLL_MAX_EMPLOYEES + " employees (you listed " + entries.length + ") — a payroll with more outputs than that belongs in a dedicated wallet flow, not a copyable plan.");
+  /* Total payroll, summed forwards and in reverse — must agree. */
+  var sumFwd = 0n, sumRev = 0n;
+  for (var fi = 0; fi < entries.length; fi++) sumFwd += entries[fi].amountNano;
+  for (var ri = entries.length - 1; ri >= 0; ri--) sumRev += entries[ri].amountNano;
+  if (sumFwd !== sumRev) return fail("Internal check failed: the pay amounts do not sum the same forwards and in reverse — refusing to show it.");
+  var payrollNano = sumFwd;
+  /* Service fee: same two-route check as tools 112-114. */
+  var feeA = (payrollNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = payrollNano / 100n + (payrollNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a payroll rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  var totalNano = payrollNano + feeNano + minerNano;
+  if (totalNano - minerNano - feeNano !== payrollNano) return fail("Internal check failed: the totals do not re-add to the payroll — refusing to show it.");
+  var anyDust = false, includesFeeAddr = false;
+  var employees = entries.map(function (e) {
+    var dust = e.amountNano < SAFE_USER_MIN_BOX_NANO;
+    if (dust) anyDust = true;
+    if (e.address === SERVICE_FEE_ADDRESS) includesFeeAddr = true;
+    return { name: e.name, address: e.address, network: e.network, type: e.type, amountNano: e.amountNano.toString(), amountErg: nanoToErg(e.amountNano.toString()), belowSafeMin: dust };
+  });
+  var lines = ["ERGO PAYROLL — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Payroll: " + nanoToErg(payrollNano.toString()) + " ERG (" + payrollNano.toString() + " nanoERG) to " + employees.length + " employees, each a fixed amount, all paid in one transaction:"];
+  employees.forEach(function (e, i) { lines.push("Employee " + (i + 1) + " — " + e.name + ": " + e.amountErg + " ERG (" + e.amountNano + " nanoERG) to " + e.address); });
+  lines.push("Service fee (disclosed: 1% of the total payroll, rounded up, minimum 0.001 ERG): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+  lines.push("Miner fee (one transaction for the whole payroll): " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG)");
+  lines.push("Total the employer pays: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG)");
+  lines.push("Pay by building one transaction in your own wallet with one output per employee plus the service-fee output above, plus the miner fee. This payroll is a plan only: nothing has been signed or sent, and no payment has been made.");
+  return {
+    valid: true, reason: null, network: network,
+    employees: employees, employeeCount: employees.length,
+    payrollNano: payrollNano.toString(), payrollErg: nanoToErg(payrollNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust, includesServiceAddress: includesFeeAddr,
+    payrollText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -12398,7 +12501,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -12798,6 +12901,22 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ At least one milestone amount is below the recommended 0.001 ERG safe minimum per box (tool 5) — a payment that small may be impractical to create. ";
       if (res.sellerIsServiceAddress) msg += "Note: the seller address is the service-fee address itself, so milestone 1 pays both its seller amount and the service fee to the same address, and a wallet can combine them into one box. ";
       msg += "Copyable milestone plan:\n" + res.planText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is a schedule, not an escrow, and no payment has been made until the buyer builds and signs each stage's transaction in their own wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("payroll-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("payroll-result");
+      var res = buildPayrollPlan(document.getElementById("payroll-employees").value, document.getElementById("payroll-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var parts = res.employees.map(function (e) { return e.name + " gets " + e.amountErg + " ERG"; });
+      var msg = "✓ Payroll built on " + res.network + " for " + res.employeeCount + " employees — the employer pays " + res.totalErg + " ERG (" + res.totalNano + " nanoERG) in total in ONE transaction: " + parts.join("; ") + " — a payroll of " + res.payrollErg + " ERG — plus a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the total payroll, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), plus the single " + res.minerFeeErg + " ERG miner fee for the whole payroll. The employee amounts re-add to the payroll exactly. ";
+      if (res.anyBelowSafeMin) msg += "⚠ At least one pay amount is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.includesServiceAddress) msg += "Note: one employee address is the service-fee address itself, so that address receives its pay output plus the service fee, and a wallet can combine them. ";
+      msg += "Copyable payroll plan:\n" + res.payrollText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — no payment has been made until the employer builds and signs the transaction in their own wallet.";
       out.textContent = msg;
     });
 

@@ -3,12 +3,12 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**114 free Ergo tools, local-first:** the live hub carries 114 tools that run
+**115 free Ergo tools, local-first:** the live hub carries 115 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
-that earn are the invoice, split-payment and milestone-payment
+that earn are the invoice, split-payment, milestone-payment and payroll
 builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 114 tools on one page it beats scrolling.
+headers) — with 115 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -178,6 +178,23 @@ headers) — with 114 tools on one page it beats scrolling.
   holds the later milestones. You get a copyable plan block stating
   every stage's seller amount and full transaction cost. Plan only:
   it fetches nothing, signs nothing, and sends nothing.
+- **Ergo payroll builder** — paying a crew in ERG — wages, bounties,
+  regular contributor pay? List each person as name, address, amount
+  with the FIXED ERG amount that person receives (not shares of a
+  pot, not stages over time). Every address is checksum-verified and
+  all must sit on one network; duplicate names and duplicate
+  addresses are refused so nobody is paid twice by accident, while
+  equal pay for different people is fine. The total payroll is the
+  plain sum of the fixed amounts in exact BigInt maths, summed
+  forwards and in reverse inside the tool and required to agree
+  before anything is shown. Everyone is paid in ONE transaction, so
+  the employer pays the miner fee once for the whole payroll. The
+  employer also pays the hub's disclosed service fee — 1% of the
+  total payroll, rounded up, minimum 0.001 ERG — as its own output
+  to my Ergo address, printed in the plan itself. You get a copyable
+  plan block; the employer builds the one transaction in their own
+  wallet. Plan only: it fetches nothing, signs nothing, and sends
+  nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

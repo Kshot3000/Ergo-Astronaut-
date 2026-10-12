@@ -1325,6 +1325,111 @@ function buildPayrollPlan(entriesRaw, minerFeeStr) {
   };
 }
 
+/* ---------- Ergo marketplace sale split builder (seller net = price - royalty - disclosed service fee) ---------- */
+/* Tools 112-115 cover an invoice, a pot split by shares, stages, and
+   fixed payroll amounts. This covers the marketplace sale none of
+   them does: a sale at a fixed PRICE (an NFT, a token lot, a piece
+   of work) where the price itself splits three ways and the seller's
+   amount is the RESIDUAL — price minus a creator royalty minus the
+   hub service fee — not an input and not a share. The royalty percent
+   is typed with at most 2 decimals and converted to basis points
+   exactly (2.5% = 250 bps); the royalty is price * bps / 10000
+   rounded DOWN (floored, and disclosed as floored, so the royalty
+   never takes a nanoERG the percentage did not earn), verified a
+   second way by splitting the price into its quotient and remainder
+   over 10000 first. Service fee: the hub's standard disclosed fee,
+   the SAME constants as tools 112-115 — 1% of the price, rounded UP,
+   minimum 0.001 ERG — as its own output to SERVICE_FEE_ADDRESS. The
+   sale is refused when royalty + fee would eat the whole price (the
+   residual must be above zero), and when a non-zero royalty floors
+   to zero nanoERG. Seller and creator addresses are checksum-
+   verified (tool 2) and must sit on ONE network. Creator == seller
+   is reported, not refused (that address then receives two outputs
+   a wallet can combine). Sub-safe-minimum royalty or seller-net
+   outputs are flagged. Planning only: this is a split plan, NOT an
+   escrow or a marketplace contract — it holds neither the item nor
+   the payment; it fetches nothing, signs nothing, sends nothing. */
+var SALESPLIT_MAX_ITEM_CHARS = 60;
+function buildSaleSplitPlan(sellerRaw, creatorRaw, itemRaw, priceStr, royaltyPctStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, sellerAddress: null, sellerType: null, creatorAddress: null, creatorType: null, item: null, priceNano: null, priceErg: null, royaltyBps: null, royaltyPercent: null, royaltyNano: null, royaltyErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, sellerNetNano: null, sellerNetErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, royaltyBelowSafeMin: null, sellerNetBelowSafeMin: null, creatorIsSeller: null, sellerIsServiceAddress: null, saleText: null };
+  };
+  var sellerCheck = checkErgoAddress(sellerRaw);
+  if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
+  var seller = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var creatorCheck = checkErgoAddress(creatorRaw);
+  if (!creatorCheck.valid) return fail("The creator address is refused: " + creatorCheck.reason);
+  var creator = typeof creatorRaw === "string" ? creatorRaw.trim() : "";
+  if (creatorCheck.network !== sellerCheck.network) return fail("The creator address is " + creatorCheck.network + " but the seller is " + sellerCheck.network + " — one transaction lives on one network, so both addresses must match.");
+  var item = (itemRaw == null ? "" : String(itemRaw)).replace(/\s+/g, " ").trim();
+  if (item.length > SALESPLIT_MAX_ITEM_CHARS) return fail("The item name is " + item.length + " characters — keep it to " + SALESPLIT_MAX_ITEM_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (item === "") item = "(unnamed item)";
+  var price = ergToNano(priceStr);
+  if (price === null || BigInt(price) <= 0n) return fail("The sale price must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var priceNano = BigInt(price);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  /* Royalty percent -> basis points, exactly: at most 2 decimals. */
+  var pctStr = (royaltyPctStr == null ? "" : String(royaltyPctStr)).trim();
+  var pctMatch = pctStr.match(/^(\d+)(?:\.(\d{1,2}))?$/);
+  if (!pctMatch) return fail("The royalty must be a percent with at most 2 decimal places (e.g. 5 or 2.5) — no sign, no commas, no percent sign.");
+  var royaltyBps = BigInt(pctMatch[1]) * 100n + BigInt((pctMatch[2] || "").padEnd(2, "0"));
+  if (royaltyBps > 10000n) return fail("The royalty cannot exceed 100% of the sale price.");
+  var royaltyPercent = royaltyBps % 100n === 0n ? (royaltyBps / 100n).toString() : (royaltyBps / 100n).toString() + "." + (royaltyBps % 100n).toString().padStart(2, "0").replace(/0$/, "");
+  /* Royalty, route A: floor of price * bps / 10000. */
+  var royaltyA = (priceNano * royaltyBps) / 10000n;
+  /* Royalty, route B (independent): split the price into quotient and
+     remainder over 10000, apply bps to each part, floor the remainder
+     part. The two must agree exactly. */
+  var royaltyB = (priceNano / 10000n) * royaltyBps + ((priceNano % 10000n) * royaltyBps) / 10000n;
+  if (royaltyA !== royaltyB) return fail("Internal check failed: the two royalty computations disagree — refusing to show a sale split rather than risk a wrong royalty.");
+  var royaltyNano = royaltyA;
+  if (royaltyBps > 0n && royaltyNano === 0n) return fail("That royalty on that price earns less than 1 nanoERG — the price is too small for the royalty to be a real output.");
+  /* Service fee: same two-route check as tools 112-115. */
+  var feeA = (priceNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = priceNano / 100n + (priceNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a sale split rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  /* The seller's net is the residual — and it must be above zero. */
+  var netNano = priceNano - royaltyNano - feeNano;
+  if (netNano <= 0n) return fail("That sale leaves the seller nothing: the royalty plus the disclosed service fee (minimum 0.001 ERG) eat the whole price. Raise the price or lower the royalty.");
+  /* The split must re-add exactly: net + royalty + fee == price. */
+  if (netNano + royaltyNano + feeNano !== priceNano) return fail("Internal check failed: the sale outputs do not re-add to the price — refusing to show it.");
+  var totalNano = priceNano + minerNano;
+  if (totalNano - minerNano !== priceNano) return fail("Internal check failed: the buyer total does not re-add to the price — refusing to show it.");
+  var lines = ["ERGO MARKETPLACE SALE SPLIT — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Item: " + item,
+    "Sale price: " + nanoToErg(priceNano.toString()) + " ERG (" + priceNano.toString() + " nanoERG), split in one transaction:",
+    "Seller receives (net, the sale price minus the royalty and the service fee below): " + nanoToErg(netNano.toString()) + " ERG (" + netNano.toString() + " nanoERG) to " + seller];
+  if (royaltyNano > 0n) lines.push("Creator royalty (disclosed: " + royaltyPercent + "% of the sale price, rounded down): " + nanoToErg(royaltyNano.toString()) + " ERG (" + royaltyNano.toString() + " nanoERG) to " + creator);
+  else lines.push("Creator royalty: 0 ERG — the royalty is set to 0%, so there is no royalty output to " + creator + ".");
+  lines.push("Service fee (disclosed: 1% of the sale price, rounded up, minimum 0.001 ERG): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+  lines.push("Miner fee: " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG)");
+  lines.push("Total the buyer pays: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG)");
+  lines.push("Pay by building one transaction in your own wallet with the outputs above — the seller net, the royalty when it is above zero, and the service fee — plus the miner fee. This sale split is a plan only, not an escrow or a marketplace contract: it holds neither the item nor the payment, and nothing has been signed or sent.");
+  return {
+    valid: true, reason: null, network: sellerCheck.network,
+    sellerAddress: seller, sellerType: sellerCheck.type,
+    creatorAddress: creator, creatorType: creatorCheck.type,
+    item: item,
+    priceNano: priceNano.toString(), priceErg: nanoToErg(priceNano.toString()),
+    royaltyBps: royaltyBps.toString(), royaltyPercent: royaltyPercent,
+    royaltyNano: royaltyNano.toString(), royaltyErg: nanoToErg(royaltyNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    sellerNetNano: netNano.toString(), sellerNetErg: nanoToErg(netNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    royaltyBelowSafeMin: royaltyNano > 0n && royaltyNano < SAFE_USER_MIN_BOX_NANO,
+    sellerNetBelowSafeMin: netNano < SAFE_USER_MIN_BOX_NANO,
+    creatorIsSeller: creator === seller,
+    sellerIsServiceAddress: seller === SERVICE_FEE_ADDRESS,
+    saleText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -12501,7 +12606,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -12917,6 +13022,23 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ At least one pay amount is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       if (res.includesServiceAddress) msg += "Note: one employee address is the service-fee address itself, so that address receives its pay output plus the service fee, and a wallet can combine them. ";
       msg += "Copyable payroll plan:\n" + res.payrollText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — no payment has been made until the employer builds and signs the transaction in their own wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("salesplit-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("salesplit-result");
+      var res = buildSaleSplitPlan(document.getElementById("salesplit-seller").value, document.getElementById("salesplit-creator").value, document.getElementById("salesplit-item").value, document.getElementById("salesplit-price").value, document.getElementById("salesplit-royalty").value, document.getElementById("salesplit-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Sale split built on " + res.network + " for \"" + res.item + "\" — the buyer pays " + res.totalErg + " ERG (" + res.totalNano + " nanoERG) in ONE transaction: the " + res.priceErg + " ERG sale price splits as a seller net of " + res.sellerNetErg + " ERG to " + res.sellerAddress + ", a creator royalty of " + res.royaltyErg + " ERG (" + res.royaltyPercent + "% of the price, rounded down) to " + res.creatorAddress + ", and a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the sale price, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), plus the " + res.minerFeeErg + " ERG miner fee. The three outputs re-add to the sale price exactly. ";
+      if (res.royaltyBelowSafeMin) msg += "⚠ The royalty is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.sellerNetBelowSafeMin) msg += "⚠ The seller net is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.creatorIsSeller) msg += "Note: the creator and seller addresses are the same, so that address receives both the seller net and the royalty, and a wallet can combine them into one box. ";
+      if (res.sellerIsServiceAddress) msg += "Note: the seller address is the service-fee address itself, so that address receives both the seller net and the service fee, and a wallet can combine them. ";
+      msg += "Copyable sale split plan:\n" + res.saleText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not an escrow, and no payment has been made until the buyer builds and signs the transaction in their own wallet.";
       out.textContent = msg;
     });
 

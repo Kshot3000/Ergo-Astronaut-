@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**115 free Ergo tools, local-first:** the live hub carries 115 tools that run
+**116 free Ergo tools, local-first:** the live hub carries 116 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
-that earn are the invoice, split-payment, milestone-payment and payroll
-builders below, whose
+that earn are the invoice, split-payment, milestone-payment, payroll and
+marketplace sale split builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 115 tools on one page it beats scrolling.
+headers) — with 116 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -195,6 +195,26 @@ headers) — with 115 tools on one page it beats scrolling.
   plan block; the employer builds the one transaction in their own
   wallet. Plan only: it fetches nothing, signs nothing, and sends
   nothing.
+- **Ergo marketplace sale split builder** — selling something for
+  ERG — an NFT, a token lot, a piece of work — where the creator
+  earns a royalty on the sale? Name the item, the sale price and the
+  royalty percent, and the price splits three ways in ONE
+  transaction: a creator royalty (the percent entered, at most 2
+  decimals, converted to basis points exactly and rounded DOWN,
+  disclosed as rounded down) to the creator's address, the hub's
+  disclosed service fee — 1% of the sale price, rounded up, minimum
+  0.001 ERG — as its own output to my Ergo address, and the seller
+  net — the RESIDUAL, price minus royalty minus fee — to the seller.
+  The seller's amount is computed, never typed. Seller and creator
+  addresses are checksum-verified and must sit on one network; a
+  sale whose royalty plus fee would eat the whole price is refused.
+  The royalty is computed two ways inside the tool and the three
+  outputs must re-add to the price exactly before anything is
+  shown. Stated plainly in the plan: this is a split plan, not an
+  escrow or a marketplace contract — it holds neither the item nor
+  the payment. You get a copyable plan block; the buyer builds the
+  one transaction in their own wallet. Plan only: it fetches
+  nothing, signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

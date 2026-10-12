@@ -2099,6 +2099,222 @@ function buildRewardPlan(poolStr, entriesRaw, minerFeeStr) {
   };
 }
 
+/* ---------- Ergo crowdfunding campaign builder (pledges toward a goal: funded settles in one transaction, missed refunds in full) ---------- */
+/* Tools 112-121 cover an invoice, share/stage/fixed splits, a sale,
+   vesting, a recurring payment, a loan, a savings goal and a
+   pro-rata reward pool. None of them is GOAL-CONDITIONAL, which is
+   what a crowdfunding campaign is: the pledges only settle if they
+   reach the funding goal. The disclosed service fee (the hub's
+   standard 1% — here of the GOAL, rounded up, minimum 0.001 ERG,
+   two-route checked like tools 112-121) is charged ONLY on success:
+   if the pledges reach the goal, the creator receives the goal
+   minus the fee in ONE settlement transaction, and any overshoot
+   above the goal is refunded to the backers pro-rata by pledge
+   with LARGEST-REMAINDER rounding (ties by the larger pledge, then
+   line order), so each backer's retained contribution is their
+   pledge minus their refund and the retained amounts re-add to
+   the goal exactly — verified a second way inside the tool (refund
+   sum, floor/floor+1 membership, bumped count, no unbumped backer
+   holding a strictly better remainder claim, retained sum) before
+   anything is shown. If the pledges miss the goal, NO service fee
+   is charged at all and every backer is refunded their whole
+   pledge minus one miner fee in their own refund transaction —
+   a pledge too small to cover the miner fee is refused, since it
+   could never be refunded. Duplicate backer names and addresses
+   are refused, all addresses are checksum-verified (tool 2) and
+   must sit on ONE network, and the creator may also appear as a
+   backer (reported, not refused). Sub-safe-minimum outputs (the
+   creator's net, or a positive refund) are flagged. Planning
+   only: this is a campaign plan, NOT a crowdfunding contract —
+   no script holds the pledges, enforces the deadline or the
+   goal, or refunds anyone automatically; the pledges are the
+   ones typed in. It fetches nothing, signs nothing, sends
+   nothing. */
+var CROWDFUND_MAX_BACKERS = 20;
+var CROWDFUND_MAX_NAME_CHARS = 40;
+var CROWDFUND_MAX_LABEL_CHARS = 60;
+function buildCrowdfundPlan(creatorRaw, labelRaw, goalStr, entriesRaw, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, creatorAddress: null, creatorType: null, label: null, funded: null, goalNano: null, goalErg: null, totalPledgedNano: null, totalPledgedErg: null, shortfallNano: null, shortfallErg: null, excessNano: null, excessErg: null, backers: null, backerCount: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, creatorNetNano: null, creatorNetErg: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, creatorIsBacker: null, includesServiceAddress: null, crowdfundText: null };
+  };
+  var creatorCheck = checkErgoAddress(creatorRaw);
+  if (!creatorCheck.valid) return fail("The creator address is refused: " + creatorCheck.reason);
+  var creatorAddress = typeof creatorRaw === "string" ? creatorRaw.trim() : "";
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > CROWDFUND_MAX_LABEL_CHARS) return fail("The campaign name is " + label.length + " characters — keep it to " + CROWDFUND_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed campaign)";
+  var goal = ergToNano(goalStr);
+  if (goal === null || BigInt(goal) <= 0n) return fail("The funding goal must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var goalNano = BigInt(goal);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenAddr = {};
+  var seenNames = {};
+  var network = creatorCheck.network;
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, pledge in ERG (e.g. \"Ada, an address, 50\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addr = parts[1].trim();
+    var pledgeStr = parts[2].trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the backer a name before the first comma, so the plan says who each pledge is from.");
+    if (name.length > CROWDFUND_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + CROWDFUND_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each backer once, so nobody is counted twice by accident.");
+    seenNames[nameKey] = lineNo;
+    var check = checkErgoAddress(addr);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (seenAddr[addr]) return fail("The address on line " + lineNo + " already appears on line " + seenAddr[addr] + " — list each address once and add its pledges into one line, so each backer gets exactly one line in the plan.");
+    seenAddr[addr] = lineNo;
+    if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the creator is " + network + " — one campaign lives on one network, so every address must match.");
+    var pledge = ergToNano(pledgeStr);
+    if (pledge === null || BigInt(pledge) <= 0n) return fail("Line " + lineNo + "'s pledge is refused: pledges must be ERG amounts above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+    entries.push({ name: name, address: addr, network: check.network, type: check.type, pledgeNano: BigInt(pledge), line: lineNo });
+  }
+  if (entries.length < 1) return fail("A campaign needs at least one backer — list who has pledged before building the plan.");
+  if (entries.length > CROWDFUND_MAX_BACKERS) return fail("This builder takes at most " + CROWDFUND_MAX_BACKERS + " backers (you listed " + entries.length + ") — a campaign with more backers than that belongs in a dedicated crowdfunding contract, not a copyable plan.");
+  /* Total pledged, summed forwards and in reverse — must agree. */
+  var pledgeFwd = 0n, pledgeRev = 0n;
+  for (var fi = 0; fi < entries.length; fi++) pledgeFwd += entries[fi].pledgeNano;
+  for (var ri = entries.length - 1; ri >= 0; ri--) pledgeRev += entries[ri].pledgeNano;
+  if (pledgeFwd !== pledgeRev) return fail("Internal check failed: the pledges do not sum the same forwards and in reverse — refusing to show it.");
+  var totalPledgedNano = pledgeFwd;
+  var creatorIsBacker = entries.some(function (e) { return e.address === creatorAddress; });
+  var includesFeeAddr = creatorAddress === SERVICE_FEE_ADDRESS || entries.some(function (e) { return e.address === SERVICE_FEE_ADDRESS; });
+  var funded = totalPledgedNano >= goalNano;
+  var feeNano, wasMinimum, creatorNetNano, excessNano, shortfallNano, minerTotalNano, totalNano;
+  var refunds, retained, bumpedFlags;
+  if (funded) {
+    /* Service fee: same two-route check as tools 112-121, on the GOAL. */
+    var feeA = (goalNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+    var feeB = goalNano / 100n + (goalNano % 100n > 0n ? 1n : 0n);
+    if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a campaign rather than risk a wrong fee.");
+    feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+    wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+    creatorNetNano = goalNano - feeNano;
+    if (creatorNetNano <= 0n) return fail("The disclosed service fee (1% of the goal, rounded up, minimum 0.001 ERG) eats the whole goal — the creator would receive nothing. Raise the goal.");
+    excessNano = totalPledgedNano - goalNano;
+    shortfallNano = 0n;
+    /* Overshoot refunded pro-rata by pledge, largest-remainder. */
+    var shares = entries.map(function (e, i) {
+      var exact = excessNano * e.pledgeNano;
+      return { index: i, floor: exact / totalPledgedNano, rem: exact % totalPledgedNano, pledge: e.pledgeNano };
+    });
+    var floorSum = 0n;
+    for (var si = 0; si < shares.length; si++) floorSum += shares[si].floor;
+    var leftover = excessNano - floorSum;
+    if (leftover < 0n || leftover >= BigInt(shares.length)) return fail("Internal check failed: the rounding leftover is out of range — refusing to show a campaign rather than risk a wrong refund.");
+    var ranked = shares.slice().sort(function (a, b) {
+      if (a.rem !== b.rem) return a.rem > b.rem ? -1 : 1;
+      if (a.pledge !== b.pledge) return a.pledge > b.pledge ? -1 : 1;
+      return a.index - b.index;
+    });
+    var bumped = {};
+    for (var bi = 0; bi < Number(leftover); bi++) bumped[ranked[bi].index] = true;
+    refunds = shares.map(function (s) { return s.floor + (bumped[s.index] ? 1n : 0n); });
+    retained = entries.map(function (e, i) { return e.pledgeNano - refunds[i]; });
+    bumpedFlags = shares.map(function (s) { return !!bumped[s.index]; });
+    /* Second route: verify the finished split independently —
+       refunds re-add to the excess, every refund is its floor or
+       floor + 1, exactly `leftover` backers were bumped, no
+       unbumped backer holds a strictly better remainder claim,
+       and the retained contributions re-add to the goal. */
+    var refundSum = 0n, retainedSum = 0n, bumpCount = 0;
+    for (var vi = 0; vi < refunds.length; vi++) {
+      refundSum += refunds[vi];
+      retainedSum += retained[vi];
+      if (refunds[vi] !== shares[vi].floor && refunds[vi] !== shares[vi].floor + 1n) return fail("Internal check failed: a refund is neither its floor nor its floor plus one — refusing to show it.");
+      if (bumped[vi]) bumpCount++;
+    }
+    if (refundSum !== excessNano) return fail("Internal check failed: the refunds do not re-add to the overshoot — refusing to show it.");
+    if (BigInt(bumpCount) !== leftover) return fail("Internal check failed: the bumped count does not match the rounding leftover — refusing to show it.");
+    if (retainedSum !== goalNano) return fail("Internal check failed: the retained contributions do not re-add to the goal — refusing to show it.");
+    for (var ai = 0; ai < shares.length; ai++) {
+      if (!bumped[ai]) continue;
+      for (var ui = 0; ui < shares.length; ui++) {
+        if (bumped[ui]) continue;
+        var a2 = shares[ai], u2 = shares[ui];
+        var uBetter = u2.rem > a2.rem || (u2.rem === a2.rem && (u2.pledge > a2.pledge || (u2.pledge === a2.pledge && u2.index < a2.index)));
+        if (uBetter) return fail("Internal check failed: an unbumped backer holds a better remainder claim than a bumped one — refusing to show it.");
+      }
+    }
+    minerTotalNano = minerNano;
+    totalNano = totalPledgedNano + minerNano;
+    if (creatorNetNano + feeNano + refundSum !== totalPledgedNano) return fail("Internal check failed: the settlement outputs do not account for every nanoERG pledged — refusing to show it.");
+  } else {
+    feeNano = 0n;
+    wasMinimum = false;
+    creatorNetNano = 0n;
+    excessNano = 0n;
+    shortfallNano = goalNano - totalPledgedNano;
+    for (var qi = 0; qi < entries.length; qi++) {
+      if (entries[qi].pledgeNano <= minerNano) return fail("Backer " + (qi + 1) + " (" + entries[qi].name + ") pledged " + nanoToErg(entries[qi].pledgeNano.toString()) + " ERG, which does not cover the " + nanoToErg(minerNano.toString()) + " ERG miner fee a refund transaction needs — that pledge could never be refunded. Raise the pledge or lower the miner fee.");
+    }
+    refunds = entries.map(function (e) { return e.pledgeNano - minerNano; });
+    retained = entries.map(function () { return 0n; });
+    bumpedFlags = entries.map(function () { return false; });
+    minerTotalNano = minerNano * BigInt(entries.length);
+    totalNano = totalPledgedNano;
+    var refundSum2 = 0n;
+    for (var wi = 0; wi < refunds.length; wi++) refundSum2 += refunds[wi];
+    if (refundSum2 + minerTotalNano !== totalPledgedNano) return fail("Internal check failed: the refunds plus the miner fees do not account for every nanoERG pledged — refusing to show it.");
+  }
+  var anyDust = false;
+  if (funded && creatorNetNano < SAFE_USER_MIN_BOX_NANO) anyDust = true;
+  var backers = entries.map(function (e, i) {
+    var refundDust = funded ? (refunds[i] > 0n && refunds[i] < SAFE_USER_MIN_BOX_NANO) : refunds[i] < SAFE_USER_MIN_BOX_NANO;
+    if (refundDust) anyDust = true;
+    return { name: e.name, address: e.address, network: e.network, type: e.type, pledgeNano: e.pledgeNano.toString(), pledgeErg: nanoToErg(e.pledgeNano.toString()), refundNano: refunds[i].toString(), refundErg: nanoToErg(refunds[i].toString()), retainedNano: retained[i].toString(), retainedErg: nanoToErg(retained[i].toString()), bumped: bumpedFlags[i], belowSafeMin: refundDust };
+  });
+  var lines = ["ERGO CROWDFUNDING CAMPAIGN PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Campaign: " + label,
+    "Creator (receives the goal if the campaign is funded): " + creatorAddress,
+    "Funding goal: " + nanoToErg(goalNano.toString()) + " ERG (" + goalNano.toString() + " nanoERG). Total pledged: " + nanoToErg(totalPledgedNano.toString()) + " ERG (" + totalPledgedNano.toString() + " nanoERG) from " + backers.length + " backer(s):"];
+  backers.forEach(function (b, i) { lines.push("Backer " + (i + 1) + " — " + b.name + ": pledged " + b.pledgeErg + " ERG (" + b.pledgeNano + " nanoERG) from " + b.address); });
+  if (funded) {
+    lines.push("The campaign is FUNDED — the pledges reach the goal" + (excessNano > 0n ? ", with an overshoot of " + nanoToErg(excessNano.toString()) + " ERG (" + excessNano.toString() + " nanoERG) above it" : " exactly") + ". Everything settles in ONE transaction, built from the pledged boxes:");
+    lines.push("Creator receives: " + nanoToErg(creatorNetNano.toString()) + " ERG (" + creatorNetNano.toString() + " nanoERG) — the goal minus the service fee below.");
+    lines.push("Service fee (disclosed: 1% of the funding goal, rounded up, minimum 0.001 ERG — charged only because the campaign was funded): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+    if (excessNano > 0n) {
+      backers.forEach(function (b, i) { lines.push("Backer " + (i + 1) + " — " + b.name + ": overshoot refund " + b.refundErg + " ERG (" + b.refundNano + " nanoERG)" + (BigInt(b.refundNano) > 0n ? " to " + b.address : " — no refund output, their whole pledge stays in the campaign") + "; retained contribution " + b.retainedErg + " ERG (" + b.retainedNano + " nanoERG)."); });
+      lines.push("The overshoot is refunded pro-rata by pledge with largest-remainder rounding, so the refunds re-add to the overshoot exactly and the retained contributions re-add to the goal exactly — verified a second way inside the tool before anything is shown.");
+    } else {
+      lines.push("The pledges meet the goal exactly, so there is no overshoot to refund — every backer's whole pledge is retained.");
+    }
+    lines.push("Miner fee (one settlement transaction): " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG), paid by the creator on top of the pledged boxes.");
+    lines.push("Total moving through the settlement: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the pledges plus the miner fee. Every nanoERG pledged is accounted for: the creator's net plus the service fee plus the refunds re-add to the total pledged exactly.");
+  } else {
+    lines.push("The campaign MISSED its goal by " + nanoToErg(shortfallNano.toString()) + " ERG (" + shortfallNano.toString() + " nanoERG) — so NO service fee is charged, and every backer is refunded in their own transaction, their pledge minus that transaction's miner fee:");
+    backers.forEach(function (b, i) { lines.push("Backer " + (i + 1) + " — " + b.name + ": refund " + b.refundErg + " ERG (" + b.refundNano + " nanoERG) to " + b.address + " (pledge " + b.pledgeErg + " ERG minus the " + nanoToErg(minerNano.toString()) + " ERG miner fee)."); });
+    lines.push("Miner fees across the " + backers.length + " refund transactions: " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG). The refunds plus those fees re-add to the total pledged exactly — verified inside the tool before anything is shown. The creator receives nothing.");
+  }
+  lines.push("This is a campaign plan, not a crowdfunding contract: no script holds the pledges, enforces a deadline or the goal, or refunds anyone automatically — the creator (or the campaign's own process) builds and signs the settlement or refund transactions in their own wallet, and the pledges are the ones typed in above, so check them against the campaign's own records first. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network,
+    creatorAddress: creatorAddress, creatorType: creatorCheck.type,
+    label: label, funded: funded,
+    goalNano: goalNano.toString(), goalErg: nanoToErg(goalNano.toString()),
+    totalPledgedNano: totalPledgedNano.toString(), totalPledgedErg: nanoToErg(totalPledgedNano.toString()),
+    shortfallNano: shortfallNano.toString(), shortfallErg: nanoToErg(shortfallNano.toString()),
+    excessNano: excessNano.toString(), excessErg: nanoToErg(excessNano.toString()),
+    backers: backers, backerCount: backers.length,
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    creatorNetNano: creatorNetNano.toString(), creatorNetErg: nanoToErg(creatorNetNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust, creatorIsBacker: creatorIsBacker, includesServiceAddress: includesFeeAddr,
+    crowdfundText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -13275,7 +13491,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -13788,6 +14004,30 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ At least one staker's reward is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       if (res.includesServiceAddress) msg += "Note: one staker address is the service-fee address itself, so that address receives its reward plus the service fee, and a wallet can combine them. ";
       msg += "Copyable reward distribution:\n" + res.rewardText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a staking contract, and no reward has been paid until the distributor builds and signs the transaction in their own wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("crowdfund-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("crowdfund-result");
+      var res = buildCrowdfundPlan(document.getElementById("crowdfund-creator").value, document.getElementById("crowdfund-label").value, document.getElementById("crowdfund-goal").value, document.getElementById("crowdfund-backers").value, document.getElementById("crowdfund-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.funded) {
+        msg = "✓ Campaign \"" + res.label + "\" is FUNDED on " + res.network + " — " + res.totalPledgedErg + " ERG (" + res.totalPledgedNano + " nanoERG) pledged by " + res.backerCount + " backer(s) against a goal of " + res.goalErg + " ERG: the creator " + res.creatorAddress + " receives " + res.creatorNetErg + " ERG (" + res.creatorNetNano + " nanoERG) in one settlement transaction, after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the goal, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "). ";
+        if (BigInt(res.excessNano) > 0n) msg += "The overshoot of " + res.excessErg + " ERG above the goal is refunded to the backers pro-rata by pledge, and the retained contributions re-add to the goal exactly. ";
+        else msg += "The pledges meet the goal exactly, so there is no overshoot to refund. ";
+        msg += "The creator also pays the " + res.minerFeeErg + " ERG miner fee on top of the pledged boxes. ";
+      } else {
+        msg = "✓ Campaign \"" + res.label + "\" MISSED its goal on " + res.network + " — " + res.totalPledgedErg + " ERG (" + res.totalPledgedNano + " nanoERG) pledged by " + res.backerCount + " backer(s) against a goal of " + res.goalErg + " ERG, short by " + res.shortfallErg + " ERG. No service fee is charged on a missed goal: every backer is refunded their pledge minus one " + res.minerFeeErg + " ERG miner fee in their own transaction (" + res.minerTotalErg + " ERG of miner fees across all the refunds), and the creator receives nothing. ";
+      }
+      if (res.anyBelowSafeMin) msg += "⚠ At least one output (the creator's net, a refund, or a missed-goal refund) is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.creatorIsBacker) msg += "Note: the creator also appears as a backer, so that address is on both sides of the plan. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable crowdfunding campaign plan:\n" + res.crowdfundText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a crowdfunding contract, and no ERG has moved until the settlement or refund transactions are built and signed in a wallet.";
       out.textContent = msg;
     });
 

@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**121 free Ergo tools, local-first:** the live hub carries 121 tools that run
+**122 free Ergo tools, local-first:** the live hub carries 122 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal and staking reward distributor builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor and crowdfunding campaign builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 121 tools on one page it beats scrolling.
+headers) — with 122 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -321,6 +321,34 @@ headers) — with 121 tools on one page it beats scrolling.
   records. You get a copyable distribution block; the distributor
   builds and signs the one transaction in their own wallet.
   Plan only: it fetches nothing, signs nothing, and sends nothing.
+- **Ergo crowdfunding campaign builder** — running an ERG
+  crowdfunding campaign? Name the creator, the campaign and the
+  funding goal, and list each backer as name, address, pledge.
+  The campaign is goal-conditional: if the pledges reach the
+  goal, everything settles in one transaction — the creator
+  receives the goal minus the hub's disclosed service fee (1%
+  of the funding goal, rounded up, minimum 0.001 ERG, to my
+  Ergo address, charged only on success), and any overshoot
+  above the goal is refunded to the backers pro-rata by pledge
+  with largest-remainder rounding, so the refunds re-add to
+  the overshoot exactly and each backer's retained
+  contribution (pledge minus refund) re-adds to the goal
+  exactly. If the pledges miss the goal, no service fee is
+  charged at all and every backer is refunded their whole
+  pledge minus one miner fee in their own transaction; a
+  pledge too small to cover the miner fee is refused. The
+  finished plan is verified a second way inside the tool
+  before anything is shown. Every address is checksum-verified,
+  all addresses must be on one network, duplicate backer
+  names and addresses are refused, and sub-safe-minimum
+  outputs are flagged. Stated plainly in the plan: this is a
+  campaign plan, not a crowdfunding contract — no script
+  holds the pledges, enforces a deadline or the goal, or
+  refunds anyone automatically, and the pledges are the ones
+  typed in, to be checked against the campaign's own records.
+  You get a copyable campaign block; the settlement or refund
+  transactions are built and signed in a wallet. Plan only:
+  it fetches nothing, signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

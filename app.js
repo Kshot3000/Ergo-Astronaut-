@@ -1937,6 +1937,168 @@ function buildSavingsPlan(addressRaw, labelRaw, targetStr, periodsStr, minerFeeS
   };
 }
 
+/* ---------- Ergo staking reward distributor (a reward pool split pro-rata by stake) ---------- */
+/* Tools 112-120 cover an invoice, a pot split by typed shares,
+   stages, fixed payroll amounts, a sale split, vesting, a recurring
+   payment, a loan and a savings goal. None of them splits a pool
+   PRO-RATA BY STAKE, which is what every staking pool, mining pool
+   and reward programme actually pays: each staker's share of the
+   pool is their stake over the total stake. The disclosed service
+   fee (the hub's standard 1% of the POOL, rounded up, minimum
+   0.001 ERG, two-route checked like tools 112-120) comes off the
+   top; the distributable remainder is split by stake with
+   LARGEST-REMAINDER rounding — each staker's exact share floored,
+   then the leftover single nanoERG (always fewer than the staker
+   count) go one each to the largest remainders, ties broken by the
+   larger stake, then by line order — so the rewards re-add to the
+   remainder exactly and every reward is its floor or its floor
+   plus one. The finished allocation is verified a second way
+   inside the tool (sum, floor/floor+1 membership, bumped count,
+   and no unbumped staker holding a strictly better remainder claim
+   than a bumped one) before anything is shown. A staker whose
+   reward would be 0 nanoERG is refused — a zero-value output is
+   not a real box — and sub-safe-minimum rewards are flagged.
+   Duplicate names and addresses are refused (one output per
+   staker), all addresses are checksum-verified (tool 2) and must
+   sit on ONE network. All stakers are paid in ONE transaction.
+   Planning only: this is a distribution plan, NOT a staking
+   contract — no script holds the pool or the stakes, pays anyone
+   automatically, or proves anyone's stake; the stakes are the ones
+   typed in, to be checked against the pool's own records. It
+   fetches nothing, signs nothing, sends nothing. */
+var REWARD_MAX_STAKERS = 20;
+var REWARD_MAX_NAME_CHARS = 40;
+function buildRewardPlan(poolStr, entriesRaw, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, stakers: null, stakerCount: null, poolNano: null, poolErg: null, totalStakeNano: null, totalStakeErg: null, distributableNano: null, distributableErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, rewardText: null };
+  };
+  var pool = ergToNano(poolStr);
+  if (pool === null || BigInt(pool) <= 0n) return fail("The reward pool must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var poolNano = BigInt(pool);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenAddr = {};
+  var seenNames = {};
+  var network = null;
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, stake in ERG (e.g. \"Ada, an address, 50\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addr = parts[1].trim();
+    var stakeStr = parts[2].trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the staker a name before the first comma, so the plan says who each reward is for.");
+    if (name.length > REWARD_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + REWARD_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each staker once, so nobody is paid twice by accident.");
+    seenNames[nameKey] = lineNo;
+    var check = checkErgoAddress(addr);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (seenAddr[addr]) return fail("The address on line " + lineNo + " already appears on line " + seenAddr[addr] + " — list each address once and add its stake into one line, so each staker gets exactly one output.");
+    seenAddr[addr] = lineNo;
+    if (network === null) network = check.network;
+    else if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the earlier stakers are " + network + " — one transaction lives on one network, so all stakers must match.");
+    var stake = ergToNano(stakeStr);
+    if (stake === null || BigInt(stake) <= 0n) return fail("Line " + lineNo + "'s stake is refused: stakes must be ERG amounts above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+    entries.push({ name: name, address: addr, network: check.network, type: check.type, stakeNano: BigInt(stake), line: lineNo });
+  }
+  if (entries.length < 2) return fail("A reward distribution needs at least two stakers — for a single payee, build a plain invoice with tool 112 instead.");
+  if (entries.length > REWARD_MAX_STAKERS) return fail("This builder takes at most " + REWARD_MAX_STAKERS + " stakers (you listed " + entries.length + ") — a distribution with more outputs than that belongs in a dedicated pool flow, not a copyable plan.");
+  /* Total stake, summed forwards and in reverse — must agree. */
+  var stakeFwd = 0n, stakeRev = 0n;
+  for (var fi = 0; fi < entries.length; fi++) stakeFwd += entries[fi].stakeNano;
+  for (var ri = entries.length - 1; ri >= 0; ri--) stakeRev += entries[ri].stakeNano;
+  if (stakeFwd !== stakeRev) return fail("Internal check failed: the stakes do not sum the same forwards and in reverse — refusing to show it.");
+  var totalStakeNano = stakeFwd;
+  /* Service fee: same two-route check as tools 112-120, on the POOL. */
+  var feeA = (poolNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = poolNano / 100n + (poolNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a distribution rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  var distributableNano = poolNano - feeNano;
+  if (distributableNano <= 0n) return fail("The disclosed service fee (1% of the pool, rounded up, minimum 0.001 ERG) eats the whole pool — there would be nothing left to distribute. Raise the pool.");
+  /* Largest-remainder split of the distributable remainder. */
+  var shares = entries.map(function (e, i) {
+    var exact = distributableNano * e.stakeNano;
+    return { index: i, floor: exact / totalStakeNano, rem: exact % totalStakeNano, stake: e.stakeNano };
+  });
+  var floorSum = 0n;
+  for (var si = 0; si < shares.length; si++) floorSum += shares[si].floor;
+  var leftover = distributableNano - floorSum;
+  if (leftover < 0n || leftover >= BigInt(shares.length)) return fail("Internal check failed: the rounding leftover is out of range — refusing to show a distribution rather than risk a wrong reward.");
+  var ranked = shares.slice().sort(function (a, b) {
+    if (a.rem !== b.rem) return a.rem > b.rem ? -1 : 1;
+    if (a.stake !== b.stake) return a.stake > b.stake ? -1 : 1;
+    return a.index - b.index;
+  });
+  var bumped = {};
+  for (var bi = 0; bi < Number(leftover); bi++) bumped[ranked[bi].index] = true;
+  var rewards = shares.map(function (s) { return s.floor + (bumped[s.index] ? 1n : 0n); });
+  /* Second route: verify the finished allocation independently —
+     the rewards re-add to the distributable remainder, every reward
+     is its floor or floor + 1, exactly `leftover` stakers were
+     bumped, and no unbumped staker holds a strictly better
+     remainder claim (remainder, then stake, then line order) than
+     any bumped staker. */
+  var rewardSum = 0n, bumpCount = 0;
+  for (var vi = 0; vi < rewards.length; vi++) {
+    rewardSum += rewards[vi];
+    if (rewards[vi] !== shares[vi].floor && rewards[vi] !== shares[vi].floor + 1n) return fail("Internal check failed: a reward is neither its floor nor its floor plus one — refusing to show it.");
+    if (bumped[vi]) bumpCount++;
+  }
+  if (rewardSum !== distributableNano) return fail("Internal check failed: the rewards do not re-add to the distributable remainder — refusing to show it.");
+  if (BigInt(bumpCount) !== leftover) return fail("Internal check failed: the bumped count does not match the rounding leftover — refusing to show it.");
+  for (var ai = 0; ai < shares.length; ai++) {
+    if (!bumped[ai]) continue;
+    for (var ui = 0; ui < shares.length; ui++) {
+      if (bumped[ui]) continue;
+      var a = shares[ai], u = shares[ui];
+      var uBetter = u.rem > a.rem || (u.rem === a.rem && (u.stake > a.stake || (u.stake === a.stake && u.index < a.index)));
+      if (uBetter) return fail("Internal check failed: an unbumped staker holds a better remainder claim than a bumped one — refusing to show it.");
+    }
+  }
+  for (var zi = 0; zi < rewards.length; zi++) {
+    if (rewards[zi] <= 0n) return fail("Staker " + (zi + 1) + " (" + entries[zi].name + ") would earn 0 nanoERG — their stake is too small a share of this pool for a real output. Raise the pool or leave that staker out of this distribution.");
+  }
+  var totalNano = poolNano + minerNano;
+  if (totalNano - minerNano !== poolNano || rewardSum + feeNano !== poolNano) return fail("Internal check failed: the totals do not account for every nanoERG of the pool — refusing to show it.");
+  var anyDust = false, includesFeeAddr = false;
+  var stakers = entries.map(function (e, i) {
+    var dust = rewards[i] < SAFE_USER_MIN_BOX_NANO;
+    if (dust) anyDust = true;
+    if (e.address === SERVICE_FEE_ADDRESS) includesFeeAddr = true;
+    var shareBps = (e.stakeNano * 10000n) / totalStakeNano;
+    var sharePercent = shareBps % 100n === 0n ? (shareBps / 100n).toString() : (shareBps / 100n).toString() + "." + (shareBps % 100n).toString().padStart(2, "0").replace(/0$/, "");
+    return { name: e.name, address: e.address, network: e.network, type: e.type, stakeNano: e.stakeNano.toString(), stakeErg: nanoToErg(e.stakeNano.toString()), shareBps: shareBps.toString(), sharePercent: sharePercent, rewardNano: rewards[i].toString(), rewardErg: nanoToErg(rewards[i].toString()), bumped: !!bumped[i], belowSafeMin: dust };
+  });
+  var lines = ["ERGO STAKING REWARD DISTRIBUTION — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Reward pool: " + nanoToErg(poolNano.toString()) + " ERG (" + poolNano.toString() + " nanoERG), split pro-rata by stake among " + stakers.length + " stakers, all paid in one transaction. The disclosed service fee below comes off the top of the pool, so the stakers split the remaining " + nanoToErg(distributableNano.toString()) + " ERG (" + distributableNano.toString() + " nanoERG) of the " + nanoToErg(totalStakeNano.toString()) + " ERG (" + totalStakeNano.toString() + " nanoERG) total stake:"];
+  stakers.forEach(function (s, i) { lines.push("Staker " + (i + 1) + " — " + s.name + ": stake " + s.stakeErg + " ERG (" + s.stakeNano + " nanoERG), " + s.sharePercent + "% of the total stake, reward " + s.rewardErg + " ERG (" + s.rewardNano + " nanoERG) to " + s.address); });
+  lines.push("Service fee (disclosed: 1% of the reward pool, rounded up, minimum 0.001 ERG): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+  lines.push("Miner fee (one transaction for the whole distribution): " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG)");
+  lines.push("Total the distributor pays: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the pool plus the miner fee. Every nanoERG of the pool is accounted for: the rewards plus the service fee re-add to the pool exactly.");
+  lines.push("Shares are each stake over the total stake, floored to the nanoERG by largest-remainder rounding, so the rewards re-add to the distributable remainder exactly — verified a second way inside the tool before anything is shown. The share percents above are floored to 2 decimals, so they can sum to just under 100%. This is a distribution plan, not a staking contract: no script holds the pool or the stakes, pays anyone automatically or proves anyone's stake — the stakes are the ones typed in above, so check them against the pool's own records before paying. Pay by building one transaction in your own wallet with one output per staker plus the service-fee output above, plus the miner fee. Plan only: nothing has been signed or sent, and no reward has been paid.");
+  return {
+    valid: true, reason: null, network: network,
+    stakers: stakers, stakerCount: stakers.length,
+    poolNano: poolNano.toString(), poolErg: nanoToErg(poolNano.toString()),
+    totalStakeNano: totalStakeNano.toString(), totalStakeErg: nanoToErg(totalStakeNano.toString()),
+    distributableNano: distributableNano.toString(), distributableErg: nanoToErg(distributableNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust, includesServiceAddress: includesFeeAddr,
+    rewardText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -13113,7 +13275,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -13609,6 +13771,23 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ At least one period's deposit is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       if (res.addressIsServiceAddress) msg += "Note: the savings address is the service-fee address itself, so that address receives each deposit plus the service fee in the first one, and a wallet can combine them. ";
       msg += "Copyable savings goal plan:\n" + res.savingsText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a savings contract or a vault, and no deposit has been made until the saver builds and signs each period's transaction in their own wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("rewardpay-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("rewardpay-result");
+      var res = buildRewardPlan(document.getElementById("rewardpay-pool").value, document.getElementById("rewardpay-stakers").value, document.getElementById("rewardpay-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var largest = res.stakers[0], smallest = res.stakers[0];
+      res.stakers.forEach(function (s) { if (BigInt(s.rewardNano) > BigInt(largest.rewardNano)) largest = s; if (BigInt(s.rewardNano) < BigInt(smallest.rewardNano)) smallest = s; });
+      var msg = "✓ Reward distribution built on " + res.network + " — a pool of " + res.poolErg + " ERG (" + res.poolNano + " nanoERG) split pro-rata by stake among " + res.stakerCount + " stakers: the largest reward is " + largest.rewardErg + " ERG (" + largest.name + ") and the smallest is " + smallest.rewardErg + " ERG (" + smallest.name + "), and the rewards re-add to the distributable remainder of " + res.distributableErg + " ERG exactly. The distributor pays " + res.totalErg + " ERG (" + res.totalNano + " nanoERG) in one transaction — the pool plus the miner fee — including a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the pool, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), taken off the top of the pool before the split. ";
+      if (res.anyBelowSafeMin) msg += "⚠ At least one staker's reward is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.includesServiceAddress) msg += "Note: one staker address is the service-fee address itself, so that address receives its reward plus the service fee, and a wallet can combine them. ";
+      msg += "Copyable reward distribution:\n" + res.rewardText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a staking contract, and no reward has been paid until the distributor builds and signs the transaction in their own wallet.";
       out.textContent = msg;
     });
 

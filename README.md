@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**120 free Ergo tools, local-first:** the live hub carries 120 tools that run
+**121 free Ergo tools, local-first:** the live hub carries 121 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment and savings goal builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal and staking reward distributor builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 120 tools on one page it beats scrolling.
+headers) — with 121 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -297,6 +297,30 @@ headers) — with 120 tools on one page it beats scrolling.
   calendar time. You get a copyable plan block; the saver builds
   and signs each period's transaction in their own wallet. Plan
   only: it fetches nothing, signs nothing, and sends nothing.
+- **Ergo staking reward distributor** — running a staking pool, a
+  mining pool or any ERG reward programme? Name the reward pool and
+  list each staker as name, address, stake. The hub's disclosed
+  service fee — 1% of the reward pool, rounded up, minimum
+  0.001 ERG — to my Ergo address comes off the top, and the
+  remaining pool is split pro-rata by stake with largest-remainder
+  rounding: every exact share floored to the nanoERG, then the
+  leftover single nanoERG go one each to the largest remainders
+  (ties by the larger stake, then by line order), so the rewards
+  re-add to the distributable remainder exactly and every reward
+  is its floor or its floor plus one; the finished allocation is
+  verified a second way inside the tool before anything is shown.
+  Every address is checksum-verified, all stakers must be on one
+  network, duplicate names and addresses are refused, a staker
+  whose reward would be 0 nanoERG is refused outright, and
+  sub-safe-minimum rewards are flagged. All stakers are paid in
+  one transaction, so the miner fee is paid once. Stated plainly
+  in the plan: this is a distribution plan, not a staking
+  contract — no script holds the pool or the stakes, pays anyone
+  automatically or proves anyone's stake, and the stakes are
+  the ones typed in, to be checked against the pool's own
+  records. You get a copyable distribution block; the distributor
+  builds and signs the one transaction in their own wallet.
+  Plan only: it fetches nothing, signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

@@ -1564,6 +1564,106 @@ function buildVestingPlan(beneficiaryRaw, labelRaw, totalStr, periodsStr, cliffS
   };
 }
 
+/* ---------- Ergo recurring payment builder (equal instalments + disclosed service fee) ---------- */
+/* Tools 112-117 cover an invoice, a pot split by shares, one seller
+   in stages, fixed payroll amounts, a sale split and a vesting
+   total. This covers the recurring case none of them does: ONE
+   recipient paid the SAME amount once per period for N periods —
+   a subscription, a retainer, rent, a support tier. The arithmetic
+   is MULTIPLICATION, a pattern none of the earlier builders uses:
+   the subscription total is amount x periods, computed two
+   independent ways inside the tool (direct BigInt multiplication
+   and repeated addition) which must agree exactly. Service fee:
+   the hub's standard disclosed fee, the SAME constants as tools
+   112-117 — 1% of the subscription TOTAL, rounded UP, minimum
+   0.001 ERG — paid by the payer WITH the first payment. The miner
+   fee is paid once per PAYMENT transaction. The recipient address
+   is checksum-verified (tool 2); a recipient equal to the
+   service-fee address is reported, not refused. A per-payment
+   amount below the safe minimum box value is flagged. Planning
+   only: this is a payment PLAN, not a subscription contract — no
+   script pulls future payments, so nothing makes a later payment
+   happen or stops the payer cancelling; it fetches nothing, signs
+   nothing, sends nothing. The builder counts periods, not calendar
+   time — what a period is (a week, a month) is the parties' own
+   agreement. */
+var SUBSCRIPTION_MAX_PERIODS = 48;
+var SUBSCRIPTION_MAX_LABEL_CHARS = 60;
+function buildSubscriptionPlan(recipientRaw, labelRaw, amountStr, periodsStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, recipientAddress: null, recipientType: null, label: null, amountNano: null, amountErg: null, periodCount: null, subscriptionNano: null, subscriptionErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, firstPaymentNano: null, firstPaymentErg: null, restPaymentNano: null, restPaymentErg: null, totalNano: null, totalErg: null, paymentBelowSafeMin: null, recipientIsServiceAddress: null, subscriptionText: null };
+  };
+  var recCheck = checkErgoAddress(recipientRaw);
+  if (!recCheck.valid) return fail("The recipient address is refused: " + recCheck.reason);
+  var recipient = typeof recipientRaw === "string" ? recipientRaw.trim() : "";
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > SUBSCRIPTION_MAX_LABEL_CHARS) return fail("The plan name is " + label.length + " characters — keep it to " + SUBSCRIPTION_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed recurring payment plan)";
+  var amount = ergToNano(amountStr);
+  if (amount === null || BigInt(amount) <= 0n) return fail("The per-period amount must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var amountNano = BigInt(amount);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  /* Periods are a whole count — plain digits only. */
+  var periodsTxt = (periodsStr == null ? "" : String(periodsStr)).trim();
+  if (!/^\d+$/.test(periodsTxt)) return fail("The period count must be a whole number of periods (e.g. 12) — no decimals, no sign.");
+  var periodCount = parseInt(periodsTxt, 10);
+  if (periodCount < 2) return fail("A recurring plan needs at least 2 periods — for a single payment, build a plain invoice with tool 112 instead.");
+  if (periodCount > SUBSCRIPTION_MAX_PERIODS) return fail("This builder takes at most " + SUBSCRIPTION_MAX_PERIODS + " periods (you asked for " + periodCount + ") — a longer arrangement belongs in a dedicated contract, not a copyable plan.");
+  /* Subscription total, two independent routes: A) direct
+     multiplication; B) repeated addition, one period at a time.
+     They must agree exactly. */
+  var totalA = amountNano * BigInt(periodCount);
+  var totalB = 0n;
+  for (var ai = 0; ai < periodCount; ai++) totalB += amountNano;
+  if (totalA !== totalB) return fail("Internal check failed: the two subscription-total computations disagree — refusing to show a plan rather than risk a wrong total.");
+  var totalNano = totalA;
+  /* Service fee: same two-route check as tools 112-117, on the
+     subscription TOTAL (not per payment — the fee is paid once). */
+  var feeA = (totalNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = totalNano / 100n + (totalNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  var minerTotalNano = minerNano * BigInt(periodCount);
+  var totalOutNano = totalNano + feeNano + minerTotalNano;
+  /* Per-payment totals: the first payment also carries the service
+     fee; every later payment is amount + miner fee. Their sum is
+     verified against the grand total before anything is shown. */
+  var firstPaymentNano = amountNano + feeNano + minerNano;
+  var restPaymentNano = amountNano + minerNano;
+  if (firstPaymentNano + restPaymentNano * BigInt(periodCount - 1) !== totalOutNano) return fail("Internal check failed: the per-payment totals do not re-add to the grand total — refusing to show it.");
+  var paymentDust = amountNano < SAFE_USER_MIN_BOX_NANO;
+  var lines = ["ERGO RECURRING PAYMENT PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Plan: " + label,
+    "Recipient: " + recipient,
+    "Per-period payment: " + nanoToErg(amountNano.toString()) + " ERG (" + amountNano.toString() + " nanoERG), paid once per period for " + periodCount + " periods. The subscription total is the per-period amount multiplied by the period count, verified by repeated addition, so the payments re-add to the total exactly:",
+    "Subscription total to the recipient: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG)",
+    "Service fee (disclosed: 1% of the subscription total, rounded up, minimum 0.001 ERG), paid once with the first payment: " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS,
+    "Miner fee: " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) per payment transaction, " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG) across all " + periodCount + " payments",
+    "First payment (per-period amount + service fee + miner fee): " + nanoToErg(firstPaymentNano.toString()) + " ERG (" + firstPaymentNano.toString() + " nanoERG); each later payment: " + nanoToErg(restPaymentNano.toString()) + " ERG (" + restPaymentNano.toString() + " nanoERG)",
+    "Total the payer pays across the whole plan: " + nanoToErg(totalOutNano.toString()) + " ERG (" + totalOutNano.toString() + " nanoERG)",
+    "This is a recurring payment plan, not a subscription contract: no script pulls future payments — the payer builds and signs each period's transaction in their own wallet when that period arrives, and can stop at any time. The builder counts periods, not calendar time; what a period is (a week, a month) is the parties' own agreement. Plan only: nothing has been signed or sent, and no payment has been made."];
+  return {
+    valid: true, reason: null, network: recCheck.network,
+    recipientAddress: recipient, recipientType: recCheck.type,
+    label: label,
+    amountNano: amountNano.toString(), amountErg: nanoToErg(amountNano.toString()),
+    periodCount: periodCount,
+    subscriptionNano: totalNano.toString(), subscriptionErg: nanoToErg(totalNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    firstPaymentNano: firstPaymentNano.toString(), firstPaymentErg: nanoToErg(firstPaymentNano.toString()),
+    restPaymentNano: restPaymentNano.toString(), restPaymentErg: nanoToErg(restPaymentNano.toString()),
+    totalNano: totalOutNano.toString(), totalErg: nanoToErg(totalOutNano.toString()),
+    paymentBelowSafeMin: paymentDust, recipientIsServiceAddress: recipient === SERVICE_FEE_ADDRESS,
+    subscriptionText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -12740,7 +12840,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -13189,6 +13289,21 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ At least one release is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       if (res.beneficiaryIsServiceAddress) msg += "Note: the beneficiary address is the service-fee address itself, so that address receives each release plus the service fee in the first one, and a wallet can combine them. ";
       msg += "Copyable vesting schedule:\n" + res.vestingText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a vesting contract, and no payment has been made until the funder builds and signs each release in their own wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("subpay-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("subpay-result");
+      var res = buildSubscriptionPlan(document.getElementById("subpay-recipient").value, document.getElementById("subpay-label").value, document.getElementById("subpay-amount").value, document.getElementById("subpay-periods").value, document.getElementById("subpay-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Recurring payment plan built on " + res.network + " for \"" + res.label + "\" — " + res.amountErg + " ERG (" + res.amountNano + " nanoERG) per period for " + res.periodCount + " periods to " + res.recipientAddress + ", a subscription total of " + res.subscriptionErg + " ERG (" + res.subscriptionNano + " nanoERG). The payer pays " + res.totalErg + " ERG (" + res.totalNano + " nanoERG) across the whole plan, including a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the subscription total, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), paid once with the first payment, plus the " + res.minerFeeErg + " ERG miner fee per payment. The first payment is " + res.firstPaymentErg + " ERG; each later payment is " + res.restPaymentErg + " ERG. The payments re-add to the subscription total exactly. ";
+      if (res.paymentBelowSafeMin) msg += "⚠ The per-period amount is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.recipientIsServiceAddress) msg += "Note: the recipient address is the service-fee address itself, so that address receives each payment plus the service fee in the first one, and a wallet can combine them. ";
+      msg += "Copyable recurring payment plan:\n" + res.subscriptionText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a subscription contract, and no payment has been made until the payer builds and signs each period's transaction in their own wallet.";
       out.textContent = msg;
     });
 

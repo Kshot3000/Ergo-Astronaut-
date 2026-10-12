@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**118 free Ergo tools, local-first:** the live hub carries 118 tools that run
+**119 free Ergo tools, local-first:** the live hub carries 119 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule and recurring payment builders below, whose
+marketplace sale split, vesting schedule, recurring payment and loan repayment builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 118 tools on one page it beats scrolling.
+headers) — with 119 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -255,6 +255,27 @@ headers) — with 118 tools on one page it beats scrolling.
   plan block; the payer builds and signs each period's transaction
   in their own wallet. Plan only: it fetches nothing, signs nothing,
   and sends nothing.
+- **Ergo loan repayment builder** — lending ERG, or borrowing, and
+  want the repayment worked out to the nanoERG first? Name the
+  lender, the principal, the per-period interest rate in basis
+  points and the period count. The principal is repaid in equal
+  instalments by cumulative floor differencing, so the principal
+  portions re-add to the principal exactly, and each period's
+  interest is charged on the balance at the start of that period,
+  rounded down to the nanoERG — payments fall as the balance falls,
+  and the total interest is computed two ways inside the tool
+  (forward over the declining balances, and in reverse, rebuilding
+  them), which must agree exactly. The borrower also pays the hub's
+  disclosed service fee — 1% of the principal, rounded up, minimum
+  0.001 ERG, charged on the principal only and never on the
+  interest — to my Ergo address, paid with the first payment, plus
+  the miner fee once per payment. The lender address is
+  checksum-verified. Stated plainly in the schedule: this is a loan
+  repayment schedule, not a loan contract — no script enforces
+  repayment or holds collateral, and the builder counts periods,
+  not calendar time. You get a copyable schedule block; the borrower
+  builds and signs each period's transaction in their own wallet.
+  Plan only: it fetches nothing, signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

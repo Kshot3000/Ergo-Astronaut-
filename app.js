@@ -1664,6 +1664,153 @@ function buildSubscriptionPlan(recipientRaw, labelRaw, amountStr, periodsStr, mi
   };
 }
 
+/* ---------- Ergo loan repayment builder (declining balance + disclosed service fee) ---------- */
+/* Tools 112-118 cover an invoice, a pot split by shares, one seller
+   in stages, fixed payroll amounts, a sale split, a vesting total
+   and equal recurring payments. This covers the lending case none of
+   them does: a principal repaid over N periods with interest charged
+   per period on the REMAINING balance, so payments decline as the
+   balance falls. The arithmetic is a DECLINING-BALANCE schedule, a
+   pattern none of the earlier builders uses: the principal is repaid
+   in equal instalments by cumulative floor differencing (the same
+   differencing as tool 117's vesting cumulatives), so the principal
+   portions re-add to the principal exactly; each period's interest
+   is floor(balance x rateBps / 10000) on the balance at the START of
+   the period, rounded DOWN to the nanoERG — stated plainly, never
+   hidden. Total interest is computed two independent ways inside
+   the tool — a forward pass over declining balances and a reverse
+   pass that rebuilds the balances from the end — which must agree
+   exactly. Service fee: the hub's standard disclosed fee, the SAME
+   constants as tools 112-118 — 1% of the PRINCIPAL, rounded UP,
+   minimum 0.001 ERG — paid by the borrower WITH the first payment.
+   The miner fee is paid once per PAYMENT transaction. The lender
+   address is checksum-verified (tool 2); a lender equal to the
+   service-fee address is reported, not refused. A payment below
+   the safe minimum box value is flagged. Planning only: this is a
+   repayment SCHEDULE, not a loan contract — no script enforces
+   repayment or holds collateral; it fetches nothing, signs nothing,
+   sends nothing. The builder counts periods, not calendar time —
+   what a period is (a week, a month) is the parties' own agreement,
+   and the per-period rate is whatever rate per period the parties
+   agreed, entered directly in basis points. */
+var LOAN_MAX_PERIODS = 48;
+var LOAN_MAX_LABEL_CHARS = 60;
+var LOAN_MAX_RATE_BPS = 10000;
+function buildLoanPlan(lenderRaw, labelRaw, principalStr, rateStr, periodsStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, lenderAddress: null, lenderType: null, label: null, principalNano: null, principalErg: null, rateBps: null, ratePercent: null, periodCount: null, payments: null, totalInterestNano: null, totalInterestErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, firstPaymentTotalNano: null, firstPaymentTotalErg: null, lastPaymentNano: null, lastPaymentErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, lenderIsServiceAddress: null, loanText: null };
+  };
+  var lenCheck = checkErgoAddress(lenderRaw);
+  if (!lenCheck.valid) return fail("The lender address is refused: " + lenCheck.reason);
+  var lender = typeof lenderRaw === "string" ? lenderRaw.trim() : "";
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > LOAN_MAX_LABEL_CHARS) return fail("The loan name is " + label.length + " characters — keep it to " + LOAN_MAX_LABEL_CHARS + " or fewer so the schedule stays a single copyable block.");
+  if (label === "") label = "(unnamed loan)";
+  var principal = ergToNano(principalStr);
+  if (principal === null || BigInt(principal) <= 0n) return fail("The principal must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var principalNano = BigInt(principal);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  /* Rate and periods are whole counts — plain digits only. */
+  var rateTxt = (rateStr == null ? "" : String(rateStr)).trim();
+  if (!/^\d+$/.test(rateTxt)) return fail("The per-period interest rate must be a whole number of basis points (e.g. 100 = 1% per period) — no decimals, no sign.");
+  var rateBps = parseInt(rateTxt, 10);
+  if (rateBps > LOAN_MAX_RATE_BPS) return fail("The per-period rate is " + rateBps + " basis points — this builder takes at most " + LOAN_MAX_RATE_BPS + " (100% per period).");
+  var periodsTxt = (periodsStr == null ? "" : String(periodsStr)).trim();
+  if (!/^\d+$/.test(periodsTxt)) return fail("The period count must be a whole number of periods (e.g. 12) — no decimals, no sign.");
+  var periodCount = parseInt(periodsTxt, 10);
+  if (periodCount < 1) return fail("A loan schedule needs at least 1 period.");
+  if (periodCount > LOAN_MAX_PERIODS) return fail("This builder takes at most " + LOAN_MAX_PERIODS + " periods (you asked for " + periodCount + ") — a longer arrangement belongs in a dedicated contract, not a copyable schedule.");
+  if (principalNano < BigInt(periodCount)) return fail("The principal is too small for " + periodCount + " periods — every period must repay at least 1 nanoERG of principal. Increase the principal or use fewer periods.");
+  /* Principal portions by cumulative floor differencing: portion i
+     is floor(P x i / N) - floor(P x (i-1) / N), so the portions
+     re-add to the principal exactly. Interest rides on the balance
+     at the start of each period. */
+  var rawPayments = [];
+  var balance = principalNano;
+  var principalSum = 0n;
+  for (var pi = 1; pi <= periodCount; pi++) {
+    var portion = (principalNano * BigInt(pi)) / BigInt(periodCount) - (principalNano * BigInt(pi - 1)) / BigInt(periodCount);
+    if (portion <= 0n) return fail("Period " + pi + " would repay 0 nanoERG of principal — the principal is too small for that many periods.");
+    var interest = (balance * BigInt(rateBps)) / 10000n;
+    rawPayments.push({ period: pi, principalNano: portion, interestNano: interest, paymentNano: portion + interest, balanceAfterNano: balance - portion });
+    principalSum += portion;
+    balance -= portion;
+  }
+  if (balance !== 0n || principalSum !== principalNano) return fail("Internal check failed: the principal portions do not re-add to the principal — refusing to show a schedule rather than risk a wrong total.");
+  /* Total interest, second route: rebuild the balances from the end
+     (start at zero, add the portions back in reverse) and re-charge
+     interest on each rebuilt opening balance. Must agree exactly. */
+  var totalInterestFwd = 0n;
+  for (var fi = 0; fi < rawPayments.length; fi++) totalInterestFwd += rawPayments[fi].interestNano;
+  var totalInterestRev = 0n;
+  var rebuilt = 0n;
+  for (var ri = rawPayments.length - 1; ri >= 0; ri--) {
+    rebuilt += rawPayments[ri].principalNano;
+    totalInterestRev += (rebuilt * BigInt(rateBps)) / 10000n;
+  }
+  if (rebuilt !== principalNano || totalInterestRev !== totalInterestFwd) return fail("Internal check failed: the forward and reverse interest computations disagree — refusing to show a schedule rather than risk a wrong total.");
+  var totalInterestNano = totalInterestFwd;
+  /* Service fee: same two-route check as tools 112-118, on the
+     PRINCIPAL (not on principal + interest — the fee never charges
+     on the interest). */
+  var feeA = (principalNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = principalNano / 100n + (principalNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a schedule rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  var minerTotalNano = minerNano * BigInt(periodCount);
+  var totalOutNano = principalNano + totalInterestNano + feeNano + minerTotalNano;
+  /* Per-payment totals (each payment plus its miner fee; the first
+     also carries the service fee), verified against the grand total. */
+  var payments = rawPayments.map(function (p, i) {
+    var paymentTotal = p.paymentNano + minerNano + (i === 0 ? feeNano : 0n);
+    return { period: p.period, principalNano: p.principalNano, interestNano: p.interestNano, paymentNano: p.paymentNano, balanceAfterNano: p.balanceAfterNano, paymentTotalNano: paymentTotal, includesServiceFee: i === 0 };
+  });
+  var sumPaymentTotals = 0n;
+  for (var ti = 0; ti < payments.length; ti++) sumPaymentTotals += payments[ti].paymentTotalNano;
+  if (sumPaymentTotals !== totalOutNano) return fail("Internal check failed: the per-payment totals do not re-add to the grand total — refusing to show it.");
+  var rateWhole = Math.floor(rateBps / 100);
+  var rateFrac = rateBps % 100;
+  var ratePercent = rateFrac === 0 ? String(rateWhole) : rateWhole + "." + String(rateFrac).padStart(2, "0").replace(/0$/, "");
+  var anyDust = false;
+  var paymentOut = payments.map(function (p) {
+    var dust = p.paymentNano < SAFE_USER_MIN_BOX_NANO;
+    if (dust) anyDust = true;
+    return { period: p.period, principalNano: p.principalNano.toString(), principalErg: nanoToErg(p.principalNano.toString()), interestNano: p.interestNano.toString(), interestErg: nanoToErg(p.interestNano.toString()), paymentNano: p.paymentNano.toString(), paymentErg: nanoToErg(p.paymentNano.toString()), balanceAfterNano: p.balanceAfterNano.toString(), balanceAfterErg: nanoToErg(p.balanceAfterNano.toString()), paymentTotalNano: p.paymentTotalNano.toString(), paymentTotalErg: nanoToErg(p.paymentTotalNano.toString()), includesServiceFee: p.includesServiceFee, belowSafeMin: dust };
+  });
+  var lines = ["ERGO LOAN REPAYMENT SCHEDULE — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Loan: " + label,
+    "Lender (receives every payment): " + lender,
+    "Principal: " + nanoToErg(principalNano.toString()) + " ERG (" + principalNano.toString() + " nanoERG), repaid over " + periodCount + " period(s) at " + ratePercent + "% per period (" + rateBps + " basis points) charged on the balance at the start of each period, each period's interest rounded down to the nanoERG. The principal is repaid in equal instalments by cumulative floor differencing, so the principal portions re-add to the principal exactly, and the total interest below was computed two ways — forward over the declining balances and in reverse, rebuilding them — which agreed exactly:"];
+  paymentOut.forEach(function (p) { lines.push("Period " + p.period + " — principal " + p.principalErg + " ERG (" + p.principalNano + " nanoERG) + interest " + p.interestErg + " ERG (" + p.interestNano + " nanoERG) = payment " + p.paymentErg + " ERG (" + p.paymentNano + " nanoERG); balance after this payment " + p.balanceAfterErg + " ERG (" + p.balanceAfterNano + " nanoERG); the borrower pays " + p.paymentTotalErg + " ERG in this period's transaction" + (p.includesServiceFee ? ", including the service fee below and the miner fee" : ", including the miner fee") + "."); });
+  lines.push("Total interest over the loan: " + nanoToErg(totalInterestNano.toString()) + " ERG (" + totalInterestNano.toString() + " nanoERG)");
+  lines.push("Service fee (disclosed: 1% of the principal, rounded up, minimum 0.001 ERG — charged on the principal only, never on the interest), paid with the first payment: " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+  lines.push("Miner fee: " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) per payment transaction, " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG) across all " + periodCount + " payments");
+  lines.push("Total the borrower pays across the whole loan: " + nanoToErg(totalOutNano.toString()) + " ERG (" + totalOutNano.toString() + " nanoERG)");
+  lines.push("This is a loan repayment schedule, not a loan contract: no script enforces repayment, holds collateral or seizes anything if a payment is missed — the borrower builds and signs each period's transaction in their own wallet when that period arrives. The builder counts periods, not calendar time; what a period is (a week, a month) and the per-period rate are the parties' own agreement. Schedule only: nothing has been signed or sent, and no payment has been made.");
+  return {
+    valid: true, reason: null, network: lenCheck.network,
+    lenderAddress: lender, lenderType: lenCheck.type,
+    label: label,
+    principalNano: principalNano.toString(), principalErg: nanoToErg(principalNano.toString()),
+    rateBps: String(rateBps), ratePercent: ratePercent,
+    periodCount: periodCount,
+    payments: paymentOut,
+    totalInterestNano: totalInterestNano.toString(), totalInterestErg: nanoToErg(totalInterestNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    firstPaymentTotalNano: payments[0].paymentTotalNano.toString(), firstPaymentTotalErg: nanoToErg(payments[0].paymentTotalNano.toString()),
+    lastPaymentNano: payments[payments.length - 1].paymentNano.toString(), lastPaymentErg: nanoToErg(payments[payments.length - 1].paymentNano.toString()),
+    totalNano: totalOutNano.toString(), totalErg: nanoToErg(totalOutNano.toString()),
+    anyBelowSafeMin: anyDust, lenderIsServiceAddress: lender === SERVICE_FEE_ADDRESS,
+    loanText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -12840,7 +12987,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -13304,6 +13451,22 @@ if (typeof document !== "undefined") {
       if (res.paymentBelowSafeMin) msg += "⚠ The per-period amount is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       if (res.recipientIsServiceAddress) msg += "Note: the recipient address is the service-fee address itself, so that address receives each payment plus the service fee in the first one, and a wallet can combine them. ";
       msg += "Copyable recurring payment plan:\n" + res.subscriptionText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a subscription contract, and no payment has been made until the payer builds and signs each period's transaction in their own wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("loanpay-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("loanpay-result");
+      var res = buildLoanPlan(document.getElementById("loanpay-lender").value, document.getElementById("loanpay-label").value, document.getElementById("loanpay-principal").value, document.getElementById("loanpay-rate").value, document.getElementById("loanpay-periods").value, document.getElementById("loanpay-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var first = res.payments[0], last = res.payments[res.payments.length - 1];
+      var msg = "✓ Loan repayment schedule built on " + res.network + " for \"" + res.label + "\" — a principal of " + res.principalErg + " ERG (" + res.principalNano + " nanoERG) repaid to " + res.lenderAddress + " over " + res.periodCount + " period(s) at " + res.ratePercent + "% per period on the remaining balance: the first payment is " + first.paymentErg + " ERG and the last is " + last.paymentErg + " ERG, and the total interest is " + res.totalInterestErg + " ERG (" + res.totalInterestNano + " nanoERG). The borrower pays " + res.totalErg + " ERG (" + res.totalNano + " nanoERG) across the whole loan, including a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the principal, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), paid with the first payment, plus the " + res.minerFeeErg + " ERG miner fee per payment. The principal portions re-add to the principal exactly. ";
+      if (res.anyBelowSafeMin) msg += "⚠ At least one period's payment is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.lenderIsServiceAddress) msg += "Note: the lender address is the service-fee address itself, so that address receives each payment plus the service fee in the first one, and a wallet can combine them. ";
+      msg += "Copyable loan repayment schedule:\n" + res.loanText + "\nSchedule only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a loan contract, and no payment has been made until the borrower builds and signs each period's transaction in their own wallet.";
       out.textContent = msg;
     });
 

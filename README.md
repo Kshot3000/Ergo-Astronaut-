@@ -3,12 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**113 free Ergo tools, local-first:** the live hub carries 113 tools that run
+**114 free Ergo tools, local-first:** the live hub carries 114 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
-that earn are the invoice and split-payment builders below, whose
+that earn are the invoice, split-payment and milestone-payment
+builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -77,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 113 tools on one page it beats scrolling.
+headers) — with 114 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -160,6 +161,23 @@ headers) — with 113 tools on one page it beats scrolling.
   in the plan itself, plus the miner fee. You get a copyable plan
   block; the payer builds the transaction in their own wallet.
   Plan only: it fetches nothing, signs nothing, and sends nothing.
+- **Ergo milestone-payment builder** — paying one seller in stages as
+  work is delivered? List each milestone as name, shares (whole parts)
+  and the contract amount is divided by the largest-remainder method
+  in exact BigInt maths: floored shares first, then the leftover
+  nanoERG one each to the largest fractional remainders, ties by list
+  order, so the milestone amounts re-add to the contract exactly.
+  The seller's address is checksum-verified; each milestone is paid
+  in its own transaction when its work is delivered, so the buyer
+  pays the miner fee once per milestone. The buyer also pays the
+  hub's disclosed service fee — 1% of the contract amount, rounded
+  up, minimum 0.001 ERG — as its own output to my Ergo address,
+  printed in the plan itself and paid together with the first
+  milestone; later milestones carry no hub fee. Stated plainly in
+  the plan: this is a payment schedule, not an escrow — nothing
+  holds the later milestones. You get a copyable plan block stating
+  every stage's seller amount and full transaction cost. Plan only:
+  it fetches nothing, signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

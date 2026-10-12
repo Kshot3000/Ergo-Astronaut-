@@ -1085,6 +1085,143 @@ function buildSplitPayment(potStr, recipientsRaw, minerFeeStr) {
   };
 }
 
+/* ---------- Ergo milestone-payment builder (staged payments to one seller + disclosed service fee) ---------- */
+/* Tool 112 pays one seller once; tool 113 splits one pot among many
+   recipients. This covers the staged case neither covers: ONE seller
+   paid in milestones as work is delivered — the freelance/contract
+   pattern. The contract amount is split among the milestones by
+   integer shares via the same largest-remainder method as tool 113
+   (floors first, leftover nanoERG one each to the largest fractional
+   remainders, ties by line order), so the milestone amounts re-add
+   to the contract EXACTLY. Service fee: the hub's standard disclosed
+   fee — 1% of the contract, rounded UP, minimum 0.001 ERG — as its
+   own output to SERVICE_FEE_ADDRESS, paid WITH the first milestone
+   (stated plainly in the plan, so later milestones carry no hub
+   fee). Each milestone is paid in its own transaction, so the buyer
+   pays the entered miner fee once per milestone. Verified a second
+   way inside the tool: milestone outputs must re-add to the
+   contract, each must be its floor or floor+1, the +1 count must
+   equal the leftover, no milestone denied +1 may hold a larger
+   remainder than one who received it, and the per-stage totals
+   (milestone + first-stage fee where it applies + miner fee) must
+   re-add to the grand total. The seller address is checksum-
+   verified (tool 2). A milestone that would receive 0 nanoERG is
+   refused, not silently dropped; milestones below the safe minimum
+   box value are flagged. Planning only: this is a payment schedule,
+   NOT an escrow — nothing holds the later milestones, the buyer
+   pays each one when its work is delivered, and the tool fetches
+   nothing, signs nothing and sends nothing. */
+var MILESTONE_MAX_COUNT = 12;
+var MILESTONE_MAX_LABEL_CHARS = 40;
+var MILESTONE_MAX_SHARE = 1000000n;
+function buildMilestonePlan(sellerRaw, contractStr, milestonesRaw, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, sellerAddress: null, sellerNetwork: null, sellerType: null, contractNano: null, contractErg: null, totalShares: null, milestones: null, milestoneCount: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, sellerIsServiceAddress: null, planText: null };
+  };
+  var check = checkErgoAddress(sellerRaw);
+  if (!check.valid) return fail("The seller address is refused: " + check.reason);
+  var seller = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var contract = ergToNano(contractStr);
+  if (contract === null || BigInt(contract) <= 0n) return fail("The contract amount must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network, and every milestone is its own transaction.");
+  var contractNano = BigInt(contract);
+  var minerNano = BigInt(miner);
+  var rawLines = (milestonesRaw == null ? "" : String(milestonesRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenLabels = {};
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — milestone name, shares (e.g. \"Design, 1\").");
+    var label = parts[0].replace(/\s+/g, " ").trim();
+    var shareStr = parts[1].trim();
+    if (label === "") return fail("Line " + lineNo + " is refused: give the milestone a name before the comma, so the plan says what each payment is for.");
+    if (label.length > MILESTONE_MAX_LABEL_CHARS) return fail("Line " + lineNo + "'s name is " + label.length + " characters — keep milestone names to " + MILESTONE_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+    var labelKey = label.toLowerCase();
+    if (seenLabels[labelKey]) return fail("The milestone name on line " + lineNo + " repeats line " + seenLabels[labelKey] + " — name each milestone once and combine its shares into one line, so each stage is paid exactly once.");
+    seenLabels[labelKey] = lineNo;
+    if (!/^\d+$/.test(shareStr)) return fail("Line " + lineNo + " is refused: shares must be a whole number of parts (no decimals, no percent signs) — use 2 and 1 for a two-to-one split, not 66.7 and 33.3.");
+    var share = BigInt(shareStr);
+    if (share <= 0n) return fail("Line " + lineNo + " is refused: shares must be above zero — remove a milestone instead of giving it zero shares.");
+    if (share > MILESTONE_MAX_SHARE) return fail("Line " + lineNo + " is refused: shares are capped at 1,000,000 parts per milestone so a typo cannot silently swallow the whole contract.");
+    entries.push({ label: label, shares: share, line: lineNo });
+  }
+  if (entries.length < 2) return fail("A milestone plan needs at least two stages — for a single payment, build a plain invoice with tool 112 instead.");
+  if (entries.length > MILESTONE_MAX_COUNT) return fail("This builder takes at most " + MILESTONE_MAX_COUNT + " milestones (you listed " + entries.length + ") — a schedule with more stages than that belongs in a dedicated contract flow, not a copyable plan.");
+  var totalShares = 0n;
+  for (var si = 0; si < entries.length; si++) totalShares += entries[si].shares;
+  /* Largest-remainder split of the contract amount, exact BigInt. */
+  var floors = [], rems = [], sumFloor = 0n;
+  for (var fi = 0; fi < entries.length; fi++) {
+    var prod = contractNano * entries[fi].shares;
+    floors.push(prod / totalShares);
+    rems.push(prod % totalShares);
+    sumFloor += floors[fi];
+  }
+  var leftover = contractNano - sumFloor; /* 0 <= leftover < milestone count */
+  var order = entries.map(function (_, i) { return i; }).sort(function (a, b) {
+    if (rems[a] !== rems[b]) return rems[a] > rems[b] ? -1 : 1;
+    return a - b;
+  });
+  var bonus = entries.map(function () { return false; });
+  for (var bi = 0; bi < Number(leftover); bi++) bonus[order[bi]] = true;
+  var amounts = floors.map(function (f, i) { return bonus[i] ? f + 1n : f; });
+  /* Second-way verification of the split before anything is shown. */
+  var sumOut = 0n, bonusCount = 0n;
+  for (var vi = 0; vi < amounts.length; vi++) {
+    sumOut += amounts[vi];
+    if (amounts[vi] !== floors[vi] && amounts[vi] !== floors[vi] + 1n) return fail("Internal check failed: a milestone amount is neither its floor nor floor+1 — refusing to show it.");
+    if (bonus[vi]) bonusCount += 1n;
+  }
+  if (sumOut !== contractNano) return fail("Internal check failed: the milestone amounts do not re-add to the contract amount — refusing to show it.");
+  if (bonusCount !== leftover) return fail("Internal check failed: the remainder bonuses do not match the leftover — refusing to show it.");
+  for (var gi = 0; gi < entries.length; gi++) if (bonus[gi]) for (var gj = 0; gj < entries.length; gj++) if (!bonus[gj] && rems[gj] > rems[gi]) return fail("Internal check failed: a larger remainder was denied the extra nanoERG — refusing to show it.");
+  for (var zi = 0; zi < amounts.length; zi++) if (amounts[zi] <= 0n) return fail("Milestone " + (zi + 1) + " (\"" + entries[zi].label + "\", line " + entries[zi].line + ") would receive 0 nanoERG — the contract is too small for that share ratio. Increase the amount or even out the shares.");
+  /* Service fee: same two-route check as tools 112/113. */
+  var feeA = (contractNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = contractNano / 100n + (contractNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  var minerTotalNano = minerNano * BigInt(entries.length);
+  var totalNano = contractNano + feeNano + minerTotalNano;
+  /* Per-stage totals, verified to re-add to the grand total. */
+  var stageTotals = amounts.map(function (a, i) { return a + minerNano + (i === 0 ? feeNano : 0n); });
+  var sumStages = 0n;
+  for (var ti = 0; ti < stageTotals.length; ti++) sumStages += stageTotals[ti];
+  if (sumStages !== totalNano) return fail("Internal check failed: the per-stage totals do not re-add to the grand total — refusing to show it.");
+  var anyDust = false;
+  var milestones = entries.map(function (e, i) {
+    var dust = amounts[i] < SAFE_USER_MIN_BOX_NANO;
+    if (dust) anyDust = true;
+    return { label: e.label, shares: e.shares.toString(), amountNano: amounts[i].toString(), amountErg: nanoToErg(amounts[i].toString()), gotRemainderBonus: bonus[i], belowSafeMin: dust, includesServiceFee: i === 0, stageTotalNano: stageTotals[i].toString(), stageTotalErg: nanoToErg(stageTotals[i].toString()) };
+  });
+  var lines = ["ERGO MILESTONE PAYMENT PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Seller: " + seller,
+    "Contract amount: " + nanoToErg(contractNano.toString()) + " ERG (" + contractNano.toString() + " nanoERG), paid in " + milestones.length + " milestones by shares (largest-remainder, exact to the nanoERG):"];
+  milestones.forEach(function (m, i) { lines.push("Milestone " + (i + 1) + " — " + m.label + " (" + m.shares + " shares): seller receives " + m.amountErg + " ERG (" + m.amountNano + " nanoERG); the buyer pays " + m.stageTotalErg + " ERG in this stage's transaction" + (m.includesServiceFee ? ", including the service fee below and the miner fee" : ", including the miner fee") + "."); });
+  lines.push("Service fee (disclosed: 1% of the contract amount, rounded up, minimum 0.001 ERG), paid with milestone 1: " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+  lines.push("Miner fee: " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) per milestone transaction, " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG) across all " + milestones.length + " milestones");
+  lines.push("Total the buyer pays across the whole plan: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG)");
+  lines.push("This is a payment schedule, not an escrow: nothing holds the later milestones — the buyer builds and signs each stage's transaction in their own wallet when that stage's work is delivered. Plan only: nothing has been signed or sent, and no payment has been made.");
+  return {
+    valid: true, reason: null,
+    sellerAddress: seller, sellerNetwork: check.network, sellerType: check.type,
+    contractNano: contractNano.toString(), contractErg: nanoToErg(contractNano.toString()),
+    totalShares: totalShares.toString(), milestones: milestones, milestoneCount: milestones.length,
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust, sellerIsServiceAddress: seller === SERVICE_FEE_ADDRESS,
+    planText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -12261,7 +12398,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -12645,6 +12782,22 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ At least one recipient output is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       if (res.includesServiceAddress) msg += "Note: one recipient is the service-fee address itself, so that address receives its split output plus the service fee, and a wallet can combine them. ";
       msg += "Copyable split plan:\n" + res.splitText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — no payment has been made until the payer builds and signs the transaction in their own wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("milepay-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("milepay-result");
+      var res = buildMilestonePlan(document.getElementById("milepay-seller").value, document.getElementById("milepay-amount").value, document.getElementById("milepay-milestones").value, document.getElementById("milepay-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var parts = res.milestones.map(function (m, i) { return "milestone " + (i + 1) + " \"" + m.label + "\" pays the seller " + m.amountErg + " ERG (" + m.shares + " shares" + (m.gotRemainderBonus ? ", +1 nanoERG remainder bonus" : "") + ") and costs the buyer " + m.stageTotalErg + " ERG in its own transaction"; });
+      var msg = "✓ Milestone plan built for seller " + res.sellerAddress + " (" + res.sellerNetwork + " " + res.sellerType + ") — the buyer pays " + res.totalErg + " ERG (" + res.totalNano + " nanoERG) across the whole plan: the " + res.contractErg + " ERG contract splits as " + parts.join("; ") + ". That total includes a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the contract, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), paid with milestone 1, plus a " + res.minerFeeErg + " ERG miner fee per milestone (" + res.minerTotalErg + " ERG across " + res.milestoneCount + " milestones). The milestone amounts re-add to the contract exactly. ";
+      if (res.anyBelowSafeMin) msg += "⚠ At least one milestone amount is below the recommended 0.001 ERG safe minimum per box (tool 5) — a payment that small may be impractical to create. ";
+      if (res.sellerIsServiceAddress) msg += "Note: the seller address is the service-fee address itself, so milestone 1 pays both its seller amount and the service fee to the same address, and a wallet can combine them into one box. ";
+      msg += "Copyable milestone plan:\n" + res.planText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is a schedule, not an escrow, and no payment has been made until the buyer builds and signs each stage's transaction in their own wallet.";
       out.textContent = msg;
     });
 

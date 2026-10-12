@@ -1430,6 +1430,140 @@ function buildSaleSplitPlan(sellerRaw, creatorRaw, itemRaw, priceStr, royaltyPct
   };
 }
 
+/* ---------- Ergo vesting schedule builder (linear vesting with a cliff + disclosed service fee) ---------- */
+/* Tools 112-116 cover an invoice, a pot split by shares, one seller
+   in stages, fixed payroll amounts and a sale split. This covers the
+   vesting case none of them does: a TOTAL amount that unlocks
+   LINEARLY over N periods to ONE beneficiary, with an optional CLIFF
+   — the first C periods release nothing, and everything vested
+   through the cliff is paid together in the first release after it.
+   The arithmetic is CUMULATIVE FLOOR DIFFERENCING, a pattern none of
+   the earlier builders uses: the amount vested through period i is
+   floor(total * i / N), computed two independent ways inside the
+   tool, and a period's release is the difference of successive
+   cumulatives. Because the last cumulative is the total itself, the
+   releases re-add to the total EXACTLY (the sum telescopes) — while
+   flooring each period separately would strand nanoERG: 100000001
+   nanoERG over 3 periods pays 33333333 three times and loses 2
+   nanoERG forever; differencing pays 33333333/33333334/33333334.
+   A schedule where any release would be 0 nanoERG is refused (the
+   total is too small for that many periods). Service fee: the hub's
+   standard disclosed fee, the SAME constants as tools 112-116 — 1%
+   of the total, rounded UP, minimum 0.001 ERG — paid by the funder
+   WITH the first release. The miner fee is paid once per RELEASE
+   transaction (release count = N - cliff), not per period. The
+   beneficiary address is checksum-verified (tool 2); a beneficiary
+   equal to the service-fee address is reported, not refused.
+   Releases below the safe minimum box value are flagged. Planning
+   only: this is a vesting SCHEDULE, not a vesting contract — no
+   script locks the unvested amount, so nothing stops a funder from
+   not paying a later release; it fetches nothing, signs nothing,
+   sends nothing. The builder counts periods, not calendar time —
+   what a period is (a week, a month) is the parties' own agreement. */
+var VESTING_MAX_PERIODS = 48;
+var VESTING_MAX_LABEL_CHARS = 60;
+function buildVestingPlan(beneficiaryRaw, labelRaw, totalStr, periodsStr, cliffStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, beneficiaryAddress: null, beneficiaryType: null, label: null, vestingNano: null, vestingErg: null, periodCount: null, cliffPeriods: null, releaseCount: null, releases: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, beneficiaryIsServiceAddress: null, vestingText: null };
+  };
+  var benCheck = checkErgoAddress(beneficiaryRaw);
+  if (!benCheck.valid) return fail("The beneficiary address is refused: " + benCheck.reason);
+  var beneficiary = typeof beneficiaryRaw === "string" ? beneficiaryRaw.trim() : "";
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > VESTING_MAX_LABEL_CHARS) return fail("The plan name is " + label.length + " characters — keep it to " + VESTING_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed vesting plan)";
+  var total = ergToNano(totalStr);
+  if (total === null || BigInt(total) <= 0n) return fail("The vesting total must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var totalNano = BigInt(total);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  /* Periods and cliff are whole counts — plain digits only. */
+  var periodsTxt = (periodsStr == null ? "" : String(periodsStr)).trim();
+  if (!/^\d+$/.test(periodsTxt)) return fail("The period count must be a whole number of periods (e.g. 12) — no decimals, no sign.");
+  var periodCount = parseInt(periodsTxt, 10);
+  if (periodCount < 2) return fail("A vesting schedule needs at least 2 periods — for a single payment, build a plain invoice with tool 112 instead.");
+  if (periodCount > VESTING_MAX_PERIODS) return fail("This builder takes at most " + VESTING_MAX_PERIODS + " periods (you asked for " + periodCount + ") — a longer schedule belongs in a dedicated vesting contract, not a copyable plan.");
+  var cliffTxt = (cliffStr == null ? "" : String(cliffStr)).trim();
+  if (cliffTxt === "") cliffTxt = "0";
+  if (!/^\d+$/.test(cliffTxt)) return fail("The cliff must be a whole number of periods (e.g. 0, 1, 3) — no decimals, no sign.");
+  var cliffPeriods = parseInt(cliffTxt, 10);
+  if (cliffPeriods >= periodCount) return fail("The cliff (" + cliffPeriods + " periods) must be shorter than the whole schedule (" + periodCount + " periods) — a cliff that long would leave no period in which anything is ever released.");
+  /* Cumulative vested through period i, two independent routes:
+     A) floor(total * i / N) directly; B) quotient/remainder split of
+     the total over N, applied per part. They must agree exactly. */
+  var cumulatives = [];
+  for (var ci = 0; ci <= periodCount; ci++) {
+    var cumA = (totalNano * BigInt(ci)) / BigInt(periodCount);
+    var cumB = (totalNano / BigInt(periodCount)) * BigInt(ci) + ((totalNano % BigInt(periodCount)) * BigInt(ci)) / BigInt(periodCount);
+    if (cumA !== cumB) return fail("Internal check failed: the two cumulative-vesting computations disagree — refusing to show a schedule rather than risk a wrong release.");
+    cumulatives.push(cumA);
+  }
+  if (cumulatives[periodCount] !== totalNano) return fail("Internal check failed: the final cumulative is not the vesting total — refusing to show it.");
+  /* Releases: nothing through the cliff; the first release after it
+     pays everything vested so far; later releases pay the period's
+     newly vested difference. */
+  var rawReleases = [];
+  var prevPaid = 0n;
+  for (var pi = 1; pi <= periodCount; pi++) {
+    if (pi <= cliffPeriods) continue;
+    var amt = cumulatives[pi] - prevPaid;
+    prevPaid = cumulatives[pi];
+    rawReleases.push({ period: pi, cumulativeNano: cumulatives[pi], amountNano: amt });
+  }
+  for (var zi = 0; zi < rawReleases.length; zi++) if (rawReleases[zi].amountNano <= 0n) return fail("Period " + rawReleases[zi].period + " would release 0 nanoERG — the total is too small for that many periods. Increase the total or use fewer periods.");
+  /* Service fee: same two-route check as tools 112-116. */
+  var feeA = (totalNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = totalNano / 100n + (totalNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a schedule rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  var releaseCount = periodCount - cliffPeriods;
+  if (rawReleases.length !== releaseCount) return fail("Internal check failed: the release count does not match periods minus cliff — refusing to show it.");
+  var minerTotalNano = minerNano * BigInt(releaseCount);
+  var totalOutNano = totalNano + feeNano + minerTotalNano;
+  /* Per-release totals, verified to re-add to the grand total, and
+     the releases themselves verified to re-add to the vesting total. */
+  var releases = rawReleases.map(function (r, i) {
+    var releaseTotal = r.amountNano + minerNano + (i === 0 ? feeNano : 0n);
+    return { period: r.period, cumulativeNano: r.cumulativeNano, amountNano: r.amountNano, releaseTotalNano: releaseTotal, includesServiceFee: i === 0 };
+  });
+  var sumReleases = 0n, sumReleaseTotals = 0n;
+  for (var ti = 0; ti < releases.length; ti++) { sumReleases += releases[ti].amountNano; sumReleaseTotals += releases[ti].releaseTotalNano; }
+  if (sumReleases !== totalNano) return fail("Internal check failed: the releases do not re-add to the vesting total — refusing to show it.");
+  if (sumReleaseTotals !== totalOutNano) return fail("Internal check failed: the per-release totals do not re-add to the grand total — refusing to show it.");
+  var anyDust = false;
+  var releaseOut = releases.map(function (r) {
+    var dust = r.amountNano < SAFE_USER_MIN_BOX_NANO;
+    if (dust) anyDust = true;
+    return { period: r.period, cumulativeNano: r.cumulativeNano.toString(), cumulativeErg: nanoToErg(r.cumulativeNano.toString()), amountNano: r.amountNano.toString(), amountErg: nanoToErg(r.amountNano.toString()), releaseTotalNano: r.releaseTotalNano.toString(), releaseTotalErg: nanoToErg(r.releaseTotalNano.toString()), includesServiceFee: r.includesServiceFee, belowSafeMin: dust };
+  });
+  var lines = ["ERGO VESTING SCHEDULE — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Plan: " + label,
+    "Beneficiary: " + beneficiary,
+    "Vesting total: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG), vesting linearly over " + periodCount + " periods" + (cliffPeriods > 0 ? " with a cliff of " + cliffPeriods + " period(s) — nothing is released through the cliff, and everything vested by then is paid in the first release" : " with no cliff") + ". Each release is the difference of successive cumulative vested amounts (cumulative amounts are floored to the nanoERG), so the releases re-add to the total exactly:"];
+  releaseOut.forEach(function (r) { lines.push("Period " + r.period + " — vested so far " + r.cumulativeErg + " ERG (" + r.cumulativeNano + " nanoERG); this release pays the beneficiary " + r.amountErg + " ERG (" + r.amountNano + " nanoERG); the funder pays " + r.releaseTotalErg + " ERG in this release's transaction" + (r.includesServiceFee ? ", including the service fee below and the miner fee" : ", including the miner fee") + "."); });
+  lines.push("Service fee (disclosed: 1% of the vesting total, rounded up, minimum 0.001 ERG), paid with the first release: " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+  lines.push("Miner fee: " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) per release transaction, " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG) across all " + releaseCount + " releases");
+  lines.push("Total the funder pays across the whole schedule: " + nanoToErg(totalOutNano.toString()) + " ERG (" + totalOutNano.toString() + " nanoERG)");
+  lines.push("This is a vesting schedule, not a vesting contract: no script locks the unvested amount — the funder builds and signs each release's transaction in their own wallet when that period arrives. The builder counts periods, not calendar time; what a period is (a week, a month) is the parties' own agreement. Plan only: nothing has been signed or sent, and no payment has been made.");
+  return {
+    valid: true, reason: null, network: benCheck.network,
+    beneficiaryAddress: beneficiary, beneficiaryType: benCheck.type,
+    label: label,
+    vestingNano: totalNano.toString(), vestingErg: nanoToErg(totalNano.toString()),
+    periodCount: periodCount, cliffPeriods: cliffPeriods, releaseCount: releaseCount,
+    releases: releaseOut,
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    totalNano: totalOutNano.toString(), totalErg: nanoToErg(totalOutNano.toString()),
+    anyBelowSafeMin: anyDust, beneficiaryIsServiceAddress: beneficiary === SERVICE_FEE_ADDRESS,
+    vestingText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -12606,7 +12740,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -13039,6 +13173,22 @@ if (typeof document !== "undefined") {
       if (res.creatorIsSeller) msg += "Note: the creator and seller addresses are the same, so that address receives both the seller net and the royalty, and a wallet can combine them into one box. ";
       if (res.sellerIsServiceAddress) msg += "Note: the seller address is the service-fee address itself, so that address receives both the seller net and the service fee, and a wallet can combine them. ";
       msg += "Copyable sale split plan:\n" + res.saleText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not an escrow, and no payment has been made until the buyer builds and signs the transaction in their own wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("vesting-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("vesting-result");
+      var res = buildVestingPlan(document.getElementById("vesting-beneficiary").value, document.getElementById("vesting-label").value, document.getElementById("vesting-amount").value, document.getElementById("vesting-periods").value, document.getElementById("vesting-cliff").value, document.getElementById("vesting-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var parts = res.releases.map(function (r) { return "period " + r.period + " pays " + r.amountErg + " ERG"; });
+      var msg = "✓ Vesting schedule built on " + res.network + " for \"" + res.label + "\" — " + res.vestingErg + " ERG (" + res.vestingNano + " nanoERG) vests linearly over " + res.periodCount + " periods" + (res.cliffPeriods > 0 ? " with a cliff of " + res.cliffPeriods + " period(s)" : " with no cliff") + " to " + res.beneficiaryAddress + ", in " + res.releaseCount + " releases: " + parts.join("; ") + ". The funder pays " + res.totalErg + " ERG (" + res.totalNano + " nanoERG) across the whole schedule, including a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the vesting total, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), paid with the first release, plus the " + res.minerFeeErg + " ERG miner fee per release. The releases re-add to the vesting total exactly. ";
+      if (res.anyBelowSafeMin) msg += "⚠ At least one release is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.beneficiaryIsServiceAddress) msg += "Note: the beneficiary address is the service-fee address itself, so that address receives each release plus the service fee in the first one, and a wallet can combine them. ";
+      msg += "Copyable vesting schedule:\n" + res.vestingText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a vesting contract, and no payment has been made until the funder builds and signs each release in their own wallet.";
       out.textContent = msg;
     });
 

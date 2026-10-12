@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**116 free Ergo tools, local-first:** the live hub carries 116 tools that run
+**117 free Ergo tools, local-first:** the live hub carries 117 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
-that earn are the invoice, split-payment, milestone-payment, payroll and
-marketplace sale split builders below, whose
+that earn are the invoice, split-payment, milestone-payment, payroll,
+marketplace sale split and vesting schedule builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 116 tools on one page it beats scrolling.
+headers) — with 117 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -215,6 +215,29 @@ headers) — with 116 tools on one page it beats scrolling.
   the payment. You get a copyable plan block; the buyer builds the
   one transaction in their own wallet. Plan only: it fetches
   nothing, signs nothing, and sends nothing.
+- **Ergo vesting schedule builder** — paying out a grant, a team
+  allocation or a sale over time instead of all at once? Name the
+  beneficiary and the total, choose how many periods it vests over
+  and an optional cliff — the first cliff periods release nothing,
+  and everything vested through the cliff is paid together in the
+  first release after it. The amounts are exact BigInt by cumulative
+  floor differencing: the amount vested through each period is the
+  floor of total × period ÷ periods, computed two ways inside the
+  tool, and each release is the difference of successive
+  cumulatives, so the releases re-add to the total exactly — where
+  flooring each period separately would strand nanoERG
+  (100000001 nanoERG over 3 periods would lose 2 nanoERG forever).
+  A schedule where any release would be 0 nanoERG is refused. The
+  funder also pays the hub's disclosed service fee — 1% of the
+  vesting total, rounded up, minimum 0.001 ERG — to my Ergo
+  address, paid with the first release, plus the miner fee once
+  per release. The beneficiary address is checksum-verified.
+  Stated plainly in the plan: this is a vesting schedule, not a
+  vesting contract — no script locks the unvested amount, and the
+  builder counts periods, not calendar time. You get a copyable
+  schedule block; the funder builds and signs each release's
+  transaction in their own wallet. Plan only: it fetches nothing,
+  signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

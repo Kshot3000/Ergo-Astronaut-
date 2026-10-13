@@ -3854,6 +3854,132 @@ function buildCascadingRoyaltyPlan(labelRaw, sellerRaw, recipientsRaw, priceStr,
   };
 }
 
+/* ---------- Dutch auction builder (descending price schedule + fee) ---------- */
+/* Tool 132: an Ergo Dutch auction plan. Tools 112-131 split, settle,
+   rotate or cascade a FIXED amount; none of them prices a sale that
+   FALLS over time. A Dutch auction starts high and drops in equal
+   steps to a floor: the price at step k of S is the exact linear
+   interpolation (start*(S-k) + floor*k) / S, floored to the
+   nanoERG, so step 0 is exactly the start price and step S is
+   exactly the floor. The buyer who takes the sale at a step pays
+   that step's price; the discount off the start is reported
+   exactly, in nanoERG and in floored basis points. Every price is
+   computed two ways inside the tool — the direct interpolation and
+   the split form (start and floor each divided by S with remainder,
+   the quotient parts scaled and the remainder parts interpolated
+   separately) — and the two must agree at every step, the schedule
+   must never rise, and the seller net plus the fee must re-add to
+   the sale price before anything is shown. Verified BEFORE coding
+   with an independent Python oracle (hidden_files/oracle-dutch.py,
+   exact integer arithmetic): MAIN, START, FLOOR, JAGGED, MINFEE,
+   BIG, DUST, ODD, FEEEATS refused.
+   The hub's disclosed service fee is 1% of the SALE price at the
+   chosen step (rounded up, minimum 0.001 ERG, to Kyle's Ergo
+   address), taken out of the seller's proceeds and charged once —
+   never on the start price the item may never fetch. A sale price
+   the minimum fee would eat is refused. The seller address is
+   checksum-verified (tool 2); a sub-safe-minimum seller net is
+   flagged. Planning only, stated plainly: this is a sale plan,
+   NOT an auction contract — no script holds the item, lowers the
+   price on-chain, or proves when a bid arrived. It fetches
+   nothing, signs nothing, sends nothing. */
+var DUTCH_MAX_STEPS = 48;
+var DUTCH_MAX_LABEL_CHARS = 60;
+function dutchPriceAt(startNano, floorNano, steps, k) {
+  var S = BigInt(steps);
+  var direct = (startNano * BigInt(steps - k) + floorNano * BigInt(k)) / S;
+  var qs = startNano / S, rs = startNano % S;
+  var qf = floorNano / S, rf = floorNano % S;
+  var split = qs * BigInt(steps - k) + qf * BigInt(k) + (rs * BigInt(steps - k) + rf * BigInt(k)) / S;
+  if (direct !== split) return null;
+  return direct;
+}
+function buildDutchAuctionPlan(labelRaw, sellerRaw, startStr, floorStr, stepsStr, saleStepStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, label: null, seller: null, startNano: null, startErg: null, floorNano: null, floorErg: null, stepCount: null, saleStep: null, schedule: null, salePriceNano: null, salePriceErg: null, discountNano: null, discountErg: null, discountBps: null, discountPercent: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, sellerNetNano: null, sellerNetErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, sellerBelowSafeMin: null, sellerIsServiceAddress: null, dutchText: null };
+  };
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > DUTCH_MAX_LABEL_CHARS) return fail("The item name is " + label.length + " characters — keep it to " + DUTCH_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed item)";
+  var seller = (sellerRaw == null ? "" : String(sellerRaw)).trim();
+  var scheck = checkErgoAddress(seller);
+  if (!scheck.valid) return fail("The seller's address is refused: " + scheck.reason);
+  var network = scheck.network;
+  var start = ergToNano(startStr);
+  if (start === null || BigInt(start) <= 0n) return fail("The start price must be an ERG amount above zero — a Dutch auction that starts at nothing is not an auction.");
+  var startNano = BigInt(start);
+  var floor = ergToNano(floorStr);
+  if (floor === null || BigInt(floor) <= 0n) return fail("The floor price must be an ERG amount above zero — the floor is the lowest price the seller accepts, and a zero floor would give the item away at the last step.");
+  var floorNano = BigInt(floor);
+  if (floorNano >= startNano) return fail("The floor price must be below the start price — a Dutch auction descends, so a floor at or above the start leaves no price to fall through.");
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var stepsTxt = (stepsStr == null ? "" : String(stepsStr)).trim();
+  if (!/^\d+$/.test(stepsTxt)) return fail("The step count must be a whole number of steps (e.g. 6) — no decimals, no sign.");
+  var stepCount = parseInt(stepsTxt, 10);
+  if (stepCount < 2) return fail("A Dutch auction needs at least 2 steps — with one step there is no descent to plan, just a fixed price (tool 112 builds that invoice).");
+  if (stepCount > DUTCH_MAX_STEPS) return fail("This builder takes at most " + DUTCH_MAX_STEPS + " steps (you asked for " + stepCount + ") — a longer descent belongs in a dedicated auction contract, not a copyable plan.");
+  var saleTxt = (saleStepStr == null ? "" : String(saleStepStr)).trim();
+  if (!/^\d+$/.test(saleTxt)) return fail("The sale step must be a whole step number from 0 to " + stepCount + " — no decimals, no sign.");
+  var saleStep = parseInt(saleTxt, 10);
+  if (saleStep > stepCount) return fail("The sale step (" + saleStep + ") is past the last step (" + stepCount + ") — the price reaches the floor at step " + stepCount + " and falls no further.");
+  /* Full schedule, every price computed two ways (see header). */
+  var schedule = [];
+  for (var k = 0; k <= stepCount; k++) {
+    var p = dutchPriceAt(startNano, floorNano, stepCount, k);
+    if (p === null) return fail("Internal check failed: the two price computations disagree at step " + k + " — refusing to show a plan rather than risk a wrong price.");
+    if (k > 0 && p > schedule[k - 1].price) return fail("Internal check failed: the schedule rises at step " + k + " — a Dutch price must never rise, refusing to show it.");
+    schedule.push({ step: k, price: p });
+  }
+  if (schedule[0].price !== startNano || schedule[stepCount].price !== floorNano) return fail("Internal check failed: the schedule does not start at the start price and end at the floor — refusing to show it.");
+  var salePriceNano = schedule[saleStep].price;
+  /* Service fee: same two-route check as tools 112-131, on the SALE price. */
+  var feeA = (salePriceNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = salePriceNano / 100n + (salePriceNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  if (feeNano >= salePriceNano) return fail("The disclosed service fee (1% of the sale price, rounded up, minimum 0.001 ERG) would eat the whole sale price of " + nanoToErg(salePriceNano.toString()) + " ERG at step " + saleStep + " — the seller would receive nothing. Raise the start or floor so the sale price clears the minimum fee.");
+  var sellerNetNano = salePriceNano - feeNano;
+  if (sellerNetNano + feeNano !== salePriceNano) return fail("Internal check failed: the seller net plus the service fee do not re-add to the sale price — refusing to show it.");
+  var discountNano = startNano - salePriceNano;
+  var discountBps = (discountNano * 10000n) / startNano;
+  var totalNano = salePriceNano + minerNano;
+  var sellerDust = sellerNetNano < SAFE_USER_MIN_BOX_NANO;
+  var schedOut = schedule.map(function (s) {
+    return { step: s.step, priceNano: s.price.toString(), priceErg: nanoToErg(s.price.toString()) };
+  });
+  var lines = ["ERGO DUTCH AUCTION PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Item: " + label,
+    "Seller: " + seller + " on " + network + ". The price starts at " + nanoToErg(startNano.toString()) + " ERG (" + startNano.toString() + " nanoERG) and falls in " + stepCount + " equal steps to a floor of " + nanoToErg(floorNano.toString()) + " ERG (" + floorNano.toString() + " nanoERG). Each step's price is the exact interpolation between the start and the floor, floored to the nanoERG, verified a second way inside the tool (the split computation) before anything is shown:"];
+  schedOut.forEach(function (s) {
+    lines.push("Step " + s.step + ": " + s.priceErg + " ERG (" + s.priceNano + " nanoERG)" + (s.step === saleStep ? " — the sale step in this plan" : "") + ".");
+  });
+  lines.push("Sale at step " + saleStep + ": the buyer pays " + nanoToErg(salePriceNano.toString()) + " ERG (" + salePriceNano.toString() + " nanoERG) — a discount of " + nanoToErg(discountNano.toString()) + " ERG (" + discountNano.toString() + " nanoERG, " + formatPrizePercent(discountBps) + ") off the start price.");
+  lines.push("Service fee (disclosed: 1% of the sale price, rounded up, minimum 0.001 ERG): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS + " — charged once on the price the item actually sells for, never on the start price.");
+  lines.push("Seller net: " + nanoToErg(sellerNetNano.toString()) + " ERG (" + sellerNetNano.toString() + " nanoERG) — the sale price minus the service fee; the two re-add to the sale price exactly.");
+  lines.push("Total the buyer pays: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the sale price plus one " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) miner fee for the single settlement transaction.");
+  lines.push("This is a sale plan, not an auction contract: no script holds the item, lowers the price on-chain, enforces the step timing, or proves when a buyer stepped in — the steps and what a step means (an hour, a day) are your own sale terms, checked against your own records. The one transaction is built and signed in the buyer's own wallet. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network, label: label, seller: seller,
+    startNano: startNano.toString(), startErg: nanoToErg(startNano.toString()),
+    floorNano: floorNano.toString(), floorErg: nanoToErg(floorNano.toString()),
+    stepCount: stepCount, saleStep: saleStep, schedule: schedOut,
+    salePriceNano: salePriceNano.toString(), salePriceErg: nanoToErg(salePriceNano.toString()),
+    discountNano: discountNano.toString(), discountErg: nanoToErg(discountNano.toString()),
+    discountBps: discountBps.toString(), discountPercent: formatPrizePercent(discountBps),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    sellerNetNano: sellerNetNano.toString(), sellerNetErg: nanoToErg(sellerNetNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    sellerBelowSafeMin: sellerDust,
+    sellerIsServiceAddress: seller === SERVICE_FEE_ADDRESS,
+    dutchText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -15030,7 +15156,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -15731,6 +15857,21 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ At least one payout or the seller remainder is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to send on its own. ";
       if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
       msg += "Copyable cascading royalty split plan:\n" + res.royaltyText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a sale contract, and no ERG has moved until the settlement transaction is built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("dutch-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("dutch-result");
+      var res = buildDutchAuctionPlan(document.getElementById("dutch-label").value, document.getElementById("dutch-seller").value, document.getElementById("dutch-start").value, document.getElementById("dutch-floor").value, document.getElementById("dutch-steps").value, document.getElementById("dutch-salestep").value, document.getElementById("dutch-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Dutch auction \"" + res.label + "\" on " + res.network + " — the price falls from " + res.startErg + " ERG to a floor of " + res.floorErg + " ERG in " + res.stepCount + " steps, and at step " + res.saleStep + " it is " + res.salePriceErg + " ERG (" + res.salePriceNano + " nanoERG), a discount of " + res.discountErg + " ERG (" + res.discountPercent + ") off the start. The seller nets " + res.sellerNetErg + " ERG after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the sale price, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), charged once on the price the item actually sells for, plus one " + res.minerFeeErg + " ERG miner fee for the single settlement transaction — total the buyer pays " + res.totalErg + " ERG. ";
+      if (res.sellerBelowSafeMin) msg += "⚠ The seller net is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to send on its own. ";
+      if (res.sellerIsServiceAddress) msg += "Note: the seller is the service-fee address itself. ";
+      msg += "Copyable Dutch auction plan:\n" + res.dutchText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not an auction contract, and no ERG has moved until the settlement transaction is built and signed in a wallet.";
       out.textContent = msg;
     });
 

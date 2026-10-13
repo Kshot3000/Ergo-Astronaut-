@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**131 free Ergo tools, local-first:** the live hub carries 131 tools that run
+**132 free Ergo tools, local-first:** the live hub carries 132 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission and cascading royalty split builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split and Dutch auction builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -640,6 +640,41 @@ headers) — with 129 tools on one page it beats scrolling.
   one transaction is built and signed in the seller's
   own wallet. Plan only: it fetches nothing, signs
   nothing, and sends nothing.
+- **Ergo Dutch auction builder** — selling something
+  where the price should fall until a buyer steps
+  in? Name the item, the start price, the floor
+  price and the step count, then pick the sale
+  step. The price at each step is the exact
+  interpolation between the start and the floor,
+  floored to the nanoERG: step 0 is exactly the
+  start and the last step is exactly the floor —
+  a descending schedule, which separates it from
+  every fixed-amount split before it and from the
+  English auction settlement (placed bids) in the
+  auction builder. The hub's disclosed service
+  fee is 1% of the sale price at the chosen step
+  (rounded up, minimum 0.001 ERG, to my Ergo
+  address), charged once on the price the item
+  actually sells for — never on the start price —
+  and the plan reports the exact discount off
+  the start, in ERG and as a percentage. A floor
+  at or above the start is refused, and so is a
+  sale price the minimum fee would eat. Every
+  price is verified a second way inside the tool:
+  recomputed by the split computation, with the
+  schedule never rising and the seller net plus
+  the fee re-adding to the sale price exactly.
+  The settlement is one transaction with one
+  miner fee, paid by the buyer on top. The
+  seller's address is checksum-verified and a
+  sub-safe-minimum net is flagged. Stated plainly
+  in the plan: this is a sale plan, not an
+  auction contract — nothing holds the item,
+  lowers the price on-chain, or proves when a
+  buyer stepped in. You get a copyable plan
+  block; the one transaction is built and signed
+  in a wallet. Plan only: it fetches nothing,
+  signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

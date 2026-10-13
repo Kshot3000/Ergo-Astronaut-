@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**139 free Ergo tools, local-first:** the live hub carries 139 tools that run
+**140 free Ergo tools, local-first:** the live hub carries 140 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement, invoice factoring, insurance claim settlement, security deposit settlement and matching donation builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement, invoice factoring, insurance claim settlement, security deposit settlement, matching donation and group-buy builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -919,6 +919,49 @@ headers) — with 129 tools on one page it beats scrolling.
   block; the transactions are built and signed
   in wallets. Plan only: it fetches nothing,
   signs nothing, and sends nothing.
+- **Ergo group-buy builder** — a group order
+  with a bulk discount. Name the seller, the
+  item, the unit price, the discount percent
+  and the threshold — the total quantity at
+  which the discount unlocks — then list the
+  buyers (name, address, quantity, one per
+  line). The gross is the total quantity times
+  the unit price; when the threshold is met
+  the discount comes off the whole order, and
+  what remains is allocated back to the buyers
+  pro-rata by their own gross, by largest
+  remainder, so each buyer's share is named
+  exactly and the shares re-add to the amount
+  paid exactly. The hub's disclosed service
+  fee is 1% of the amount actually paid after
+  any discount (rounded up, minimum 0.001 ERG,
+  to my Ergo address), charged once out of
+  what the seller receives — never on the
+  gross, which counts money the buyers do not
+  pay when the discount binds, and never on
+  the discount, which is a saving and not a
+  payment. An amount paid the minimum fee
+  would eat is refused. Every figure is
+  verified a second way inside the tool: the
+  quantity and gross summed forwards and in
+  reverse, the gross recomputed from the
+  per-buyer grosses, every share checked as
+  its pro-rata floor or that floor plus one
+  with the bonuses going to the largest
+  remainders first, the shares re-adding to
+  the amount paid, and the seller net plus
+  the fee re-adding to the amount paid. All
+  addresses are checksum-verified and
+  sub-safe-minimum outputs are flagged.
+  Stated plainly in the plan: this is a
+  group-buy plan, not a group-buy contract or
+  a storefront — nothing collects the orders,
+  checks that the threshold is really met, or
+  moves anything automatically. You get a
+  copyable plan block; the transactions are
+  built and signed in wallets. Plan only: it
+  fetches nothing, signs nothing, and sends
+  nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

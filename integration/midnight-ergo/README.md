@@ -1,6 +1,6 @@
 # Bringing Cardano's Midnight to Ergo — integration design & code
 
-**Status: Phase 0 (design + read-only code) plus Phase 1 step 1 (the on-chain commitment and testnet intent-box plan, offline code only). No bridge is live. No real funds move through anything in this folder.**
+**Status: Phase 0 (design + read-only code) plus Phase 1 steps 1–2 (the on-chain commitment and testnet intent-box plan, and the watcher observation/attestation layer — offline code only). No bridge is live. No real funds move through anything in this folder.**
 
 Built by Kyle Cox (@kshot9000) — independent builder, not affiliated with the Ergo Foundation, the Ergo Platform team, IOG, or the Midnight Foundation.
 
@@ -31,6 +31,7 @@ and the reverse for Midnight→Ergo. The Cardano→Midnight leg and the end-to-e
 - **Phase 0 — observation & planning (this folder, shipped 2026-10-13).** A dependency-free Node module (`dual-chain.js`) that reads both chains read-only — Ergo height/boxes/balances via the explorer API, Midnight blocks and contract actions via the indexer GraphQL API — plus a **bridge intent planner** that turns "send X ERG to this Midnight recipient" into the exact leg-by-leg plan with each leg's real status labelled (live / design / missing). Midnight recipients are validated as real Bech32m (BIP-350 checksum, not a format guess), so a corrupted recipient address is refused before an intent is planned. Offline tests (`test-dual-chain.js`) pin every behaviour against mocked chain responses.
 - **Phase 1 — testnet prototype.** Intent boxes on Ergo testnet + a Compact claim contract on Midnight Preprod, watchers run by us, zero real value. Success = an intent created on Ergo testnet is observed, attested, and claimed on Preprod with the refund path also exercised.
   - **Step 1 (shipped 2026-10-13): the commitment + intent-box plan** — `intent-box.js`. Defines the canonical commitment the guard stores: `Blake2b-256("EMI1" || u32be(len) || recipient || u64be(amount) || nonce32)`, pinned by an independent Python oracle (hashlib) including amounts above float53 and at the u64 max. `buildIntentBoxPlan` turns an intent into the testnet box plan (value, R4 = the commitment as a serialized `Coll[Byte]`, R5 = refund timeout height, R6 = sender) and **refuses mainnet outright**; `inspectIntentBox` is the watcher-side check that an explorer-shaped box really carries the plan's commitment and at least the planned value before anyone attests. The draft ErgoScript guard travels with the plan, labelled `draft-source-not-compiled`: its settlement path reveals the commitment's canonical preimage and hashes exactly those bytes, so the on-chain check cannot drift from the encoding here. 36 offline tests, all passing.
+  - **Step 2 (shipped 2026-10-13): the watcher layer** — `watcher.js`. A watcher attests only when a box carries the plan's commitment and value, is still unspent, has reached an agreed confirmation depth, and is still inside its settlement window; each refusal names the failed check. Attestations are content-addressed records — `Blake2b-256("EMA1" || commitment || boxId || u32be(observedHeight) || u32be(confirmations))`, pinned by an independent Python oracle — so tampering with any observed field is detectable, and `collectAttestations` folds records into a quorum verdict for one box (duplicates count once, mismatched or tampered records are excluded and reported). Honest scope: records are **unsigned** in Phase 1 — the id binds the observation, not the watcher; watcher signatures are Phase 2. 38 offline tests, all passing.
   - **Next:** compile the guard with a testnet toolchain and create the first intent box on Ergo testnet; then the Compact claim contract on Preprod.
 - **Phase 2 — guarded settlement.** Federation design, audits, and only then a mainnet conversation — gated on Kyle's explicit go-ahead and external review. Nothing in Phase 0–1 custodies or moves real funds.
 
@@ -43,6 +44,7 @@ Ergo gets a privacy destination it doesn't natively have: value earned or held o
 ```sh
 node integration/midnight-ergo/test-dual-chain.js   # Phase 0 offline tests, no network
 node integration/midnight-ergo/test-intent-box.js   # Phase 1 step 1 offline tests, no network
+node integration/midnight-ergo/test-watcher.js      # Phase 1 step 2 offline tests, no network
 ```
 
 Live reads (read-only, public endpoints):

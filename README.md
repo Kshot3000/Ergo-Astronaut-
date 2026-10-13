@@ -3581,6 +3581,11 @@ for Ergo users. Each piece gets labelled here when it actually ships.
 Ergo (ERG) donations (click-copy on the hub):
 `9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy`
 
+## License
+
+Dual-licensed under either of [Apache License, Version 2.0](LICENSE-APACHE)
+or [MIT license](LICENSE-MIT) at your option.
+
 Built by Kyle Cox — [@kshot9000 on X](https://x.com/kshot9000) ·
 [github.com/Kshot3000](https://github.com/Kshot3000)
 

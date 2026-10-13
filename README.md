@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**130 free Ergo tools, local-first:** the live hub carries 130 tools that run
+**131 free Ergo tools, local-first:** the live hub carries 131 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate and tiered sales commission builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission and cascading royalty split builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -600,6 +600,45 @@ headers) — with 129 tools on one page it beats scrolling.
   You get a copyable commission block; the one
   transaction is built and signed in the seller's own
   wallet. Plan only: it fetches nothing, signs
+  nothing, and sends nothing.
+- **Ergo cascading royalty split builder** — splitting
+  a sale through a chain of people where each one
+  takes their percent of what is left, not of the
+  original price? List each recipient (name, address,
+  percent of the remainder) in order. The cascade
+  walks the list: each payout is that percent of the
+  running remainder, floored to the nanoERG, and the
+  seller keeps whatever the last step leaves. Order
+  is part of the deal — 5%, then 10%, then 15% of a
+  990 ERG remainder pays 49.5, 94.05 and 126.9675 ERG,
+  while the same rates reversed pay 148.5, 84.15 and
+  37.8675 — which separates a cascade from a flat
+  royalty on the price, from fixed shares of a pool
+  that must total 100%, from capped waterfall tiers
+  and from marginal commission brackets. The hub's
+  disclosed service fee is 1% of the sale price
+  (rounded up, minimum 0.001 ERG, to my Ergo
+  address), taken off the top before the cascade runs
+  and charged once on the whole price, never per
+  recipient; a price the minimum fee would eat is
+  refused, and so is a step whose share floors to
+  zero nanoERG. Every rate must be above zero and
+  below 100% — a 100% step would end the cascade and
+  silently zero everyone after it. Every payout is
+  verified a second way inside the tool: recomputed
+  by the split multiplication, with the payouts plus
+  the fee plus the seller remainder re-adding to the
+  sale price exactly. The settlement is one
+  transaction with one miner fee, paid by the seller
+  on top. All addresses are checksum-verified, all
+  distinct, and all on one network, and
+  sub-safe-minimum payouts are flagged. Stated
+  plainly in the plan: this is a royalty plan, not a
+  sale contract — nothing records the sale, holds
+  the money, enforces the cascade order, or proves
+  the price. You get a copyable royalty block; the
+  one transaction is built and signed in the seller's
+  own wallet. Plan only: it fetches nothing, signs
   nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded

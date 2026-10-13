@@ -3700,6 +3700,160 @@ function buildTieredCommissionPlan(labelRaw, sellerRaw, agentRaw, bracketsRaw, s
   };
 }
 
+/* ---------- Ergo cascading royalty split builder (tool 131) ---------- */
+/* A sale price settles to a CHAIN of royalty recipients in list
+   order, and each recipient's percent applies to the REMAINING
+   amount after everyone before them — never to the original
+   price: payout_i = floor(remaining_i x bps_i / 10000), then
+   remaining_(i+1) = remaining_i - payout_i, and the seller
+   keeps the final remainder. Order matters to who gets what:
+   5% then 10% then 15% of what is left pays the three
+   recipients 49.5 / 94.05 / 126.9675 ERG of a 990 ERG remainder,
+   while 15% then 10% then 5% pays 148.5 / 84.15 / 37.8675 — the
+   seller keeps the same remainder only because those particular
+   percents happen to multiply exactly; with floored nanoERG
+   the order can move the seller's remainder too. That is what
+   separates a cascade from tool 116's flat royalty (percent of
+   the price), tool 128's shares of a pool (percents of the
+   whole, summing to 100%), tool 127's capped waterfall (fixed
+   amounts, not percents) and tool 130's marginal brackets
+   (rates on slices of one sales figure for one agent).
+   Verified a second way inside the tool before anything is
+   shown: every payout is recomputed by the split
+   multiplication (remaining/10000)xbps +
+   ((remaining%10000)xbps)/10000, and the payouts plus the
+   service fee plus the seller remainder must re-add to the
+   sale price exactly. The disclosed service fee is 1% of the
+   SALE PRICE (rounded up, minimum 0.001 ERG — as its own
+   output to SERVICE_FEE_ADDRESS), taken off the top before
+   the cascade runs, charged once, never per recipient; a
+   price the minimum fee would eat is refused, and a recipient
+   whose share floors to zero nanoERG is refused (an output of
+   nothing is not a royalty). Every rate must be above zero and
+   below 100% — a 100% step would end the cascade and silently
+   zero everyone after it. Seller and recipients are checksum-
+   verified (tool 2), all distinct, and on ONE network.
+   Sub-safe-minimum payouts and remainders are flagged.
+   Planning only, stated plainly: this is a royalty plan, NOT
+   a sale contract — nothing records the sale, holds the
+   money, or proves the price. It fetches nothing, signs
+   nothing, sends nothing. */
+var CASROY_MAX_RECIPIENTS = 8;
+var CASROY_MAX_NAME_CHARS = 40;
+var CASROY_MAX_LABEL_CHARS = 60;
+function buildCascadingRoyaltyPlan(labelRaw, sellerRaw, recipientsRaw, priceStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, label: null, seller: null, recipients: null, recipientCount: null, priceNano: null, priceErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, distributableNano: null, distributableErg: null, totalPayoutsNano: null, totalPayoutsErg: null, sellerNetNano: null, sellerNetErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, sellerBelowSafeMin: null, sellerIsServiceAddress: null, includesServiceAddress: null, royaltyText: null };
+  };
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > CASROY_MAX_LABEL_CHARS) return fail("The sale name is " + label.length + " characters — keep it to " + CASROY_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed sale)";
+  var price = ergToNano(priceStr);
+  if (price === null || BigInt(price) <= 0n) return fail("The sale price must be an ERG amount above zero — a royalty on no sale pays nobody.");
+  var priceNano = BigInt(price);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var seller = (sellerRaw == null ? "" : String(sellerRaw)).trim();
+  var scheck = checkErgoAddress(seller);
+  if (!scheck.valid) return fail("The seller's address is refused: " + scheck.reason);
+  var network = scheck.network;
+  var rawLines = (recipientsRaw == null ? "" : String(recipientsRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenNames = {};
+  var seenAddrs = {};
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, percent of the remainder (e.g. \"Alice, 9f…, 5\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addr = parts[1].trim();
+    var rateRaw = parts[2].replace(/\s+/g, " ").trim();
+    if (name === "") return fail("Line " + lineNo + " has no name — every royalty recipient needs a name so the plan can be checked against your records.");
+    if (name.length > CASROY_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + CASROY_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("Line " + lineNo + " reuses the name \"" + name + "\" — two recipients with one name cannot be told apart in the plan; give each recipient a distinct name.");
+    seenNames[nameKey] = true;
+    var acheck = checkErgoAddress(addr);
+    if (!acheck.valid) return fail("Line " + lineNo + "'s address is refused: " + acheck.reason);
+    if (acheck.network !== network) return fail("Line " + lineNo + " (" + name + ") is a " + acheck.network + " address but the seller is " + network + " — one royalty plan lives on one network, so every address must match.");
+    if (addr === seller) return fail("Line " + lineNo + " (" + name + ") is the seller's own address — paying yourself a royalty out of your own remainder needs no cascade step.");
+    if (seenAddrs[addr]) return fail("Line " + lineNo + " (" + name + ") reuses an address already listed — one recipient, one line; combine their steps into a single rate if one person takes two shares.");
+    seenAddrs[addr] = true;
+    var rateBps = parsePrizePercentBps(rateRaw);
+    if (rateBps === null) return fail("Line " + lineNo + "'s rate is refused: write a plain percentage with at most two decimal places (e.g. 5, 12.5, 33.33) — anything else cannot be checked exactly.");
+    if (rateBps <= 0n) return fail("Line " + lineNo + "'s rate is refused: a zero-percent step pays " + name + " nothing — remove the line instead of listing a royalty that never pays.");
+    if (rateBps >= 10000n) return fail("Line " + lineNo + "'s rate is refused: " + formatPrizePercent(rateBps) + " of the remainder would take everything left and end the cascade, leaving nothing for anyone after " + name + " or for the seller — every step must leave a remainder behind it.");
+    entries.push({ line: lineNo, name: name, address: addr, rateBps: rateBps });
+  }
+  if (entries.length < 2) return fail("A cascading royalty needs at least two recipients — a single flat royalty on the price is what tool 116 builds, and this builder does not fee a second copy of it.");
+  if (entries.length > CASROY_MAX_RECIPIENTS) return fail("This builder takes at most " + CASROY_MAX_RECIPIENTS + " recipients (you listed " + entries.length + ") — a royalty chain longer than that belongs in a dedicated contract flow, not a copyable plan.");
+  /* Service fee: same two-route check as tools 112-130, on the SALE PRICE. */
+  var feeA = (priceNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = priceNano / 100n + (priceNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  if (feeNano >= priceNano) return fail("The disclosed service fee (1% of the sale price, rounded up, minimum 0.001 ERG) would eat the whole sale price of " + nanoToErg(priceNano.toString()) + " ERG — nobody would receive anything. Raise the price so it clears the minimum fee.");
+  var distributableNano = priceNano - feeNano;
+  /* Route 1: walk the cascade in list order, each payout
+     floored to the nanoERG off the running remainder. */
+  var recipients = [];
+  var remaining = distributableNano;
+  var totalPayouts = 0n;
+  var anyDust = false;
+  var includesFeeAddr = seller === SERVICE_FEE_ADDRESS;
+  for (var ri = 0; ri < entries.length; ri++) {
+    var e = entries[ri];
+    var before = remaining;
+    var payout = (before * e.rateBps) / 10000n;
+    /* Route 2 (the second-way verification): recompute this
+       payout by the split multiplication. */
+    var payout2 = (before / 10000n) * e.rateBps + ((before % 10000n) * e.rateBps) / 10000n;
+    if (payout !== payout2) return fail("Internal check failed: the two payout computations disagree on recipient " + (ri + 1) + " — refusing to show it.");
+    if (payout <= 0n) return fail(entries[ri].name + "'s step (line " + entries[ri].line + ") floors to zero nanoERG — " + formatPrizePercent(e.rateBps) + " of the " + nanoToErg(before.toString()) + " ERG remaining at that point is less than one nanoERG. Raise the price or the rate, or drop the step.");
+    remaining = before - payout;
+    totalPayouts += payout;
+    var dust = payout < SAFE_USER_MIN_BOX_NANO;
+    if (dust) anyDust = true;
+    if (e.address === SERVICE_FEE_ADDRESS) includesFeeAddr = true;
+    recipients.push({ index: ri + 1, name: e.name, address: e.address, rateBps: e.rateBps.toString(), ratePercent: formatPrizePercent(e.rateBps), beforeNano: before.toString(), beforeErg: nanoToErg(before.toString()), payoutNano: payout.toString(), payoutErg: nanoToErg(payout.toString()), belowSafeMin: dust });
+  }
+  var sellerNetNano = remaining;
+  if (totalPayouts + feeNano + sellerNetNano !== priceNano) return fail("Internal check failed: the payouts plus the service fee plus the seller remainder do not re-add to the sale price — refusing to show it.");
+  if (distributableNano - totalPayouts !== sellerNetNano) return fail("Internal check failed: the cascade does not end on the seller remainder — refusing to show it.");
+  var sellerDust = sellerNetNano < SAFE_USER_MIN_BOX_NANO;
+  if (sellerDust) anyDust = true;
+  var totalNano = priceNano + minerNano;
+  var lines = ["ERGO CASCADING ROYALTY SPLIT PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Sale: " + label,
+    "Price: " + nanoToErg(priceNano.toString()) + " ERG (" + priceNano.toString() + " nanoERG) on " + network + ", settled in one transaction. The seller is " + seller + ". Each royalty below is a percent of the amount REMAINING after the recipients before it — never of the original price — so the order of the list is part of the deal."];
+  lines.push("Service fee (disclosed: 1% of the sale price, rounded up, minimum 0.001 ERG): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS + " — taken off the top before the cascade runs, charged once on the whole price, never per recipient. The cascade runs on the remaining " + nanoToErg(distributableNano.toString()) + " ERG (" + distributableNano.toString() + " nanoERG).");
+  recipients.forEach(function (r) {
+    lines.push("Recipient " + r.index + " — " + r.name + " (" + r.address + "): " + r.ratePercent + " of the " + r.beforeErg + " ERG (" + r.beforeNano + " nanoERG) remaining at this step = " + r.payoutErg + " ERG (" + r.payoutNano + " nanoERG), floored to the nanoERG so the fraction stays in the remainder for the next step.");
+  });
+  lines.push("Seller remainder: " + nanoToErg(sellerNetNano.toString()) + " ERG (" + sellerNetNano.toString() + " nanoERG) — whatever the cascade leaves. Verified a second way inside the tool (every payout recomputed by the split multiplication, and the payouts plus the fee plus the seller remainder re-adding to the sale price) before anything is shown.");
+  lines.push("Total cost of settling: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the sale price plus one " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) miner fee for the single settlement transaction, paid by the seller on top.");
+  lines.push("This is a royalty plan, not a sale contract: no script records the sale, holds the money, enforces the cascade order, or proves the price — check the price, the rates and the order against your own records before settling. The one transaction is built and signed in the seller's own wallet. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network, label: label, seller: seller,
+    recipients: recipients, recipientCount: recipients.length,
+    priceNano: priceNano.toString(), priceErg: nanoToErg(priceNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    distributableNano: distributableNano.toString(), distributableErg: nanoToErg(distributableNano.toString()),
+    totalPayoutsNano: totalPayouts.toString(), totalPayoutsErg: nanoToErg(totalPayouts.toString()),
+    sellerNetNano: sellerNetNano.toString(), sellerNetErg: nanoToErg(sellerNetNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust, sellerBelowSafeMin: sellerDust,
+    sellerIsServiceAddress: seller === SERVICE_FEE_ADDRESS, includesServiceAddress: includesFeeAddr,
+    royaltyText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -14876,7 +15030,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -15562,6 +15716,21 @@ if (typeof document !== "undefined") {
       if (res.agentIsServiceAddress) msg += "Note: the agent in this plan is the service-fee address itself. ";
       if (res.sellerIsServiceAddress) msg += "Note: the seller in this plan is the service-fee address itself. ";
       msg += "Copyable tiered commission plan:\n" + res.commissionText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a sales contract, and no ERG has moved until the settlement transaction is built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("casroy-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("casroy-result");
+      var res = buildCascadingRoyaltyPlan(document.getElementById("casroy-label").value, document.getElementById("casroy-seller").value, document.getElementById("casroy-recipients").value, document.getElementById("casroy-price").value, document.getElementById("casroy-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Cascading royalty split \"" + res.label + "\" on " + res.network + " — a " + res.priceErg + " ERG (" + res.priceNano + " nanoERG) sale cascades through " + res.recipientCount + " recipients, each taking their percent of what remains: " + res.recipients.map(function (r) { return r.name + " receives " + r.payoutErg + " ERG (" + r.ratePercent + " of " + r.beforeErg + " ERG remaining)"; }).join("; ") + ". The seller keeps the final remainder of " + res.sellerNetErg + " ERG. A disclosed service fee of " + res.serviceFeeErg + " ERG goes to " + res.serviceFeeAddress + " (1% of the sale price, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), taken off the top before the cascade runs, plus one " + res.minerFeeErg + " ERG miner fee for the single settlement transaction — total cost of settling " + res.totalErg + " ERG. ";
+      if (res.anyBelowSafeMin) msg += "⚠ At least one payout or the seller remainder is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to send on its own. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable cascading royalty split plan:\n" + res.royaltyText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a sale contract, and no ERG has moved until the settlement transaction is built and signed in a wallet.";
       out.textContent = msg;
     });
 

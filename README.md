@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**135 free Ergo tools, local-first:** the live hub carries 135 tools that run
+**136 free Ergo tools, local-first:** the live hub carries 136 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation and reverse auction settlement builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement and invoice factoring builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -757,6 +757,47 @@ headers) — with 129 tools on one page it beats scrolling.
   built and signed in a wallet. Plan only: it
   fetches nothing, signs nothing, and sends
   nothing.
+- **Ergo invoice factoring builder** — waiting
+  30, 60, 90 days for an invoice to be paid?
+  Name the seller who holds the receivable, the
+  factor buying it, and the face value. The
+  factor advances an advance percent of the face
+  now, keeps a discount charge (a percent of the
+  face) as its earnings, and holds the rest back
+  as the reserve — the face minus the gross
+  advance — released to the seller when the
+  payer pays the face in full. On full
+  collection the factor's gain is exactly the
+  discount charge. The hub's disclosed service
+  fee is 1% of the advance (the gross advance
+  minus the discount charge — the money actually
+  advanced; rounded up, minimum 0.001 ERG, to
+  my Ergo address), charged once out of the
+  advance — never on the face, which includes a
+  reserve the factor never advances, and never
+  again on the reserve release. A discount that
+  would swallow the gross advance, and an
+  advance the minimum fee would eat, are
+  refused. Every figure is verified a second
+  way inside the tool: the gross advance and
+  the discount recomputed by split
+  multiplication, the advance net plus the fee
+  plus the discount re-adding to the gross
+  advance, the gross advance plus the reserve
+  re-adding to the face, and the seller's total
+  plus the discount plus the fee re-adding to
+  the face exactly. All addresses are
+  checksum-verified and sub-safe-minimum
+  outputs are flagged. Stated plainly in the
+  plan: this is a factoring plan, not a
+  factoring contract — nothing holds the
+  receivable, collects from the payer, or pays
+  anyone automatically, and if the payer pays
+  late, short, or never, the full-collection
+  figures do not hold. You get a copyable plan
+  block; the transactions are built and signed
+  in a wallet. Plan only: it fetches nothing,
+  signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

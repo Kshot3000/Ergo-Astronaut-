@@ -4668,6 +4668,147 @@ function buildReverseAuctionPlan(buyerRaw, labelRaw, budgetStr, entriesRaw, mine
     revauctionText: lines.join("\n")
   };
 }
+/* ---------- Invoice factoring builder ---------- */
+/* Tool 136: an Ergo invoice factoring plan. A seller holds an
+   invoice (a receivable) of FACE value owed by a payer. A factor
+   buys the receivable: it advances ADV% of the face now, keeps a
+   discount charge of DISC% of the face as its earnings, and holds
+   the rest back as the RESERVE (face - gross advance) until the
+   payer pays the face in full, when the reserve is released to
+   the seller. Verified BEFORE coding with an independent Python
+   oracle (hidden_files/oracle-factoring.py, exact integer
+   arithmetic): MAIN, FULL, MINFEE, JAGGED, BIG, DUST, FEEEATS /
+   DISCEATS / ZEROADV refused.
+   The hub's disclosed service fee is 1% of the ADVANCE BASIS
+   (gross advance minus the discount charge — the money actually
+   advanced), rounded up, minimum 0.001 ERG, to Kyle's Ergo
+   address, charged once and taken out of the advance — never on
+   the face, which includes the reserve the factor never advances,
+   and never again on the reserve release. The gross advance and
+   the discount each floor to the nanoERG and are each computed
+   two ways (direct, and by split multiplication); the seller's
+   advance net plus the fee plus the discount must re-add to the
+   gross advance, the gross advance plus the reserve to the face,
+   and the seller's total plus the discount plus the fee to the
+   face exactly. On full collection the factor's gain is exactly
+   the discount charge. Both addresses are checksum-verified
+   (tool 2) and must sit on one network; seller and factor must
+   differ. Sub-safe-minimum outputs (the advance net, a non-zero
+   reserve) are flagged. Planning only, stated plainly: this is
+   a factoring plan, NOT a factoring contract — no script holds
+   the receivable, collects from the payer, or pays anyone
+   automatically; if the payer pays late, short, or never, this
+   plan's full-collection figures do not hold, and who bears that
+   risk (recourse or not) is a term the two sides agree off-chain.
+   It fetches nothing, signs nothing, sends nothing. */
+var FACTORING_MAX_LABEL_CHARS = 60;
+function buildFactoringPlan(sellerRaw, factorRaw, labelRaw, faceStr, advancePctStr, discountPctStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, sellerAddress: null, sellerType: null, factorAddress: null, factorType: null, label: null, faceNano: null, faceErg: null, advanceBps: null, advancePercent: null, discountBps: null, discountPercent: null, grossAdvanceNano: null, grossAdvanceErg: null, discountNano: null, discountErg: null, advanceBasisNano: null, advanceBasisErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, advanceNetNano: null, advanceNetErg: null, reserveNano: null, reserveErg: null, sellerTotalNano: null, sellerTotalErg: null, factorGainNano: null, factorGainErg: null, totalCostNano: null, totalCostErg: null, totalCostPercent: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, factoringText: null };
+  };
+  var sellerCheck = checkErgoAddress(sellerRaw);
+  if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
+  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var factorCheck = checkErgoAddress(factorRaw);
+  if (!factorCheck.valid) return fail("The factor address is refused: " + factorCheck.reason);
+  var factorAddress = typeof factorRaw === "string" ? factorRaw.trim() : "";
+  if (factorCheck.network !== sellerCheck.network) return fail("The factor is a " + factorCheck.network + " address but the seller is " + sellerCheck.network + " — one factoring plan lives on one network, so every address must match.");
+  if (factorAddress === sellerAddress) return fail("The seller and the factor are the same address — factoring is a sale of the receivable to someone else, so the two sides must differ.");
+  var network = sellerCheck.network;
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > FACTORING_MAX_LABEL_CHARS) return fail("The invoice name is " + label.length + " characters — keep it to " + FACTORING_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed invoice)";
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var face = ergToNano(faceStr);
+  if (face === null || BigInt(face) <= 0n) return fail("The invoice face value must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var faceNano = BigInt(face);
+  var advanceBps = parsePrizePercentBps(advancePctStr);
+  if (advanceBps === null) return fail("The advance percent is refused: give a percent with at most 2 decimal places (e.g. \"80\" or \"87.50\").");
+  if (advanceBps <= 0n || advanceBps > 10000n) return fail("The advance percent must be above 0% and at most 100% — the factor cannot advance more than the face.");
+  var discountBps = parsePrizePercentBps(discountPctStr);
+  if (discountBps === null) return fail("The discount percent is refused: give a percent with at most 2 decimal places (e.g. \"5\" or \"2.75\"); use 0 for no discount charge.");
+  if (discountBps < 0n || discountBps >= 10000n) return fail("The discount percent must be at least 0% and below 100% — a discount charge of the whole face leaves nothing to advance.");
+  /* Percent-of-face amounts, floored to the nanoERG, each computed
+     two ways: directly, and by split multiplication
+     (floor(F*b/10000) == (F/10000)*b + floor((F%10000)*b/10000)). */
+  var pctFloor = function (bps) {
+    var a = faceNano * bps / 10000n;
+    var b = (faceNano / 10000n) * bps + (faceNano % 10000n) * bps / 10000n;
+    return a === b ? a : null;
+  };
+  var grossAdvanceNano = pctFloor(advanceBps);
+  if (grossAdvanceNano === null) return fail("Internal check failed: the two gross-advance computations disagree — refusing to show it.");
+  if (grossAdvanceNano <= 0n) return fail("The advance percent of " + formatPrizePercent(advanceBps) + " on a face of " + nanoToErg(faceNano.toString()) + " ERG floors to a gross advance of zero nanoERG — a larger face or a higher advance percent is needed.");
+  var discountNano = pctFloor(discountBps);
+  if (discountNano === null) return fail("Internal check failed: the two discount computations disagree — refusing to show it.");
+  if (discountNano >= grossAdvanceNano) return fail("The discount charge of " + nanoToErg(discountNano.toString()) + " ERG (" + formatPrizePercent(discountBps) + " of the face) is not below the gross advance of " + nanoToErg(grossAdvanceNano.toString()) + " ERG — the factor would advance nothing. Lower the discount percent or raise the advance percent.");
+  var advanceBasisNano = grossAdvanceNano - discountNano;
+  /* Service fee: same two-route check as tools 112-135, on the BASIS. */
+  var feeA = (advanceBasisNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = advanceBasisNano / 100n + (advanceBasisNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  if (feeNano >= advanceBasisNano) return fail("The disclosed service fee (1% of the advance, rounded up, minimum 0.001 ERG) would eat the whole advance of " + nanoToErg(advanceBasisNano.toString()) + " ERG — the seller would receive nothing up front. The advance is too small to factor; a larger face is needed.");
+  var advanceNetNano = advanceBasisNano - feeNano;
+  if (advanceNetNano + feeNano + discountNano !== grossAdvanceNano) return fail("Internal check failed: the advance net plus the service fee plus the discount do not re-add to the gross advance — refusing to show it.");
+  var reserveNano = faceNano - grossAdvanceNano;
+  if (grossAdvanceNano + reserveNano !== faceNano) return fail("Internal check failed: the gross advance plus the reserve do not re-add to the face — refusing to show it.");
+  var sellerTotalNano = advanceNetNano + reserveNano;
+  var totalCostNano = discountNano + feeNano;
+  if (sellerTotalNano + totalCostNano !== faceNano) return fail("Internal check failed: the seller's total plus the discount plus the service fee do not re-add to the face — refusing to show it.");
+  var factorGainNano = grossAdvanceNano - advanceBasisNano;
+  if (factorGainNano !== discountNano) return fail("Internal check failed: the factor's gain on full collection is not the discount charge — refusing to show it.");
+  var costBps = totalCostNano * 10000n / faceNano;
+  var totalCostPercent = (costBps / 100n).toString() + "." + (costBps % 100n).toString().padStart(2, "0") + "%";
+  var minerTotalNano = minerNano * 2n;
+  var totalNano = faceNano + minerTotalNano;
+  var anyDust = advanceNetNano < SAFE_USER_MIN_BOX_NANO || (reserveNano > 0n && reserveNano < SAFE_USER_MIN_BOX_NANO);
+  var includesFeeAddr = sellerAddress === SERVICE_FEE_ADDRESS || factorAddress === SERVICE_FEE_ADDRESS;
+  var lines = ["ERGO INVOICE FACTORING PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Invoice: " + label,
+    "Seller (holds the receivable, receives the advance and the reserve): " + sellerAddress,
+    "Factor (buys the receivable, pays the advance, collects the face): " + factorAddress,
+    "Face value: " + nanoToErg(faceNano.toString()) + " ERG (" + faceNano.toString() + " nanoERG) — the amount the payer owes on the invoice.",
+    "Advance transaction (now, built and signed by the factor): the factor advances " + formatPrizePercent(advanceBps) + " of the face — a gross advance of " + nanoToErg(grossAdvanceNano.toString()) + " ERG (" + grossAdvanceNano.toString() + " nanoERG) — less the discount charge of " + formatPrizePercent(discountBps) + " of the face, " + nanoToErg(discountNano.toString()) + " ERG (" + discountNano.toString() + " nanoERG), which the factor keeps as its earnings and never pays out, and less the service fee below:",
+    "Seller receives up front: " + nanoToErg(advanceNetNano.toString()) + " ERG (" + advanceNetNano.toString() + " nanoERG).",
+    "Service fee (disclosed: 1% of the advance — the gross advance minus the discount charge, the money actually advanced — rounded up, minimum 0.001 ERG, charged once here and never on the face or on the reserve release): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS,
+    "Reserve held back: " + nanoToErg(reserveNano.toString()) + " ERG (" + reserveNano.toString() + " nanoERG) — the face minus the gross advance" + (reserveNano === 0n ? " (a 100% advance leaves no reserve, so the collection release below pays the seller nothing further)" : "") + ".",
+    "Collection transaction (when the payer pays the face in full): the payer pays " + nanoToErg(faceNano.toString()) + " ERG to the factor; the factor releases the reserve of " + nanoToErg(reserveNano.toString()) + " ERG (" + reserveNano.toString() + " nanoERG) to the seller and keeps " + nanoToErg(grossAdvanceNano.toString()) + " ERG — against the " + nanoToErg(advanceBasisNano.toString()) + " ERG it paid out in the advance transaction, a gain of exactly the discount charge, " + nanoToErg(factorGainNano.toString()) + " ERG (" + factorGainNano.toString() + " nanoERG).",
+    "Seller's total: " + nanoToErg(sellerTotalNano.toString()) + " ERG (" + sellerTotalNano.toString() + " nanoERG) — the advance net plus the reserve. The seller's total cost of factoring is " + nanoToErg(totalCostNano.toString()) + " ERG (" + totalCostNano.toString() + " nanoERG), " + totalCostPercent + " of the face: the discount charge plus the service fee, and nothing else in this plan.",
+    "Miner fees (two transactions — the advance and the collection — at " + nanoToErg(minerNano.toString()) + " ERG each): " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG) in total, paid by the factor on top of the face.",
+    "The advance net plus the service fee plus the discount re-add to the gross advance, the gross advance plus the reserve re-add to the face, and the seller's total plus the discount plus the fee re-add to the face — verified a second way inside the tool (split multiplication) before anything is shown.",
+    "Total moving through the plan: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the face plus both miner fees.",
+    "This is a factoring plan, not a factoring contract: no script holds the receivable, collects from the payer, or pays anyone automatically — the factor builds and signs the advance transaction and the seller the collection release in their own wallets, the payer's payment itself happens by the invoice's own terms, and if the payer pays late, short, or never, these full-collection figures do not hold; who bears that risk (recourse or not) is a term the two sides agree off-chain, and the invoice details are the ones typed in above, so check them against the invoice itself first. Plan only: nothing has been signed or sent, and no ERG has moved."];
+  return {
+    valid: true, reason: null, network: network,
+    sellerAddress: sellerAddress, sellerType: sellerCheck.type,
+    factorAddress: factorAddress, factorType: factorCheck.type,
+    label: label,
+    faceNano: faceNano.toString(), faceErg: nanoToErg(faceNano.toString()),
+    advanceBps: advanceBps.toString(), advancePercent: formatPrizePercent(advanceBps),
+    discountBps: discountBps.toString(), discountPercent: formatPrizePercent(discountBps),
+    grossAdvanceNano: grossAdvanceNano.toString(), grossAdvanceErg: nanoToErg(grossAdvanceNano.toString()),
+    discountNano: discountNano.toString(), discountErg: nanoToErg(discountNano.toString()),
+    advanceBasisNano: advanceBasisNano.toString(), advanceBasisErg: nanoToErg(advanceBasisNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    advanceNetNano: advanceNetNano.toString(), advanceNetErg: nanoToErg(advanceNetNano.toString()),
+    reserveNano: reserveNano.toString(), reserveErg: nanoToErg(reserveNano.toString()),
+    sellerTotalNano: sellerTotalNano.toString(), sellerTotalErg: nanoToErg(sellerTotalNano.toString()),
+    factorGainNano: factorGainNano.toString(), factorGainErg: nanoToErg(factorGainNano.toString()),
+    totalCostNano: totalCostNano.toString(), totalCostErg: nanoToErg(totalCostNano.toString()),
+    totalCostPercent: totalCostPercent,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust,
+    includesServiceAddress: includesFeeAddr,
+    factoringText: lines.join("\n")
+  };
+}
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -15844,7 +15985,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -16627,6 +16768,21 @@ if (typeof document !== "undefined") {
       if (res.buyerIsBidder) msg += "Note: the buyer also appears as a provider, so that address is on both sides of the plan. ";
       if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
       msg += "Copyable reverse auction settlement plan:\n" + res.revauctionText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a procurement contract, and no ERG has moved until the settlement or refund transaction is built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("factoring-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("factoring-result");
+      var res = buildFactoringPlan(document.getElementById("factoring-seller").value, document.getElementById("factoring-factor").value, document.getElementById("factoring-label").value, document.getElementById("factoring-face").value, document.getElementById("factoring-advance").value, document.getElementById("factoring-discount").value, document.getElementById("factoring-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Invoice \"" + res.label + "\" on " + res.network + " — face " + res.faceErg + " ERG (" + res.faceNano + " nanoERG). The factor advances " + res.advancePercent + " of the face (gross " + res.grossAdvanceErg + " ERG), keeps a discount charge of " + res.discountPercent + " of the face (" + res.discountErg + " ERG) as its earnings, and the seller receives " + res.advanceNetErg + " ERG (" + res.advanceNetNano + " nanoERG) up front after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the advance — the gross advance minus the discount — rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + ", never of the face or the reserve). On full collection the factor releases the reserve of " + res.reserveErg + " ERG to the seller, whose total is " + res.sellerTotalErg + " ERG at a total factoring cost of " + res.totalCostErg + " ERG (" + res.totalCostPercent + " of the face), and pays both transactions' miner fees (" + res.minerTotalErg + " ERG in total) on top. ";
+      if (res.anyBelowSafeMin) msg += "⚠ At least one output (the advance net, or a non-zero reserve) is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable factoring plan:\n" + res.factoringText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a factoring contract, and no ERG has moved until the advance transaction is built and signed in a wallet.";
       out.textContent = msg;
     });
 

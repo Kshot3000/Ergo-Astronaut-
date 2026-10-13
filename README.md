@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**126 free Ergo tools, local-first:** the live hub carries 126 tools that run
+**127 free Ergo tools, local-first:** the live hub carries 127 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement and rotating savings circle builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle and revenue waterfall builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 126 tools on one page it beats scrolling.
+headers) — with 127 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -470,6 +470,38 @@ headers) — with 126 tools on one page it beats scrolling.
   copyable circle block; each round's transaction is
   built and signed in a wallet. Plan only: it fetches
   nothing, signs nothing, and sends nothing.
+- **Ergo revenue waterfall builder** — splitting incoming
+  revenue the waterfall way (costs first, then a capped
+  reserve, then the rest to the owner)? List each tier
+  (name, address, cap in ERG) in flow order, with the
+  last tier's cap written as the word rest: that final
+  tier is uncapped and takes whatever remains, so no
+  revenue is left undistributed. Each capped tier fills
+  up to its cap and no further, so a tier's payout
+  depends on every cap above it. The hub's disclosed
+  service fee is 1% of the revenue (rounded up, minimum
+  0.001 ERG, to my Ergo address), taken off the top
+  before the waterfall runs — the tiers share exactly
+  the revenue minus the fee, charged once on the whole
+  revenue, never per tier; a revenue the minimum fee
+  would eat is refused. Verified a second way inside
+  the tool by recomputing every tier from the cumulative
+  caps: the prefix-cap recomputation must agree tier for
+  tier with the sequential fill, and the payouts plus
+  the fee must re-add to the revenue exactly. Tiers the
+  money never reaches are shown receiving exactly 0 ERG,
+  never silently dropped. The whole distribution is one
+  transaction with one miner fee, paid by the revenue
+  holder on top. All addresses are checksum-verified,
+  distinct and on one network, and sub-safe-minimum
+  payouts are flagged. Stated plainly in the plan: this
+  is a distribution plan, not a revenue contract —
+  nothing collects the revenue, enforces the tier order
+  or the caps, or proves the revenue was what it should
+  be. You get a copyable waterfall block; the one
+  transaction is built and signed in the distributor's
+  own wallet. Plan only: it fetches nothing, signs
+  nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

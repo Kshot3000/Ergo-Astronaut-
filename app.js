@@ -3043,6 +3043,167 @@ function buildRoscaPlan(labelRaw, membersRaw, contributionStr, minerFeeStr) {
   };
 }
 
+/* ---------- Ergo revenue waterfall builder (capped tiers, in order) ---------- */
+/* Tools 112-126 split a pot by shares, stake or turns. None of
+   them runs a WATERFALL: revenue fills a stack of tiers in
+   order — each capped tier takes up to its cap and no more, and
+   the final, uncapped tier takes whatever is left. That is how
+   real revenue sharing is usually written (costs first, then a
+   capped reserve, then the remainder to the owner), and the
+   maths is not a share split: a tier's payout depends on every
+   cap above it. The hub's standard 1% service fee (rounded up,
+   minimum 0.001 ERG, two-route checked like tools 112-126) is
+   taken off the top of the revenue, before the waterfall runs,
+   so the tiers share exactly the revenue minus the fee; a
+   revenue the minimum fee would eat is refused outright.
+   Verified a second way inside the tool by recomputing every
+   tier from the cumulative caps (a tier's payout is the
+   distributable amount minus the caps before it, clamped to
+   its own cap) — the two methods must agree tier for tier, and
+   the payouts plus the fee must re-add to the revenue exactly.
+   Tiers the money never reaches receive exactly zero and are
+   shown as zero, never silently dropped. Exactly one uncapped
+   ("rest") tier is allowed and it must be last, so no revenue
+   can be left undistributed. All addresses are checksum-
+   verified (tool 2), distinct, and on ONE network. Sub-safe-
+   minimum payouts are flagged. Planning only, stated plainly:
+   this is a distribution plan, NOT a revenue contract — nothing
+   collects the revenue, enforces the tier order or the caps,
+   or proves the revenue was what it should be. It fetches
+   nothing, signs nothing, sends nothing. */
+var WATERFALL_MAX_TIERS = 10;
+var WATERFALL_MAX_NAME_CHARS = 40;
+var WATERFALL_MAX_LABEL_CHARS = 60;
+function buildWaterfallPlan(labelRaw, tiersRaw, revenueStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, label: null, tiers: null, tierCount: null, revenueNano: null, revenueErg: null, distributableNano: null, distributableErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, totalPayoutsNano: null, totalPayoutsErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, anyZeroPayout: null, includesServiceAddress: null, waterfallText: null };
+  };
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > WATERFALL_MAX_LABEL_CHARS) return fail("The waterfall name is " + label.length + " characters — keep it to " + WATERFALL_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed revenue waterfall)";
+  var rev = ergToNano(revenueStr);
+  if (rev === null || BigInt(rev) <= 0n) return fail("The revenue must be an ERG amount above zero — a waterfall over no revenue distributes nothing.");
+  var revenueNano = BigInt(rev);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var rawLines = (tiersRaw == null ? "" : String(tiersRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenAddr = {};
+  var seenNames = {};
+  var network = null;
+  var restCount = 0;
+  var restIndex = -1;
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, cap (e.g. \"Ops, an address, 10\"), with the last tier's cap written as the word rest.");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addr = parts[1].trim();
+    var capRaw = parts[2].replace(/\s+/g, " ").trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the tier a name before the first comma, so the plan says who each tier pays.");
+    if (name.length > WATERFALL_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + WATERFALL_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each tier once; a recipient who takes two tiers gets two differently named lines only if they really are two tiers.");
+    seenNames[nameKey] = lineNo;
+    var check = checkErgoAddress(addr);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (seenAddr[addr]) return fail("The address on line " + lineNo + " already appears on line " + seenAddr[addr] + " — list each address once, so the one distribution transaction never pays the same address twice by accident.");
+    seenAddr[addr] = lineNo;
+    if (network === null) network = check.network;
+    else if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the earlier tiers are " + network + " — one waterfall lives on one network, so all addresses must match.");
+    var isRest = capRaw.toLowerCase() === "rest";
+    var capNano = null;
+    if (isRest) { restCount++; restIndex = entries.length; }
+    else {
+      var capParsed = ergToNano(capRaw);
+      if (capParsed === null || BigInt(capParsed) <= 0n) return fail("Line " + lineNo + "'s cap is refused: a cap must be an ERG amount above zero, or the word rest on the last tier — a zero cap tier can never be paid and only clutters the plan.");
+      capNano = BigInt(capParsed);
+    }
+    entries.push({ name: name, address: addr, network: check.network, type: check.type, line: lineNo, isRest: isRest, capNano: capNano });
+  }
+  if (entries.length < 2) return fail("A revenue waterfall needs at least two tiers — one capped tier and a final rest tier; paying one person everything is a plain payment, which needs no builder and no fee.");
+  if (entries.length > WATERFALL_MAX_TIERS) return fail("This builder takes at most " + WATERFALL_MAX_TIERS + " tiers (you listed " + entries.length + ") — a waterfall with more tiers than that belongs in a dedicated contract flow, not a copyable plan.");
+  if (restCount === 0) return fail("The last tier must be uncapped — write its cap as the word rest — so whatever revenue is left after the capped tiers always has somewhere to go and none is left undistributed.");
+  if (restCount > 1) return fail("Only one tier may be uncapped (rest) — the first rest tier would take everything left and every tier below it would be dead text.");
+  if (restIndex !== entries.length - 1) return fail("The uncapped (rest) tier must be the LAST tier — it takes whatever is left, so any tier listed below it could never receive anything.");
+  /* Service fee: same two-route check as tools 112-126, on the REVENUE. */
+  var feeA = (revenueNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = revenueNano / 100n + (revenueNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a waterfall rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  if (feeNano >= revenueNano) return fail("The disclosed service fee (1% of the revenue, rounded up, minimum 0.001 ERG) would eat the whole revenue of " + nanoToErg(revenueNano.toString()) + " ERG — no tier would receive anything. Raise the revenue so it clears the minimum fee.");
+  var distributableNano = revenueNano - feeNano;
+  /* Route 1: sequential fill — walk down the tiers with what remains. */
+  var remaining = distributableNano;
+  var payouts = entries.map(function (e) {
+    if (e.isRest) { var p = remaining; remaining = 0n; return p; }
+    var pay = e.capNano < remaining ? e.capNano : remaining;
+    remaining -= pay;
+    return pay;
+  });
+  if (remaining !== 0n) return fail("Internal check failed: the sequential fill leaves revenue undistributed — refusing to show it.");
+  /* Route 2 (the second-way verification): prefix-sum clamp —
+     a capped tier's payout is the distributable amount minus
+     every cap above it, clamped between zero and its own cap;
+     the rest tier takes the distributable minus all caps. */
+  var prefix = 0n;
+  for (var ti = 0; ti < entries.length; ti++) {
+    var e2 = entries[ti];
+    var expect;
+    if (e2.isRest) expect = distributableNano > prefix ? distributableNano - prefix : 0n;
+    else {
+      var avail = distributableNano > prefix ? distributableNano - prefix : 0n;
+      expect = avail < e2.capNano ? avail : e2.capNano;
+      prefix += e2.capNano;
+    }
+    if (expect !== payouts[ti]) return fail("Internal check failed: the prefix-cap recomputation disagrees with the sequential fill on tier " + (ti + 1) + " — refusing to show it.");
+  }
+  var totalPayoutsNano = 0n;
+  for (var si = 0; si < payouts.length; si++) totalPayoutsNano += payouts[si];
+  if (totalPayoutsNano !== distributableNano || totalPayoutsNano + feeNano !== revenueNano) return fail("Internal check failed: the payouts plus the service fee do not re-add to the revenue — refusing to show it.");
+  var totalNano = revenueNano + minerNano;
+  var anyDust = false;
+  var anyZero = false;
+  var includesFeeAddr = false;
+  var tiers = entries.map(function (e, i) {
+    var p = payouts[i];
+    var dust = p > 0n && p < SAFE_USER_MIN_BOX_NANO;
+    if (dust) anyDust = true;
+    if (p === 0n) anyZero = true;
+    if (e.address === SERVICE_FEE_ADDRESS) includesFeeAddr = true;
+    return { name: e.name, address: e.address, network: e.network, type: e.type, isRest: e.isRest, capNano: e.capNano === null ? null : e.capNano.toString(), capErg: e.capNano === null ? null : nanoToErg(e.capNano.toString()), filledToCap: e.isRest ? null : p === e.capNano, payoutNano: p.toString(), payoutErg: nanoToErg(p.toString()), belowSafeMin: dust };
+  });
+  var lines = ["ERGO REVENUE WATERFALL PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Waterfall: " + label,
+    "Revenue: " + nanoToErg(revenueNano.toString()) + " ERG (" + revenueNano.toString() + " nanoERG) on " + network + ", distributed in one transaction down " + tiers.length + " tiers, in list order — each capped tier fills up to its cap before anything flows to the tier below it:"];
+  tiers.forEach(function (t, i) {
+    var capText = t.isRest ? "no cap — takes whatever is left" : "cap " + t.capErg + " ERG (" + t.capNano + " nanoERG)";
+    if (t.payoutNano === "0") lines.push("Tier " + (i + 1) + " — " + t.name + " (" + capText + "): receives 0 ERG — the tiers above filled first, so nothing reaches this tier in this distribution.");
+    else lines.push("Tier " + (i + 1) + " — " + t.name + " (" + capText + "): receives " + t.payoutErg + " ERG (" + t.payoutNano + " nanoERG) to " + t.address + ".");
+  });
+  lines.push("Service fee (disclosed: 1% of the revenue, rounded up, minimum 0.001 ERG): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS + " — taken off the top before the waterfall runs, so the tiers share the " + nanoToErg(distributableNano.toString()) + " ERG (" + distributableNano.toString() + " nanoERG) that is left, and the fee is charged once on the whole revenue, never per tier.");
+  lines.push("The payouts plus the service fee re-add to the revenue exactly — verified a second way inside the tool by recomputing every tier from the cumulative caps before anything is shown.");
+  lines.push("Total cost of distributing: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the revenue plus one " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) miner fee for the single distribution transaction, paid by whoever holds the revenue on top.");
+  lines.push("This is a distribution plan, not a revenue contract: no script collects the revenue, enforces the tier order or the caps, or proves the revenue was what it should be — check the caps and the order against your own agreement before distributing. The one transaction is built and signed in the distributor's own wallet. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network, label: label,
+    tiers: tiers, tierCount: tiers.length,
+    revenueNano: revenueNano.toString(), revenueErg: nanoToErg(revenueNano.toString()),
+    distributableNano: distributableNano.toString(), distributableErg: nanoToErg(distributableNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    totalPayoutsNano: totalPayoutsNano.toString(), totalPayoutsErg: nanoToErg(totalPayoutsNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust, anyZeroPayout: anyZero, includesServiceAddress: includesFeeAddr,
+    waterfallText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -14219,7 +14380,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -14840,6 +15001,23 @@ if (typeof document !== "undefined") {
       msg += "Copyable rotating savings circle plan:\n" + res.roscaText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a savings contract, nothing enforces the later rounds' contributions, and no ERG has moved until each round's transaction is built and signed in a wallet.";
       out.textContent = msg;
     });
+
+    document.getElementById("waterfall-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("waterfall-result");
+      var res = buildWaterfallPlan(document.getElementById("waterfall-label").value, document.getElementById("waterfall-tiers").value, document.getElementById("waterfall-revenue").value, document.getElementById("waterfall-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Revenue waterfall \"" + res.label + "\" on " + res.network + " — " + res.revenueErg + " ERG (" + res.revenueNano + " nanoERG) of revenue fills " + res.tierCount + " tiers in order: " + res.tiers.map(function (t) { return "tier " + t.name + " receives " + t.payoutErg + " ERG"; }).join("; ") + ". A disclosed service fee of " + res.serviceFeeErg + " ERG goes to " + res.serviceFeeAddress + " (1% of the revenue, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), taken off the top before the waterfall runs, plus one " + res.minerFeeErg + " ERG miner fee for the single distribution transaction — total cost of distributing " + res.totalErg + " ERG. ";
+      if (res.anyZeroPayout) msg += "Note: at least one tier receives 0 ERG in this distribution — the tiers above it filled first. ";
+      if (res.anyBelowSafeMin) msg += "⚠ At least one payout is below the recommended 0.001 ERG safe minimum per box (tool 5) — a payout that small may be impractical to send as its own output. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable revenue waterfall plan:\n" + res.waterfallText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a revenue contract, and no ERG has moved until the distribution transaction is built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
 
     document.getElementById("tree-calc").addEventListener("submit", function (ev) {
       ev.preventDefault();

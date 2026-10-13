@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**132 free Ergo tools, local-first:** the live hub carries 132 tools that run
+**133 free Ergo tools, local-first:** the live hub carries 133 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split and Dutch auction builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction and second-price (Vickrey) auction settlement builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -675,6 +675,43 @@ headers) — with 129 tools on one page it beats scrolling.
   block; the one transaction is built and signed
   in a wallet. Plan only: it fetches nothing,
   signs nothing, and sends nothing.
+- **Ergo second-price (Vickrey) auction settlement
+  builder** — selling by sealed-bid auction where
+  the winner should pay what the item was worth
+  to the runner-up? Name the seller, the item
+  and the reserve, and list the bids. The highest
+  bid wins — first-listed on a tie — but pays the
+  second-highest bid, or the reserve when the
+  reserve sits higher, and the rest of the bid
+  comes back as change inside the same settlement
+  transaction. A single bidder pays the reserve,
+  or their own bid when there is no reserve; the
+  plan says which rule set the price. That pricing
+  rule is what separates it from the first-price
+  auction settlement (the winner pays their own
+  bid) and from the Dutch builder's falling
+  schedule. The hub's disclosed service fee is
+  1% of the price the winner pays (rounded up,
+  minimum 0.001 ERG, to my Ergo address), charged
+  once and only on a sale — never on the winning
+  bid the winner does not pay. A price the
+  minimum fee would eat is refused; a missed
+  reserve charges no fee and refunds every bid.
+  Every figure is verified a second way inside
+  the tool: the price recomputed from a sorted
+  copy of the bids, the winner's change plus the
+  seller net plus the fee re-adding to the
+  winning bid exactly, and the loser refunds
+  plus their miner fees re-adding to the losing
+  bids. All addresses are checksum-verified and
+  sub-safe-minimum outputs are flagged. Stated
+  plainly in the plan: this is a settlement plan,
+  not an auction contract — nothing holds the
+  bids, keeps them sealed, or enforces a closing
+  time. You get a copyable plan block; the
+  transactions are built and signed in a wallet.
+  Plan only: it fetches nothing, signs nothing,
+  and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

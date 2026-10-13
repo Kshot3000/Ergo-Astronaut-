@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**125 free Ergo tools, local-first:** the live hub carries 125 tools that run
+**126 free Ergo tools, local-first:** the live hub carries 126 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement and shared expense settlement builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement and rotating savings circle builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 125 tools on one page it beats scrolling.
+headers) — with 126 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -439,6 +439,36 @@ headers) — with 125 tools on one page it beats scrolling.
   against the group's own receipts. You get a copyable
   settlement block; each transfer is built and signed by
   its sender in their own wallet. Plan only: it fetches
+  nothing, signs nothing, and sends nothing.
+- **Ergo rotating savings circle builder** — a group saving
+  together the rotating way (a savings circle / rosca)?
+  List each member (name, address) and set the one
+  contribution every member pays in every round: there
+  are exactly as many rounds as members, every pot is the
+  member count times the contribution, and the pot
+  rotates in list order so each member receives exactly
+  one pot. The hub's disclosed service fee is 1% of each
+  round's pot (rounded up, minimum 0.001 ERG, to my Ergo
+  address), taken out of that round's pot — because every
+  pot is the same size, every member pays exactly the
+  same fee exactly once, on their own payout round, and
+  no fee is ever taken from a contribution; a pot the
+  minimum fee would eat is refused. Verified a second
+  way by replaying every round in a ledger inside the
+  tool: every member must end at exactly minus one
+  service fee, and the payouts plus the fees must re-add
+  to the total contributions exactly. Each round is its
+  own transaction with its own miner fee, paid by that
+  round's recipient on top. All addresses are
+  checksum-verified, distinct and on one network, and
+  sub-safe-minimum payouts are flagged. Stated plainly
+  in the plan: this is a circle plan, not a savings
+  contract — nothing collects the contributions, holds
+  a pot, or forces a member who received an early pot
+  to keep contributing in the later rounds, so it runs
+  on the group's own trust and records. You get a
+  copyable circle block; each round's transaction is
+  built and signed in a wallet. Plan only: it fetches
   nothing, signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded

@@ -2888,6 +2888,160 @@ function buildGroupExpensePlan(labelRaw, entriesRaw, minerFeeStr) {
   };
 }
 
+/* ---------- Ergo rotating savings circle builder (equal contributions, rotating pot) ---------- */
+/* Tools 112-125 split a pot, settle a deposit, or net a group's
+   balances. None of them runs a ROTATING SAVINGS CIRCLE (a ROSCA):
+   a group where every member contributes the SAME amount in
+   every round and the whole pot rotates — round 1's pot to the
+   first member in list order, round 2's to the second, and so on
+   for exactly as many rounds as there are members. The maths is
+   deliberately symmetric: the pot is the member count times the
+   contribution, every pot is identical, so the hub's standard 1%
+   service fee (rounded up, minimum 0.001 ERG, two-route checked
+   like tools 112-125) is charged once per payout, taken out of
+   that round's pot — every member pays exactly the same fee,
+   exactly once, on their own payout round, and nobody is charged
+   on their contributions. A pot the minimum fee would eat is
+   refused outright. Verified a second way inside the tool with a
+   full ledger simulation: replaying every round (each member
+   pays the contribution, the recipient gains the payout, the
+   fee sink gains the fee) must leave every member at exactly
+   minus one fee, the payouts plus the fees must re-add to the
+   total contributions, and the total contributions must agree
+   computed by rounds and by members. All addresses are
+   checksum-verified (tool 2), distinct, and on ONE network.
+   Sub-safe-minimum payouts are flagged. Planning only, stated
+   plainly: this is a circle plan, NOT a savings contract —
+   nothing collects the contributions, holds a pot, or forces a
+   member who received an early pot to keep contributing in the
+   later rounds; a rotating circle runs on the group's own trust
+   and records. It fetches nothing, signs nothing, sends
+   nothing. */
+var ROSCA_MAX_MEMBERS = 12;
+var ROSCA_MAX_NAME_CHARS = 40;
+var ROSCA_MAX_LABEL_CHARS = 60;
+function buildRoscaPlan(labelRaw, membersRaw, contributionStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, label: null, members: null, memberCount: null, rounds: null, roundCount: null, contributionNano: null, contributionErg: null, potNano: null, potErg: null, payoutNano: null, payoutErg: null, feePerPayoutNano: null, feePerPayoutErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, totalContributionsNano: null, totalContributionsErg: null, totalPayoutsNano: null, totalPayoutsErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, roscaText: null };
+  };
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > ROSCA_MAX_LABEL_CHARS) return fail("The circle name is " + label.length + " characters — keep it to " + ROSCA_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed savings circle)";
+  var contrib = ergToNano(contributionStr);
+  if (contrib === null || BigInt(contrib) <= 0n) return fail("The contribution must be an ERG amount above zero — every member contributes it in every round, so a circle with a zero contribution has no pot to rotate.");
+  var contributionNano = BigInt(contrib);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var rawLines = (membersRaw == null ? "" : String(membersRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenAddr = {};
+  var seenNames = {};
+  var network = null;
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — name, address (e.g. \"Ada, an address\"). The contribution is the same for everyone and goes in its own field.");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addr = parts[1].trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the member a name before the comma, so the plan says whose payout round each round is.");
+    if (name.length > ROSCA_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + ROSCA_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each member once; every member gets exactly one payout round.");
+    seenNames[nameKey] = lineNo;
+    var check = checkErgoAddress(addr);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (seenAddr[addr]) return fail("The address on line " + lineNo + " already appears on line " + seenAddr[addr] + " — list each address once, so each member is paid out exactly once.");
+    seenAddr[addr] = lineNo;
+    if (network === null) network = check.network;
+    else if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the earlier members are " + network + " — one circle lives on one network, so all addresses must match.");
+    entries.push({ name: name, address: addr, network: check.network, type: check.type, line: lineNo });
+  }
+  if (entries.length < 2) return fail("A rotating savings circle needs at least two members — one person paying themselves in turn is just saving, which tool 120 plans without a fee.");
+  if (entries.length > ROSCA_MAX_MEMBERS) return fail("This builder takes at most " + ROSCA_MAX_MEMBERS + " members (you listed " + entries.length + ") — a circle with more members than that belongs in a dedicated group flow, not a copyable plan.");
+  var n = BigInt(entries.length);
+  var potNano = n * contributionNano;
+  /* Second route for the pot: add the contribution once per member. */
+  var potCheck = 0n;
+  for (var pi = 0; pi < entries.length; pi++) potCheck += contributionNano;
+  if (potCheck !== potNano) return fail("Internal check failed: the pot does not recompute by adding the contributions — refusing to show it.");
+  /* Service fee per payout: same two-route check as tools 112-125, on the POT. */
+  var feeA = (potNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = potNano / 100n + (potNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a circle rather than risk a wrong fee.");
+  var feePerPayoutNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  if (feePerPayoutNano >= potNano) return fail("The disclosed service fee (1% of the pot, rounded up, minimum 0.001 ERG) would eat the whole pot of " + nanoToErg(potNano.toString()) + " ERG — the round's member would receive nothing. Raise the contribution or the member count so the pot clears the minimum fee.");
+  var payoutNano = potNano - feePerPayoutNano;
+  if (payoutNano + feePerPayoutNano !== potNano) return fail("Internal check failed: the payout plus the service fee do not re-add to the pot — refusing to show it.");
+  var roundCount = entries.length;
+  var totalContributionsNano = potNano * n;
+  /* Second route for the total: each member contributes in every
+     round, so sum the per-member totals. */
+  var perMemberTotal = contributionNano * n;
+  var totalCheck = 0n;
+  for (var mi = 0; mi < entries.length; mi++) totalCheck += perMemberTotal;
+  if (totalCheck !== totalContributionsNano) return fail("Internal check failed: the total contributions do not recompute by members — refusing to show it.");
+  var totalFeesNano = feePerPayoutNano * n;
+  var totalPayoutsNano = payoutNano * n;
+  if (totalPayoutsNano + totalFeesNano !== totalContributionsNano) return fail("Internal check failed: the payouts plus the service fees do not re-add to the total contributions — refusing to show it.");
+  /* Ledger simulation, the second-way verification: replay every
+     round — every member pays the contribution, that round's
+     member gains the payout, the fee sink gains the fee — and at
+     the end every member must stand at exactly minus one fee. */
+  var nets = entries.map(function () { return 0n; });
+  var sink = 0n;
+  for (var ri = 0; ri < roundCount; ri++) {
+    for (var ci = 0; ci < entries.length; ci++) nets[ci] -= contributionNano;
+    nets[ri] += payoutNano;
+    sink += feePerPayoutNano;
+  }
+  var netSum = 0n;
+  for (var ni = 0; ni < nets.length; ni++) {
+    if (nets[ni] !== -feePerPayoutNano) return fail("Internal check failed: the ledger simulation leaves a member at other than minus one service fee — the circle is not symmetric. Refusing to show it.");
+    netSum += nets[ni];
+  }
+  if (netSum + sink !== 0n || sink !== totalFeesNano) return fail("Internal check failed: the ledger simulation's fees do not re-add to the total service fees — refusing to show it.");
+  var totalNano = totalContributionsNano + n * minerNano;
+  var payoutDust = payoutNano < SAFE_USER_MIN_BOX_NANO;
+  var includesFeeAddr = false;
+  var members = entries.map(function (e, i) {
+    if (e.address === SERVICE_FEE_ADDRESS) includesFeeAddr = true;
+    return { name: e.name, address: e.address, network: e.network, type: e.type, payoutRound: i + 1, contributedNano: perMemberTotal.toString(), contributedErg: nanoToErg(perMemberTotal.toString()), payoutNano: payoutNano.toString(), payoutErg: nanoToErg(payoutNano.toString()), netNano: (-feePerPayoutNano).toString() };
+  });
+  var rounds = entries.map(function (e, i) {
+    return { round: i + 1, recipientName: e.name, recipientAddress: e.address, potNano: potNano.toString(), potErg: nanoToErg(potNano.toString()), serviceFeeNano: feePerPayoutNano.toString(), serviceFeeErg: nanoToErg(feePerPayoutNano.toString()), payoutNano: payoutNano.toString(), payoutErg: nanoToErg(payoutNano.toString()), belowSafeMin: payoutDust };
+  });
+  var lines = ["ERGO ROTATING SAVINGS CIRCLE PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Circle: " + label,
+    "Members: " + members.length + " on " + network + ". Every member contributes " + nanoToErg(contributionNano.toString()) + " ERG (" + contributionNano.toString() + " nanoERG) in every round, and there are " + roundCount + " rounds — one payout per member, in list order. Each round's pot is " + nanoToErg(potNano.toString()) + " ERG (" + potNano.toString() + " nanoERG):"];
+  rounds.forEach(function (r) {
+    lines.push("Round " + r.round + " — " + r.recipientName + " receives the pot: " + r.payoutErg + " ERG (" + r.payoutNano + " nanoERG) to " + r.recipientAddress + ", in one transaction — the pot of " + r.potErg + " ERG minus the service fee below, with the " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) miner fee paid by " + r.recipientName + " on top.");
+  });
+  lines.push("Service fee (disclosed: 1% of each round's pot, rounded up, minimum 0.001 ERG): " + nanoToErg(feePerPayoutNano.toString()) + " ERG (" + feePerPayoutNano.toString() + " nanoERG) per payout to " + SERVICE_FEE_ADDRESS + " — " + nanoToErg(totalFeesNano.toString()) + " ERG (" + totalFeesNano.toString() + " nanoERG) across the whole circle. Every pot is the same size, so every member pays exactly the same fee exactly once, on their own payout round, and no fee is ever taken from a contribution.");
+  lines.push("Over the whole circle each member contributes " + nanoToErg(perMemberTotal.toString()) + " ERG (" + perMemberTotal.toString() + " nanoERG) in total and receives one payout of " + nanoToErg(payoutNano.toString()) + " ERG, so each member's net is exactly minus their one service fee — verified a second way inside the tool by replaying every round in a ledger before anything is shown. Total contributions: " + nanoToErg(totalContributionsNano.toString()) + " ERG (" + totalContributionsNano.toString() + " nanoERG), which the payouts plus the service fees re-add to exactly.");
+  lines.push("Total cost of the circle: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the total contributions plus one miner fee per round.");
+  lines.push("This is a circle plan, not a savings contract: no script collects the contributions, holds a pot, or forces a member who received an early pot to keep contributing in the later rounds — the rotation runs on the group's own trust and records, so run a circle only with people the whole group trusts, and check the contribution and the member order against the group's own agreement before starting. Each round's transaction is built and signed in the members' own wallets. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network, label: label,
+    members: members, memberCount: members.length,
+    rounds: rounds, roundCount: roundCount,
+    contributionNano: contributionNano.toString(), contributionErg: nanoToErg(contributionNano.toString()),
+    potNano: potNano.toString(), potErg: nanoToErg(potNano.toString()),
+    payoutNano: payoutNano.toString(), payoutErg: nanoToErg(payoutNano.toString()),
+    feePerPayoutNano: feePerPayoutNano.toString(), feePerPayoutErg: nanoToErg(feePerPayoutNano.toString()),
+    serviceFeeNano: totalFeesNano.toString(), serviceFeeErg: nanoToErg(totalFeesNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    totalContributionsNano: totalContributionsNano.toString(), totalContributionsErg: nanoToErg(totalContributionsNano.toString()),
+    totalPayoutsNano: totalPayoutsNano.toString(), totalPayoutsErg: nanoToErg(totalPayoutsNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: payoutDust, includesServiceAddress: includesFeeAddr,
+    roscaText: lines.join("\n")
+  };
+}
 
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
@@ -14065,7 +14219,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -14668,6 +14822,22 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ At least one transfer is below the recommended 0.001 ERG safe minimum per box (tool 5) — a transfer that small may be impractical to send as its own output. ";
       if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
       msg += "Copyable shared expense settlement plan:\n" + res.groupText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a group wallet, and no ERG has moved until each transfer is built and signed in its sender's wallet.";
+      out.textContent = msg;
+    });
+
+
+    document.getElementById("rosca-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("rosca-result");
+      var res = buildRoscaPlan(document.getElementById("rosca-label").value, document.getElementById("rosca-members").value, document.getElementById("rosca-contribution").value, document.getElementById("rosca-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Rotating savings circle \"" + res.label + "\" on " + res.network + " — " + res.memberCount + " members each contribute " + res.contributionErg + " ERG in every one of the " + res.roundCount + " rounds, and each round's pot of " + res.potErg + " ERG rotates in list order: " + res.rounds.map(function (r) { return "round " + r.round + " to " + r.recipientName; }).join(", ") + ". Each recipient receives " + res.payoutErg + " ERG (" + res.payoutNano + " nanoERG) after a disclosed service fee of " + res.feePerPayoutErg + " ERG per payout to " + res.serviceFeeAddress + " (1% of the pot, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + ") — the same fee for every member, charged exactly once each — plus one " + res.minerFeeErg + " ERG miner fee per round, for a total circle cost of " + res.totalErg + " ERG against total contributions of " + res.totalContributionsErg + " ERG. ";
+      if (res.anyBelowSafeMin) msg += "⚠ The payout is below the recommended 0.001 ERG safe minimum per box (tool 5) — a pot that small may be impractical to pay out as its own output. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable rotating savings circle plan:\n" + res.roscaText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a savings contract, nothing enforces the later rounds' contributions, and no ERG has moved until each round's transaction is built and signed in a wallet.";
       out.textContent = msg;
     });
 

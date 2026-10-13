@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**127 free Ergo tools, local-first:** the live hub carries 127 tools that run
+**128 free Ergo tools, local-first:** the live hub carries 128 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle and revenue waterfall builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall and prize pool split builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 127 tools on one page it beats scrolling.
+headers) — with 128 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -502,6 +502,35 @@ headers) — with 127 tools on one page it beats scrolling.
   transaction is built and signed in the distributor's
   own wallet. Plan only: it fetches nothing, signs
   nothing, and sends nothing.
+- **Ergo prize pool split builder** — splitting a prize
+  pool (a contest, tournament or hackathon table) by
+  fixed percentage shares? List each place (name,
+  address, percent). The shares are parsed exactly into
+  basis points (two decimal places at most) and must add
+  up to exactly 100% — a table totalling 99% or 101% is
+  refused, with the actual total shown. The hub's
+  disclosed service fee is 1% of the pool (rounded up,
+  minimum 0.001 ERG, to my Ergo address), taken off the
+  top before the split runs — the places share exactly
+  the pool minus the fee, charged once on the whole
+  pool, never per place; a pool the minimum fee would
+  eat is refused. Payouts are applied by largest-
+  remainder rounding in exact nanoERG and verified a
+  second way inside the tool: every payout is its floor
+  or its floor plus one nanoERG, no unbumped place holds
+  a larger remainder than a bumped one (equal remainders
+  go to the earlier place), and the payouts plus the fee
+  re-add to the pool exactly. The whole distribution is
+  one transaction with one miner fee, paid by the pool
+  holder on top. All addresses are checksum-verified,
+  distinct and on one network, and sub-safe-minimum
+  payouts are flagged. Stated plainly in the plan: this
+  is a split plan, not a prize contract — nothing holds
+  the pool, judges the contest, or proves the placings.
+  You get a copyable prize block; the one transaction
+  is built and signed in the distributor's own wallet.
+  Plan only: it fetches nothing, signs nothing, and
+  sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

@@ -3204,6 +3204,167 @@ function buildWaterfallPlan(labelRaw, tiersRaw, revenueStr, minerFeeStr) {
   };
 }
 
+/* ---------- Ergo prize pool split builder (fixed percentage shares) ---------- */
+/* Tools 112-127 split by amounts owed, stake, turns or caps.
+   None of them splits a PRIZE POOL by fixed percentages that
+   must add up to exactly 100%: a contest, tournament or
+   hackathon table (50% / 30% / 20% and the like), where a set
+   of shares that totals 99% or 101% is not a rounding detail
+   but a broken prize table, so this builder refuses it and
+   says what the shares actually add to. Percentages are
+   parsed exactly into basis points (two decimal places at
+   most — 33.33% is 3333 bps) and must sum to exactly 10000.
+   The hub's standard 1% service fee (rounded up, minimum
+   0.001 ERG, two-route checked like tools 112-127) is taken
+   off the top of the pool, so the places share exactly the
+   pool minus the fee; a pool the minimum fee would eat is
+   refused outright. Payouts use largest-remainder rounding
+   over the distributable amount, verified a second way inside
+   the tool before anything is shown: every payout must be
+   its exact floor or its floor plus one nanoERG, the payouts
+   must re-add to the distributable amount (and, with the fee,
+   to the pool) exactly, and no place that was not bumped may
+   hold a larger remainder than a place that was — equal
+   remainders go to the earlier place. All addresses are
+   checksum-verified (tool 2), distinct, and on ONE network.
+   Sub-safe-minimum payouts are flagged. Planning only, stated
+   plainly: this is a split plan, NOT a prize contract —
+   nothing holds the pool, judges the contest, or proves the
+   placings. It fetches nothing, signs nothing, sends nothing. */
+var PRIZESPLIT_MAX_WINNERS = 12;
+var PRIZESPLIT_MAX_NAME_CHARS = 40;
+var PRIZESPLIT_MAX_LABEL_CHARS = 60;
+function parsePrizePercentBps(raw) {
+  var s = (raw == null ? "" : String(raw)).trim();
+  var m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(s);
+  if (!m) return null;
+  var bps = BigInt(m[1]) * 100n + (m[2] ? BigInt(m[2].padEnd(2, "0")) : 0n);
+  return bps;
+}
+function formatPrizePercent(bps) {
+  var whole = bps / 100n;
+  var frac = bps % 100n;
+  if (frac === 0n) return whole.toString() + "%";
+  return whole.toString() + "." + frac.toString().padStart(2, "0").replace(/0$/, "") + "%";
+}
+function buildPrizeSplitPlan(labelRaw, winnersRaw, poolStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, label: null, winners: null, winnerCount: null, shareTotalBps: null, poolNano: null, poolErg: null, distributableNano: null, distributableErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, totalPayoutsNano: null, totalPayoutsErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, prizeText: null };
+  };
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > PRIZESPLIT_MAX_LABEL_CHARS) return fail("The prize name is " + label.length + " characters — keep it to " + PRIZESPLIT_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed prize pool)";
+  var pool = ergToNano(poolStr);
+  if (pool === null || BigInt(pool) <= 0n) return fail("The prize pool must be an ERG amount above zero — a split over no pool pays nobody.");
+  var poolNano = BigInt(pool);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var rawLines = (winnersRaw == null ? "" : String(winnersRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenAddr = {};
+  var seenNames = {};
+  var network = null;
+  var shareTotalBps = 0n;
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, percent (e.g. \"First place, an address, 50\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addr = parts[1].trim();
+    var pctRaw = parts[2].replace(/\s+/g, " ").trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the place a name before the first comma, so the plan says who each share pays.");
+    if (name.length > PRIZESPLIT_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + PRIZESPLIT_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each place once; a winner who takes two places gets two differently named lines only if they really are two places.");
+    seenNames[nameKey] = lineNo;
+    var check = checkErgoAddress(addr);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (seenAddr[addr]) return fail("The address on line " + lineNo + " already appears on line " + seenAddr[addr] + " — list each address once, so the one distribution transaction never pays the same address twice by accident.");
+    seenAddr[addr] = lineNo;
+    if (network === null) network = check.network;
+    else if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the earlier places are " + network + " — one prize split lives on one network, so all addresses must match.");
+    var bps = parsePrizePercentBps(pctRaw);
+    if (bps === null) return fail("Line " + lineNo + "'s percent is refused: write a plain percentage above zero with at most two decimal places (e.g. 50, 33.33, 12.5) — anything else cannot be checked exactly.");
+    if (bps <= 0n) return fail("Line " + lineNo + "'s percent is refused: a share of zero pays nothing and only clutters the prize table — drop the line or give it a real share.");
+    if (bps > 10000n) return fail("Line " + lineNo + "'s percent is refused: one place cannot take more than 100% of the pool.");
+    shareTotalBps += bps;
+    entries.push({ name: name, address: addr, network: check.network, type: check.type, line: lineNo, shareBps: bps });
+  }
+  if (entries.length < 2) return fail("A prize split needs at least two places — paying one winner the whole pool is a plain payment, which needs no builder and no fee.");
+  if (entries.length > PRIZESPLIT_MAX_WINNERS) return fail("This builder takes at most " + PRIZESPLIT_MAX_WINNERS + " places (you listed " + entries.length + ") — a prize table with more places than that belongs in a dedicated contract flow, not a copyable plan.");
+  if (shareTotalBps !== 10000n) return fail("The shares add up to " + formatPrizePercent(shareTotalBps) + ", not 100% — a prize table must account for the whole pool exactly, so fix the percentages until they total 100%.");
+  /* Service fee: same two-route check as tools 112-127, on the POOL. */
+  var feeA = (poolNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = poolNano / 100n + (poolNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a split rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  if (feeNano >= poolNano) return fail("The disclosed service fee (1% of the pool, rounded up, minimum 0.001 ERG) would eat the whole pool of " + nanoToErg(poolNano.toString()) + " ERG — no place would receive anything. Raise the pool so it clears the minimum fee.");
+  var distributableNano = poolNano - feeNano;
+  /* Route 1: largest-remainder allocation over the distributable. */
+  var floors = entries.map(function (e) { return (distributableNano * e.shareBps) / 10000n; });
+  var rems = entries.map(function (e, i) { return distributableNano * e.shareBps - floors[i] * 10000n; });
+  var floorSum = floors.reduce(function (s, x) { return s + x; }, 0n);
+  var leftover = distributableNano - floorSum;
+  var order = entries.map(function (_, i) { return i; }).sort(function (a, b) {
+    if (rems[a] !== rems[b]) return rems[a] > rems[b] ? -1 : 1;
+    return a - b;
+  });
+  var payouts = floors.slice();
+  var bumped = entries.map(function () { return false; });
+  for (var bi = 0; bi < Number(leftover); bi++) { payouts[order[bi]] += 1n; bumped[order[bi]] = true; }
+  /* Route 2 (the second-way verification): every payout is its
+     floor or its floor plus one, the payouts re-add to the
+     distributable exactly, and no unbumped place holds a
+     larger remainder than a bumped one (ties go earlier). */
+  var totalPayoutsNano = 0n;
+  for (var vi = 0; vi < entries.length; vi++) {
+    var delta = payouts[vi] - floors[vi];
+    if (delta !== 0n && delta !== 1n) return fail("Internal check failed: a payout is neither its floor nor its floor plus one nanoERG — refusing to show it.");
+    totalPayoutsNano += payouts[vi];
+    for (var vj = 0; vj < entries.length; vj++) {
+      if (bumped[vi] && !bumped[vj] && (rems[vj] > rems[vi] || (rems[vj] === rems[vi] && vj < vi))) return fail("Internal check failed: the largest-remainder ordering does not hold — refusing to show it.");
+    }
+  }
+  if (totalPayoutsNano !== distributableNano || totalPayoutsNano + feeNano !== poolNano) return fail("Internal check failed: the payouts plus the service fee do not re-add to the pool — refusing to show it.");
+  var totalNano = poolNano + minerNano;
+  var anyDust = false;
+  var includesFeeAddr = false;
+  var winners = entries.map(function (e, i) {
+    var p = payouts[i];
+    var dust = p > 0n && p < SAFE_USER_MIN_BOX_NANO;
+    if (dust) anyDust = true;
+    if (e.address === SERVICE_FEE_ADDRESS) includesFeeAddr = true;
+    return { name: e.name, address: e.address, network: e.network, type: e.type, shareBps: e.shareBps.toString(), sharePercent: formatPrizePercent(e.shareBps), payoutNano: p.toString(), payoutErg: nanoToErg(p.toString()), bumped: bumped[i], belowSafeMin: dust };
+  });
+  var lines = ["ERGO PRIZE POOL SPLIT PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Prize: " + label,
+    "Pool: " + nanoToErg(poolNano.toString()) + " ERG (" + poolNano.toString() + " nanoERG) on " + network + ", split in one transaction across " + winners.length + " places by fixed percentage shares that add up to exactly 100%:"];
+  winners.forEach(function (w, i) {
+    lines.push("Place " + (i + 1) + " — " + w.name + " (" + w.sharePercent + "): receives " + w.payoutErg + " ERG (" + w.payoutNano + " nanoERG) to " + w.address + ".");
+  });
+  lines.push("Service fee (disclosed: 1% of the pool, rounded up, minimum 0.001 ERG): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS + " — taken off the top before the split runs, so the places share the " + nanoToErg(distributableNano.toString()) + " ERG (" + distributableNano.toString() + " nanoERG) that is left, and the fee is charged once on the whole pool, never per place.");
+  lines.push("Shares are applied by largest-remainder rounding in exact nanoERG, so the payouts plus the service fee re-add to the pool exactly — verified a second way inside the tool (every payout is its floor or its floor plus one, and no unbumped place holds a larger remainder than a bumped one) before anything is shown.");
+  lines.push("Total cost of distributing: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the pool plus one " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) miner fee for the single distribution transaction, paid by whoever holds the pool on top.");
+  lines.push("This is a split plan, not a prize contract: no script holds the pool, judges the contest, or proves the placings — check the places and the shares against your own results before distributing. The one transaction is built and signed in the distributor's own wallet. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network, label: label,
+    winners: winners, winnerCount: winners.length, shareTotalBps: shareTotalBps.toString(),
+    poolNano: poolNano.toString(), poolErg: nanoToErg(poolNano.toString()),
+    distributableNano: distributableNano.toString(), distributableErg: nanoToErg(distributableNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    totalPayoutsNano: totalPayoutsNano.toString(), totalPayoutsErg: nanoToErg(totalPayoutsNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust, includesServiceAddress: includesFeeAddr,
+    prizeText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -14380,7 +14541,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -15015,6 +15176,21 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ At least one payout is below the recommended 0.001 ERG safe minimum per box (tool 5) — a payout that small may be impractical to send as its own output. ";
       if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
       msg += "Copyable revenue waterfall plan:\n" + res.waterfallText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a revenue contract, and no ERG has moved until the distribution transaction is built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("prizesplit-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("prizesplit-result");
+      var res = buildPrizeSplitPlan(document.getElementById("prizesplit-label").value, document.getElementById("prizesplit-winners").value, document.getElementById("prizesplit-pool").value, document.getElementById("prizesplit-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Prize pool split \"" + res.label + "\" on " + res.network + " — a " + res.poolErg + " ERG (" + res.poolNano + " nanoERG) pool splits across " + res.winnerCount + " places by shares totalling exactly 100%: " + res.winners.map(function (w) { return w.name + " (" + w.sharePercent + ") receives " + w.payoutErg + " ERG"; }).join("; ") + ". A disclosed service fee of " + res.serviceFeeErg + " ERG goes to " + res.serviceFeeAddress + " (1% of the pool, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), taken off the top before the split runs, plus one " + res.minerFeeErg + " ERG miner fee for the single distribution transaction — total cost of distributing " + res.totalErg + " ERG. ";
+      if (res.anyBelowSafeMin) msg += "⚠ At least one payout is below the recommended 0.001 ERG safe minimum per box (tool 5) — a payout that small may be impractical to send as its own output. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable prize pool split plan:\n" + res.prizeText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a prize contract, and no ERG has moved until the distribution transaction is built and signed in a wallet.";
       out.textContent = msg;
     });
 

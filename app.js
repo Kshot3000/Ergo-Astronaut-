@@ -5577,6 +5577,229 @@ function buildGroupBuyPlan(sellerRaw, labelRaw, unitPriceStr, discountPercentStr
   };
 }
 
+/* ---------- group-gift builder (tool 141) ---------- */
+/* A group gift: friends chip different amounts toward one gift
+   at a fixed price, bought from one seller. Tools 112-140 split,
+   stage, settle, auction, top up or pool one pot; a group gift
+   ALLOCATES A FIXED PRICE BACK over uneven contributions: when
+   the contributions reach the price, the price is allocated to
+   the contributors pro-rata by their own contribution, by
+   largest remainder, so each contributor's true cost is named
+   exactly and the costs re-add to the price exactly, and what
+   each one chipped beyond their cost — the excess over the
+   price — comes back to them as a refund in its own transaction
+   minus its miner fee, so the refunds re-add to the excess
+   exactly. When the contributions fall short, no gift is bought
+   and no fee is charged: the shortfall is named and every
+   contribution returns in full in its own transaction minus its
+   miner fee. The disclosed service fee — 1% of the price,
+   rounded up, minimum 0.001 ERG, the same hub fee as tools
+   112-140 — is charged ONCE, only on a funded gift, out of what
+   the seller receives, on the PRICE the gift actually costs:
+   never on the contributions (the contributors' own money,
+   most of which either buys the gift or comes straight back)
+   and never on the refunded excess (money that returns, not
+   money that is spent). Verified a second way before anything
+   is shown: the contributions are summed forwards and in
+   reverse, every cost share is checked as its pro-rata floor
+   or that floor plus one with bonuses to the largest
+   remainders first, the shares re-add to the price, the refunds
+   re-add to the excess, and the seller net plus the fee
+   re-add to the price. A price the minimum fee would eat is
+   refused, and so is any refund the miner fee would swallow —
+   a refund that cannot pay its own transaction is not a
+   refund. Sub-safe-minimum outputs are flagged. Planning
+   only, stated plainly: this is a group-gift plan, NOT a
+   group-gift contract or a gift registry — no script collects
+   the contributions, holds them, buys the gift, or sends the
+   refunds automatically; the contributors and the seller
+   build and sign their own transactions in their own
+   wallets, and whether the seller sells at the named price
+   is a matter of their word, agreed off-chain. It fetches
+   nothing, signs nothing, sends nothing. Oracle cases
+   (hidden_files/oracle-giftfund.py, exact integer arithmetic,
+   run before coding): MAIN (shares 58333333333 / 41666666667,
+   refunds 11666666667 / 8333333333 pinned), EXACT, JAGGED
+   (shares 6442199775 / 2760942761 / 920314253 pinned), BIG
+   (price 999999999999999, fee 10000000000000, net
+   989999999999999 pinned), MINFEE, DUST (499850-nanoERG seller
+   net flagged), SHORT, ODD, FEEEATS and REFUNDSWALLOW
+   refused. */
+var GIFTFUND_MAX_CONTRIBUTORS = 20;
+var GIFTFUND_MAX_NAME_CHARS = 40;
+var GIFTFUND_MAX_LABEL_CHARS = 60;
+function buildGiftFundPlan(sellerRaw, labelRaw, priceStr, contributorsRaw, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, sellerAddress: null, sellerType: null, label: null, contributors: null, contributorCount: null, priceNano: null, priceErg: null, totalContributedNano: null, totalContributedErg: null, funded: null, shortfallNano: null, shortfallErg: null, excessNano: null, excessErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, sellerNetNano: null, sellerNetErg: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, giftText: null };
+  };
+  var sellerCheck = checkErgoAddress(sellerRaw);
+  if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
+  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var network = sellerCheck.network;
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > GIFTFUND_MAX_LABEL_CHARS) return fail("The gift name is " + label.length + " characters — keep it to " + GIFTFUND_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed gift)";
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var price = ergToNano(priceStr);
+  if (price === null || BigInt(price) <= 0n) return fail("The gift price must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit) — a free gift has nothing to settle.");
+  var priceNano = BigInt(price);
+  var rawLines = (contributorsRaw == null ? "" : String(contributorsRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenNames = {};
+  var seenAddresses = {};
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, contribution in ERG (e.g. \"Alice, 9f…, 25\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addrRaw = parts[1].replace(/\s+/g, " ").trim();
+    var amtRaw = parts[2].replace(/\s+/g, " ").trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the contributor a name before the first comma, so the plan says who chipped in each amount.");
+    if (name.length > GIFTFUND_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + GIFTFUND_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The contributor name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each contributor once; combine one person's contributions into a single line so the pro-rata shares stay exact.");
+    seenNames[nameKey] = lineNo;
+    var check = checkErgoAddress(addrRaw);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the seller is " + network + " — one group gift lives on one network, so every address must match.");
+    if (addrRaw === sellerAddress) return fail("Line " + lineNo + "'s address is the seller's own address — the seller cannot chip in toward their own sale in the same plan.");
+    if (seenAddresses[addrRaw]) return fail("The contributor address on line " + lineNo + " repeats line " + seenAddresses[addrRaw] + " — list each contributor address once; combine one person's contributions into a single line so the pro-rata shares stay exact.");
+    seenAddresses[addrRaw] = lineNo;
+    var amt = ergToNano(amtRaw);
+    if (amt === null || BigInt(amt) <= 0n) return fail("Line " + lineNo + "'s contribution is refused: give an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit) — a zero contribution chips in nothing and only clutters the plan.");
+    entries.push({ name: name, line: lineNo, address: addrRaw, type: check.type, amountNano: BigInt(amt) });
+  }
+  if (entries.length === 0) return fail("List at least one contributor — a group gift with no contributions has nothing to settle.");
+  if (entries.length > GIFTFUND_MAX_CONTRIBUTORS) return fail("This builder takes at most " + GIFTFUND_MAX_CONTRIBUTORS + " contributors (you listed " + entries.length + ") — a larger group belongs in a dedicated registry flow, not a copyable plan.");
+  /* Total contributed, summed forwards and in reverse: the two
+     routes must agree before anything is shown. */
+  var totalNano = 0n;
+  for (var fi = 0; fi < entries.length; fi++) totalNano += entries[fi].amountNano;
+  var totalRev = 0n;
+  for (var ri = entries.length - 1; ri >= 0; ri--) totalRev += entries[ri].amountNano;
+  if (totalNano !== totalRev) return fail("Internal check failed: the two contribution totals disagree — refusing to show a plan rather than risk a wrong settlement.");
+  var funded = totalNano >= priceNano;
+  var feeNano = 0n;
+  var wasMinimum = false;
+  var sellerNetNano = 0n;
+  var shortfallNano = 0n;
+  var excessNano = 0n;
+  var shareList = entries.map(function () { return 0n; });
+  var refundList = entries.map(function (e) { return e.amountNano; });
+  if (funded) {
+    excessNano = totalNano - priceNano;
+    /* Service fee: same two-route check as tools 112-140, on the PRICE. */
+    var feeA = (priceNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+    var feeB = priceNano / 100n + (priceNano % 100n > 0n ? 1n : 0n);
+    if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+    feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+    wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+    if (feeNano >= priceNano) return fail("The disclosed service fee (1% of the gift price, rounded up, minimum 0.001 ERG) would eat the whole gift price of " + nanoToErg(priceNano.toString()) + " ERG — the seller would receive nothing. The gift is too small to settle this way; a larger gift is needed.");
+    sellerNetNano = priceNano - feeNano;
+    if (sellerNetNano + feeNano !== priceNano) return fail("Internal check failed: the seller net plus the service fee do not re-add to the gift price — refusing to show it.");
+    /* Route 1: allocate the price pro-rata by each contributor's
+       contribution, by largest remainder. */
+    var quotas = entries.map(function (e) {
+      var q = priceNano * e.amountNano;
+      return { floor: q / totalNano, rem: q % totalNano };
+    });
+    var floorSum = 0n;
+    for (var qi = 0; qi < quotas.length; qi++) floorSum += quotas[qi].floor;
+    var leftover = priceNano - floorSum;
+    var order = entries.map(function (_, i) { return i; }).sort(function (a, b) {
+      if (quotas[a].rem !== quotas[b].rem) return quotas[a].rem > quotas[b].rem ? -1 : 1;
+      return a - b;
+    });
+    var bonus = entries.map(function () { return 0n; });
+    for (var bi = 0; bi < Number(leftover); bi++) bonus[order[bi]] = 1n;
+    shareList = entries.map(function (_, i) { return quotas[i].floor + bonus[i]; });
+    /* Route 2 (the second-way verification): every share is its
+       floor or its floor plus one, the bonuses went to the
+       largest remainders first, and the shares re-add to the
+       price. */
+    var shareSum = 0n;
+    for (var ai = 0; ai < shareList.length; ai++) {
+      if (shareList[ai] !== quotas[ai].floor && shareList[ai] !== quotas[ai].floor + 1n) return fail("Internal check failed: a contributor's cost share is neither its pro-rata floor nor that floor plus one — refusing to show it.");
+      shareSum += shareList[ai];
+    }
+    if (shareSum !== priceNano) return fail("Internal check failed: the cost shares do not re-add to the gift price — refusing to show it.");
+    for (var oi = 0; oi < entries.length; oi++) for (var oj = 0; oj < entries.length; oj++) {
+      if (bonus[oi] === 1n && bonus[oj] === 0n) {
+        if (quotas[oj].rem > quotas[oi].rem) return fail("Internal check failed: a larger remainder was passed over for a bonus nanoERG — refusing to show it.");
+        if (quotas[oj].rem === quotas[oi].rem && oj < oi) return fail("Internal check failed: a remainder tie was broken against list order — refusing to show it.");
+      }
+    }
+    refundList = entries.map(function (e, i) { return e.amountNano - shareList[i]; });
+    var refundSum = 0n;
+    for (var ui = 0; ui < refundList.length; ui++) {
+      if (refundList[ui] < 0n) return fail("Internal check failed: a refund came out negative — refusing to show it.");
+      refundSum += refundList[ui];
+    }
+    if (refundSum !== excessNano) return fail("Internal check failed: the refunds do not re-add to the excess over the price — refusing to show it.");
+    for (var wi = 0; wi < refundList.length; wi++) {
+      if (refundList[wi] > 0n && refundList[wi] <= minerNano) return fail("Line " + entries[wi].line + "'s refund of " + nanoToErg(refundList[wi].toString()) + " ERG would be swallowed by its own transaction's miner fee of " + nanoToErg(minerNano.toString()) + " ERG — a refund that cannot pay its own transaction is not a refund. Adjust the contributions so no excess refund is that small.");
+    }
+  } else {
+    shortfallNano = priceNano - totalNano;
+    for (var si = 0; si < entries.length; si++) {
+      if (entries[si].amountNano <= minerNano) return fail("Line " + entries[si].line + "'s contribution of " + nanoToErg(entries[si].amountNano.toString()) + " ERG could not be refunded: its own refund transaction's miner fee of " + nanoToErg(minerNano.toString()) + " ERG would eat it whole. A contribution that small cannot take part in a plan whose fallback is a refund.");
+    }
+  }
+  var refundNetList = refundList.map(function (r) { return r > 0n ? r - minerNano : 0n; });
+  var minerTotalNano = minerNano * BigInt(entries.length);
+  var grandTotalNano = totalNano + minerTotalNano;
+  var contributors = entries.map(function (e, i) {
+    return { name: e.name, address: e.address, type: e.type, amountNano: e.amountNano.toString(), amountErg: nanoToErg(e.amountNano.toString()), shareNano: shareList[i].toString(), shareErg: nanoToErg(shareList[i].toString()), refundNano: refundList[i].toString(), refundErg: nanoToErg(refundList[i].toString()), refundNetNano: refundNetList[i].toString(), refundNetErg: nanoToErg(refundNetList[i].toString()), belowSafeMin: refundList[i] > 0n && refundNetList[i] < SAFE_USER_MIN_BOX_NANO };
+  });
+  var anyDust = (funded && sellerNetNano < SAFE_USER_MIN_BOX_NANO) || contributors.some(function (c) { return c.belowSafeMin; });
+  var includesFeeAddr = sellerAddress === SERVICE_FEE_ADDRESS || entries.some(function (e) { return e.address === SERVICE_FEE_ADDRESS; });
+  var lines = ["ERGO GROUP-GIFT PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Gift: " + label,
+    "Seller (receives the gift price, less the service fee below, when the gift is funded): " + sellerAddress,
+    "Gift price: " + nanoToErg(priceNano.toString()) + " ERG (" + priceNano.toString() + " nanoERG).",
+    "Contributors, with the share of the price each one's contribution truly covers (pro-rata by their own contribution, by largest remainder, so the shares re-add to the price exactly) and the refund each one is owed:"];
+  contributors.forEach(function (c, i) {
+    if (funded) lines.push("Contributor " + (i + 1) + " — " + c.name + " (" + c.address + "): chipped in " + c.amountErg + " ERG (" + c.amountNano + " nanoERG), covers " + c.shareErg + " ERG (" + c.shareNano + " nanoERG) of the price, refund " + c.refundErg + " ERG (" + c.refundNano + " nanoERG)" + (refundList[i] > 0n ? ", received as " + c.refundNetErg + " ERG (" + c.refundNetNano + " nanoERG) after its own transaction's miner fee." : "."));
+    else lines.push("Contributor " + (i + 1) + " — " + c.name + " (" + c.address + "): chipped in " + c.amountErg + " ERG (" + c.amountNano + " nanoERG), refunded in full as " + c.refundNetErg + " ERG (" + c.refundNetNano + " nanoERG) after its own transaction's miner fee.");
+  });
+  lines.push("Total contributed: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) from " + entries.length + " contributor(s).");
+  if (funded) {
+    lines.push("The gift is funded: the contributions cover the price, with an excess of " + nanoToErg(excessNano.toString()) + " ERG (" + excessNano.toString() + " nanoERG) refunded pro-rata as listed above.",
+      "Seller receives: " + nanoToErg(sellerNetNano.toString()) + " ERG (" + sellerNetNano.toString() + " nanoERG) of the gift price.",
+      "Service fee (disclosed: 1% of the gift price — never of the contributions, which are the contributors' own money and mostly either buy the gift or come straight back, and never of the refunded excess, which is money returned and not money spent — rounded up, minimum 0.001 ERG, charged once, and only on a funded gift): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+  } else {
+    lines.push("The gift is not funded yet: the contributions are " + nanoToErg(shortfallNano.toString()) + " ERG (" + shortfallNano.toString() + " nanoERG) short of the price, so no gift is bought, the seller receives nothing, and no service fee is charged — every contribution returns in full as listed above.");
+  }
+  lines.push("Miner fees: " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) per contribution transaction, paid by that contributor — " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG) across the plan; each refund transaction's miner fee comes out of that refund, as shown.",
+    "The contributions were summed forwards and in reverse, the cost shares re-add to the price, the refunds re-add to the excess, and the seller net plus the service fee re-add to the price — verified a second way inside the tool (every share checked as its pro-rata floor or that floor plus one, bonuses to the largest remainders first) before anything is shown.",
+    "Total moving through the plan: " + nanoToErg(grandTotalNano.toString()) + " ERG (" + grandTotalNano.toString() + " nanoERG) — the contributions and the contribution transactions' miner fees.",
+    "This is a group-gift plan, not a group-gift contract or a gift registry: no script collects the contributions, holds them, buys the gift, or sends the refunds automatically — the contributors and the seller build and sign their own transactions in their own wallets, whether the seller sells at the named price is a matter of their word agreed off-chain, and the figures are the ones typed in above, so check them against the group's own records first. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network,
+    sellerAddress: sellerAddress, sellerType: sellerCheck.type,
+    label: label,
+    contributors: contributors, contributorCount: contributors.length,
+    priceNano: priceNano.toString(), priceErg: nanoToErg(priceNano.toString()),
+    totalContributedNano: totalNano.toString(), totalContributedErg: nanoToErg(totalNano.toString()),
+    funded: funded,
+    shortfallNano: shortfallNano.toString(), shortfallErg: nanoToErg(shortfallNano.toString()),
+    excessNano: excessNano.toString(), excessErg: nanoToErg(excessNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    sellerNetNano: sellerNetNano.toString(), sellerNetErg: nanoToErg(sellerNetNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    totalNano: grandTotalNano.toString(), totalErg: nanoToErg(grandTotalNano.toString()),
+    anyBelowSafeMin: anyDust,
+    includesServiceAddress: includesFeeAddr,
+    giftText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -16753,7 +16976,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -17630,6 +17853,22 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ A figure in this plan is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
       msg += "Copyable group-buy plan:\n" + res.groupText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a group-buy contract, and no ERG has moved until the transactions are built and signed in wallets.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("giftfund-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("giftfund-result");
+      var res = buildGiftFundPlan(document.getElementById("giftfund-seller").value, document.getElementById("giftfund-label").value, document.getElementById("giftfund-price").value, document.getElementById("giftfund-contributors").value, document.getElementById("giftfund-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Group gift \"" + res.label + "\" on " + res.network + " — " + res.totalContributedErg + " ERG (" + res.totalContributedNano + " nanoERG) chipped in by " + res.contributorCount + " contributor(s) toward a gift price of " + res.priceErg + " ERG (" + res.priceNano + " nanoERG). ";
+      if (res.funded) msg += "The gift is funded, with an excess of " + res.excessErg + " ERG refunded pro-rata. The seller receives " + res.sellerNetErg + " ERG (" + res.sellerNetNano + " nanoERG) after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the gift price, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + ", never of the contributions or the refunded excess). ";
+      else msg += "The gift is not funded yet — the contributions are " + res.shortfallErg + " ERG (" + res.shortfallNano + " nanoERG) short, so no gift is bought, the seller receives nothing, no service fee is charged, and every contribution returns in full (less its own refund transaction's miner fee). ";
+      if (res.anyBelowSafeMin) msg += "⚠ A figure in this plan is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      msg += "Copyable group-gift plan:\n" + res.giftText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a group-gift contract, and no ERG has moved until the transactions are built and signed in wallets.";
       out.textContent = msg;
     });
 

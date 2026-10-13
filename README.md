@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**140 free Ergo tools, local-first:** the live hub carries 140 tools that run
+**141 free Ergo tools, local-first:** the live hub carries 141 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement, invoice factoring, insurance claim settlement, security deposit settlement, matching donation and group-buy builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement, invoice factoring, insurance claim settlement, security deposit settlement, matching donation, group-buy and group-gift builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -962,6 +962,56 @@ headers) — with 129 tools on one page it beats scrolling.
   built and signed in wallets. Plan only: it
   fetches nothing, signs nothing, and sends
   nothing.
+- **Ergo group-gift builder** — friends chip
+  uneven amounts toward one gift at a fixed
+  price. Name the seller, the gift and its
+  price, then list the contributors (name,
+  address, contribution in ERG, one per
+  line). When the contributions reach the
+  price, the price is allocated back to the
+  contributors pro-rata by their own
+  contribution, by largest remainder, so each
+  contributor's true cost is named exactly
+  and the costs re-add to the price exactly,
+  and what each one chipped beyond their cost
+  — the excess over the price — comes back to
+  them as a refund in its own transaction
+  minus its miner fee, so the refunds re-add
+  to the excess exactly. When the
+  contributions fall short, no gift is bought
+  and no fee is charged: the shortfall is
+  named and every contribution returns in
+  full in its own transaction minus its miner
+  fee. The hub's disclosed service fee is 1%
+  of the gift price (rounded up, minimum
+  0.001 ERG, to my Ergo address), charged
+  once, only on a funded gift, out of what
+  the seller receives — never on the
+  contributions, which are the contributors'
+  own money, and never on the refunded
+  excess, which is money returned and not
+  money spent. A price the minimum fee would
+  eat is refused, and so is any refund the
+  miner fee would swallow. Every figure is
+  verified a second way inside the tool: the
+  contributions summed forwards and in
+  reverse, every cost share checked as its
+  pro-rata floor or that floor plus one with
+  the bonuses going to the largest remainders
+  first, the shares re-adding to the price,
+  the refunds re-adding to the excess, and
+  the seller net plus the fee re-adding to
+  the price. All addresses are
+  checksum-verified and sub-safe-minimum
+  outputs are flagged. Stated plainly in the
+  plan: this is a group-gift plan, not a
+  group-gift contract or a gift registry —
+  nothing collects the contributions, holds
+  them, buys the gift, or sends the refunds
+  automatically. You get a copyable plan
+  block; the transactions are built and
+  signed in wallets. Plan only: it fetches
+  nothing, signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

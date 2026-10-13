@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**141 free Ergo tools, local-first:** the live hub carries 141 tools that run
+**142 free Ergo tools, local-first:** the live hub carries 142 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement, invoice factoring, insurance claim settlement, security deposit settlement, matching donation, group-buy and group-gift builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement, invoice factoring, insurance claim settlement, security deposit settlement, matching donation, group-buy, group-gift and dividend distribution builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -1008,6 +1008,51 @@ headers) — with 129 tools on one page it beats scrolling.
   group-gift contract or a gift registry —
   nothing collects the contributions, holds
   them, buys the gift, or sends the refunds
+  automatically. You get a copyable plan
+  block; the transactions are built and
+  signed in wallets. Plan only: it fetches
+  nothing, signs nothing, and sends nothing.
+- **Ergo dividend distribution builder** — a
+  payer declares one dividend pool, holds a
+  withholding percent back to remit, and
+  distributes the rest to holders pro-rata
+  by shares. Name the payer and the
+  distribution, the pool in ERG and the
+  withholding percent, then list the holders
+  (name, address, shares, one per line). The
+  withholding is the pool times the percent
+  floored to the nanoERG and never leaves
+  the payer; what remains is allocated to
+  the holders pro-rata by shares, by largest
+  remainder, so each payout is named exactly
+  and the payouts re-add to the amount
+  distributed exactly. The hub's disclosed
+  service fee is 1% of the amount actually
+  distributed (rounded up, minimum 0.001
+  ERG, to my Ergo address), charged once,
+  out of the amount distributed — never on
+  the withholding, which is a tax held back
+  and not a dividend anyone receives, and
+  never on the pool as declared, which
+  counts that withholding too. A withholding
+  that takes the whole pool and a
+  distributable amount the minimum fee would
+  eat are refused. Every figure is verified
+  a second way inside the tool: the shares
+  summed forwards and in reverse, the
+  withholding recomputed by split
+  multiplication, every payout checked as
+  its pro-rata floor or that floor plus one
+  with the bonuses going to the largest
+  remainders first, and the payouts plus
+  the fee plus the withholding re-adding to
+  the pool. All addresses are
+  checksum-verified and sub-safe-minimum
+  payouts are flagged. Stated plainly in the
+  plan: this is a dividend plan, not a
+  dividend contract or a shareholder
+  registry — nothing holds the pool,
+  withholds the tax, or pays the holders
   automatically. You get a copyable plan
   block; the transactions are built and
   signed in wallets. Plan only: it fetches

@@ -5800,6 +5800,202 @@ function buildGiftFundPlan(sellerRaw, labelRaw, priceStr, contributorsRaw, miner
   };
 }
 
+/* ---------- Dividend distribution builder (pool + withholding -> pro-rata holder payouts, disclosed fee) ---------- */
+/* Tools 112-141 split, stage, settle, auction, top up or pool
+   one pot; a dividend DISTRIBUTES one declared pool to many
+   holders pro-rata by shares — but only after a withholding
+   percent is held back: the withholding W = floor(pool * pct /
+   100) never leaves the payer (they keep it to remit), the
+   distributable D = pool - W is what the distribution actually
+   pays out, and the disclosed 1% service fee (rounded up,
+   minimum 0.001 ERG) is charged once out of D, on the money
+   actually distributed — NEVER on the withholding, which is a
+   tax held back and not a dividend anyone receives, and never
+   on the pool as declared, which counts the withholding too.
+   The net N = D - fee is allocated to the holders pro-rata by
+   shares by largest remainder, so the allocations re-add to N
+   exactly and allocations + fee + withholding re-add to the
+   pool exactly. Verified a second way before anything is
+   shown: the shares are summed forwards and in reverse, the
+   withholding is recomputed by split multiplication, every
+   allocation is checked as its pro-rata floor or that floor
+   plus one with bonuses to the largest remainders first, and
+   allocations + fee + withholding re-add to the pool. A
+   withholding that takes the whole pool and a distributable
+   amount the minimum fee would eat are refused.
+   Sub-safe-minimum allocations are flagged. Planning only,
+   stated plainly: this is a dividend plan, NOT a dividend
+   contract or a shareholder registry — no script holds the
+   pool, withholds the tax, or pays the holders automatically;
+   the payer builds and signs the distribution in their own
+   wallet, and whether the withholding is remitted correctly
+   is a matter of their own records and obligations, agreed
+   off-chain. It fetches nothing, signs nothing, sends
+   nothing. Oracle cases (hidden_files/oracle-dividend.py,
+   exact integer arithmetic, run before coding): MAIN
+   (W 100000000000, fee 9000000000, allocs 668250000000 /
+   222750000000 pinned), NOWITHHOLD, JAGGED (allocs
+   33814814541 / 14492063375 / 53137565707 pinned), BIG
+   (allocs 663288723900000000 / 11276100000000 pinned),
+   MINFEE, DUST (599850-nanoERG allocation flagged), ODD,
+   FULLWITHHOLD and FEEEATS refused. */
+var DIVIDEND_MAX_HOLDERS = 20;
+var DIVIDEND_MAX_NAME_CHARS = 40;
+var DIVIDEND_MAX_LABEL_CHARS = 60;
+function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersRaw, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, payerAddress: null, payerType: null, label: null, holders: null, holderCount: null, totalShares: null, poolNano: null, poolErg: null, withholdingPercent: null, withholdingNano: null, withholdingErg: null, distributableNano: null, distributableErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, netNano: null, netErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, dividendText: null };
+  };
+  var payerCheck = checkErgoAddress(payerRaw);
+  if (!payerCheck.valid) return fail("The payer address is refused: " + payerCheck.reason);
+  var payerAddress = typeof payerRaw === "string" ? payerRaw.trim() : "";
+  var network = payerCheck.network;
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > DIVIDEND_MAX_LABEL_CHARS) return fail("The distribution name is " + label.length + " characters — keep it to " + DIVIDEND_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed distribution)";
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var pool = ergToNano(poolStr);
+  if (pool === null || BigInt(pool) <= 0n) return fail("The dividend pool must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit) — an empty pool distributes nothing.");
+  var poolNano = BigInt(pool);
+  var pctRaw = (withholdingStr == null ? "" : String(withholdingStr)).trim();
+  if (!/^[0-9]+$/.test(pctRaw)) return fail("The withholding percent must be a whole number from 0 to 100 (e.g. \"10\" for 10%) — fractional percents are refused so the withholding stays exact to the nanoERG.");
+  var pct = BigInt(pctRaw);
+  if (pct > 100n) return fail("The withholding percent is " + pctRaw + "% — a withholding above 100% would take more than the pool itself.");
+  var rawLines = (holdersRaw == null ? "" : String(holdersRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenNames = {};
+  var seenAddresses = {};
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, shares (e.g. \"Alice, 9f…, 300\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addrRaw = parts[1].replace(/\s+/g, " ").trim();
+    var sharesRaw = parts[2].replace(/\s+/g, " ").trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the holder a name before the first comma, so the plan says who receives each payout.");
+    if (name.length > DIVIDEND_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + DIVIDEND_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The holder name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each holder once; combine one person's shares into a single line so the pro-rata shares stay exact.");
+    seenNames[nameKey] = lineNo;
+    var check = checkErgoAddress(addrRaw);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the payer is " + network + " — one distribution lives on one network, so every address must match.");
+    if (addrRaw === payerAddress) return fail("Line " + lineNo + "'s address is the payer's own address — the payer cannot pay a dividend to themselves in the same plan; the withholding they keep back is already theirs.");
+    if (seenAddresses[addrRaw]) return fail("The holder address on line " + lineNo + " repeats line " + seenAddresses[addrRaw] + " — list each holder address once; combine one person's shares into a single line so the pro-rata shares stay exact.");
+    seenAddresses[addrRaw] = lineNo;
+    if (!/^[0-9]+$/.test(sharesRaw)) return fail("Line " + lineNo + "'s shares are refused: give a whole number of shares above zero (e.g. \"300\") — fractional shares are refused so the pro-rata split stays exact to the nanoERG.");
+    var shares = BigInt(sharesRaw);
+    if (shares <= 0n) return fail("Line " + lineNo + "'s shares are refused: give a whole number of shares above zero — a holder with no shares receives no dividend and only clutters the plan.");
+    entries.push({ name: name, line: lineNo, address: addrRaw, type: check.type, shares: shares });
+  }
+  if (entries.length === 0) return fail("List at least one holder — a dividend with no holders has nothing to distribute.");
+  if (entries.length > DIVIDEND_MAX_HOLDERS) return fail("This builder takes at most " + DIVIDEND_MAX_HOLDERS + " holders (you listed " + entries.length + ") — a larger register belongs in a dedicated distribution flow, not a copyable plan.");
+  /* Total shares, summed forwards and in reverse: the two
+     routes must agree before anything is shown. */
+  var totalShares = 0n;
+  for (var fi = 0; fi < entries.length; fi++) totalShares += entries[fi].shares;
+  var totalSharesRev = 0n;
+  for (var ri = entries.length - 1; ri >= 0; ri--) totalSharesRev += entries[ri].shares;
+  if (totalShares !== totalSharesRev) return fail("Internal check failed: the two share totals disagree — refusing to show a plan rather than risk a wrong distribution.");
+  /* Withholding, two ways: direct floor division, and split
+     multiplication (pool = 100q + r) — the two must agree. */
+  var withA = (poolNano * pct) / 100n;
+  var withB = (poolNano / 100n) * pct + ((poolNano % 100n) * pct) / 100n;
+  if (withA !== withB) return fail("Internal check failed: the two withholding computations disagree — refusing to show a plan rather than risk a wrong withholding.");
+  var withholdingNano = withA;
+  var distributableNano = poolNano - withholdingNano;
+  if (distributableNano <= 0n) return fail("The withholding of " + pctRaw + "% takes the whole pool of " + nanoToErg(poolNano.toString()) + " ERG — nothing is left to distribute, so no dividend is paid and no service fee is charged. Lower the withholding or declare a larger pool.");
+  /* Service fee: same two-route check as tools 112-141, on the DISTRIBUTABLE amount. */
+  var feeA = (distributableNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = distributableNano / 100n + (distributableNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  if (feeNano >= distributableNano) return fail("The disclosed service fee (1% of the amount actually distributed, rounded up, minimum 0.001 ERG) would eat the whole distributable amount of " + nanoToErg(distributableNano.toString()) + " ERG — the holders would receive nothing. The pool is too small to distribute this way; a larger pool is needed.");
+  var netNano = distributableNano - feeNano;
+  if (netNano + feeNano !== distributableNano) return fail("Internal check failed: the holder net plus the service fee do not re-add to the distributable amount — refusing to show it.");
+  /* Route 1: allocate the net pro-rata by shares, by largest remainder. */
+  var quotas = entries.map(function (e) {
+    var q = netNano * e.shares;
+    return { floor: q / totalShares, rem: q % totalShares };
+  });
+  var floorSum = 0n;
+  for (var qi = 0; qi < quotas.length; qi++) floorSum += quotas[qi].floor;
+  var leftover = netNano - floorSum;
+  var order = entries.map(function (_, i) { return i; }).sort(function (a, b) {
+    if (quotas[a].rem !== quotas[b].rem) return quotas[a].rem > quotas[b].rem ? -1 : 1;
+    return a - b;
+  });
+  var bonus = entries.map(function () { return 0n; });
+  for (var bi = 0; bi < Number(leftover); bi++) bonus[order[bi]] = 1n;
+  var allocList = entries.map(function (_, i) { return quotas[i].floor + bonus[i]; });
+  /* Route 2 (the second-way verification): every allocation is
+     its floor or its floor plus one, the bonuses went to the
+     largest remainders first, the allocations re-add to the
+     net, and allocations + fee + withholding re-add to the pool. */
+  var allocSum = 0n;
+  for (var ai = 0; ai < allocList.length; ai++) {
+    if (allocList[ai] !== quotas[ai].floor && allocList[ai] !== quotas[ai].floor + 1n) return fail("Internal check failed: a holder's payout is neither its pro-rata floor nor that floor plus one — refusing to show it.");
+    allocSum += allocList[ai];
+  }
+  if (allocSum !== netNano) return fail("Internal check failed: the payouts do not re-add to the net distributable amount — refusing to show it.");
+  if (allocSum + feeNano + withholdingNano !== poolNano) return fail("Internal check failed: the payouts plus the service fee plus the withholding do not re-add to the pool — refusing to show it.");
+  for (var oi = 0; oi < entries.length; oi++) for (var oj = 0; oj < entries.length; oj++) {
+    if (bonus[oi] === 1n && bonus[oj] === 0n) {
+      if (quotas[oj].rem > quotas[oi].rem) return fail("Internal check failed: a larger remainder was passed over for a bonus nanoERG — refusing to show it.");
+      if (quotas[oj].rem === quotas[oi].rem && oj < oi) return fail("Internal check failed: a remainder tie was broken against list order — refusing to show it.");
+    }
+  }
+  var grandTotalNano = distributableNano + minerNano;
+  var holders = entries.map(function (e, i) {
+    var bps = (e.shares * 10000n) / totalShares;
+    var pctText = (bps / 100n).toString() + "." + (bps % 100n).toString().padStart(2, "0");
+    return { name: e.name, address: e.address, type: e.type, shares: e.shares.toString(), sharePercentBps: bps.toString(), sharePercent: pctText, allocNano: allocList[i].toString(), allocErg: nanoToErg(allocList[i].toString()), belowSafeMin: allocList[i] < SAFE_USER_MIN_BOX_NANO };
+  });
+  var anyDust = holders.some(function (h) { return h.belowSafeMin; });
+  var includesFeeAddr = payerAddress === SERVICE_FEE_ADDRESS || entries.some(function (e) { return e.address === SERVICE_FEE_ADDRESS; });
+  var lines = ["ERGO DIVIDEND DISTRIBUTION PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Distribution: " + label,
+    "Payer (declares the pool, keeps the withholding back to remit, and pays the distribution): " + payerAddress,
+    "Dividend pool declared: " + nanoToErg(poolNano.toString()) + " ERG (" + poolNano.toString() + " nanoERG).",
+    "Withholding held back by the payer: " + pctRaw + "% of the pool = " + nanoToErg(withholdingNano.toString()) + " ERG (" + withholdingNano.toString() + " nanoERG) — this never leaves the payer and is not a dividend anyone receives.",
+    "Amount actually distributed: " + nanoToErg(distributableNano.toString()) + " ERG (" + distributableNano.toString() + " nanoERG), split pro-rata by shares by largest remainder so the payouts re-add to it exactly, after the service fee below.",
+    "Holders, with the payout each one's shares earn:"];
+  holders.forEach(function (h, i) {
+    lines.push("Holder " + (i + 1) + " — " + h.name + " (" + h.address + "): " + h.shares + " share(s), " + h.sharePercent + "% of the register, receives " + h.allocErg + " ERG (" + h.allocNano + " nanoERG).");
+  });
+  lines.push("Total shares: " + totalShares.toString() + " across " + entries.length + " holder(s).",
+    "Holders receive in total: " + nanoToErg(netNano.toString()) + " ERG (" + netNano.toString() + " nanoERG).",
+    "Service fee (disclosed: 1% of the amount actually distributed — never of the withholding, which is a tax held back and not a dividend anyone receives, and never of the pool as declared, which counts that withholding too — rounded up, minimum 0.001 ERG, charged once): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS,
+    "Miner fee: " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) for the one distribution transaction, paid by the payer on top of the amount distributed.",
+    "The shares were summed forwards and in reverse, the withholding was recomputed by split multiplication, every payout checked as its pro-rata floor or that floor plus one with bonuses to the largest remainders first, and the payouts plus the service fee plus the withholding re-add to the pool — verified a second way inside the tool before anything is shown.",
+    "Total moving through the plan: " + nanoToErg(grandTotalNano.toString()) + " ERG (" + grandTotalNano.toString() + " nanoERG) — the amount actually distributed and the distribution transaction's miner fee; the withholding stays with the payer and does not move.",
+    "This is a dividend plan, not a dividend contract or a shareholder registry: no script holds the pool, withholds the tax, or pays the holders automatically — the payer builds and signs the distribution in their own wallet, whether the withholding is remitted correctly is a matter of the payer's own records and obligations agreed off-chain, and the figures are the ones typed in above, so check them against the register first. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network,
+    payerAddress: payerAddress, payerType: payerCheck.type,
+    label: label,
+    holders: holders, holderCount: holders.length,
+    totalShares: totalShares.toString(),
+    poolNano: poolNano.toString(), poolErg: nanoToErg(poolNano.toString()),
+    withholdingPercent: pctRaw,
+    withholdingNano: withholdingNano.toString(), withholdingErg: nanoToErg(withholdingNano.toString()),
+    distributableNano: distributableNano.toString(), distributableErg: nanoToErg(distributableNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    netNano: netNano.toString(), netErg: nanoToErg(netNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: grandTotalNano.toString(), totalErg: nanoToErg(grandTotalNano.toString()),
+    anyBelowSafeMin: anyDust,
+    includesServiceAddress: includesFeeAddr,
+    dividendText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -16976,7 +17172,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -17869,6 +18065,22 @@ if (typeof document !== "undefined") {
       else msg += "The gift is not funded yet — the contributions are " + res.shortfallErg + " ERG (" + res.shortfallNano + " nanoERG) short, so no gift is bought, the seller receives nothing, no service fee is charged, and every contribution returns in full (less its own refund transaction's miner fee). ";
       if (res.anyBelowSafeMin) msg += "⚠ A figure in this plan is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       msg += "Copyable group-gift plan:\n" + res.giftText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a group-gift contract, and no ERG has moved until the transactions are built and signed in wallets.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("dividend-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("dividend-result");
+      var res = buildDividendPlan(document.getElementById("dividend-payer").value, document.getElementById("dividend-label").value, document.getElementById("dividend-pool").value, document.getElementById("dividend-withholding").value, document.getElementById("dividend-holders").value, document.getElementById("dividend-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Dividend distribution \"" + res.label + "\" on " + res.network + " — a pool of " + res.poolErg + " ERG (" + res.poolNano + " nanoERG) declared for " + res.holderCount + " holder(s) holding " + res.totalShares + " share(s) in all. ";
+      msg += "The payer holds back a withholding of " + res.withholdingPercent + "% = " + res.withholdingErg + " ERG (" + res.withholdingNano + " nanoERG) to remit, so " + res.distributableErg + " ERG (" + res.distributableNano + " nanoERG) is actually distributed. The holders receive " + res.netErg + " ERG (" + res.netNano + " nanoERG) in total after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the amount actually distributed, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + ", never of the withholding or the pool as declared). ";
+      if (res.anyBelowSafeMin) msg += "⚠ A figure in this plan is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable dividend plan:\n" + res.dividendText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a dividend contract, and no ERG has moved until the transactions are built and signed in wallets.";
       out.textContent = msg;
     });
 

@@ -2315,6 +2315,209 @@ function buildCrowdfundPlan(creatorRaw, labelRaw, goalStr, entriesRaw, minerFeeS
   };
 }
 
+/* ---------- Ergo auction settlement builder (highest bid wins: sold settles in one transaction, losers refunded in full) ---------- */
+/* Tools 112-122 split pots by shares, fixed amounts, stages, a
+   pro-rata stake or a funding goal. None of them PICKS A WINNER,
+   which is what an auction is: of all the bids listed, exactly one
+   — the highest — buys the item, and every other bid comes back.
+   A tie for the highest bid goes to the FIRST-listed of the tied
+   bids (the bid that was placed first in the list wins), and the
+   winner is verified a second way inside the tool (a reverse scan
+   for the maximum, a count of bids above the winner, and a check
+   that no earlier bid ties it) before anything is shown. The
+   auction is RESERVE-CONDITIONAL: if the highest bid reaches the
+   reserve price, the item is SOLD — the seller receives the
+   winning bid minus the disclosed service fee (the hub's standard
+   1% — here of the WINNING BID, rounded up, minimum 0.001 ERG,
+   two-route checked like tools 112-122) in ONE settlement
+   transaction, and every losing bid is refunded its whole bid
+   minus one miner fee in its own refund transaction, so the
+   refunds plus the refund miner fees re-add to the losing bids
+   exactly. If the highest bid misses the reserve, NO service fee
+   is charged at all and every bid — the highest included — is
+   refunded the same way. Every bid must exceed the miner fee, or
+   it could never be refunded, so a smaller bid is refused.
+   Duplicate bidder names and addresses are refused, all addresses
+   are checksum-verified (tool 2) and must sit on ONE network, and
+   the seller may also appear as a bidder (reported, not refused).
+   Sub-safe-minimum outputs (the seller's net, or a refund) are
+   flagged. Planning only: this is a settlement plan, NOT an
+   auction contract — no script holds the bids, enforces a closing
+   time or the reserve, or refunds anyone automatically; the bids
+   are the ones typed in. It fetches nothing, signs nothing, sends
+   nothing. */
+var AUCTION_MAX_BIDDERS = 20;
+var AUCTION_MAX_NAME_CHARS = 40;
+var AUCTION_MAX_LABEL_CHARS = 60;
+function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, sellerAddress: null, sellerType: null, label: null, sold: null, reserveNano: null, reserveErg: null, totalBidsNano: null, totalBidsErg: null, highestBidNano: null, highestBidErg: null, secondBidNano: null, secondBidErg: null, shortfallNano: null, shortfallErg: null, bidders: null, bidderCount: null, winnerIndex: null, winnerName: null, winnerAddress: null, tieCount: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, sellerNetNano: null, sellerNetErg: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, sellerIsBidder: null, includesServiceAddress: null, auctionText: null };
+  };
+  var sellerCheck = checkErgoAddress(sellerRaw);
+  if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
+  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > AUCTION_MAX_LABEL_CHARS) return fail("The item name is " + label.length + " characters — keep it to " + AUCTION_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed item)";
+  var reserve = ergToNano(reserveStr);
+  if (reserve === null || BigInt(reserve) < 0n) return fail("The reserve price must be an ERG amount of zero or more, with at most 9 decimal places (nanoERG is the smallest unit) — use 0 for no reserve.");
+  var reserveNano = BigInt(reserve);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenAddr = {};
+  var seenNames = {};
+  var network = sellerCheck.network;
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, bid in ERG (e.g. \"Ada, an address, 50\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addr = parts[1].trim();
+    var bidStr = parts[2].trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the bidder a name before the first comma, so the plan says who each bid is from.");
+    if (name.length > AUCTION_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + AUCTION_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each bidder once, so nobody is counted twice by accident.");
+    seenNames[nameKey] = lineNo;
+    var check = checkErgoAddress(addr);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (seenAddr[addr]) return fail("The address on line " + lineNo + " already appears on line " + seenAddr[addr] + " — list each address once and keep only that bidder's highest bid, so each bidder gets exactly one line in the plan.");
+    seenAddr[addr] = lineNo;
+    if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the seller is " + network + " — one auction lives on one network, so every address must match.");
+    var bid = ergToNano(bidStr);
+    if (bid === null || BigInt(bid) <= 0n) return fail("Line " + lineNo + "'s bid is refused: bids must be ERG amounts above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+    if (BigInt(bid) <= minerNano) return fail("Line " + lineNo + "'s bid of " + nanoToErg(BigInt(bid).toString()) + " ERG does not cover the " + nanoToErg(minerNano.toString()) + " ERG miner fee a refund transaction needs — that bid could never be refunded if it lost. Raise the bid or lower the miner fee.");
+    entries.push({ name: name, address: addr, network: check.network, type: check.type, bidNano: BigInt(bid), line: lineNo });
+  }
+  if (entries.length < 1) return fail("An auction needs at least one bid — list who has bid before building the plan.");
+  if (entries.length > AUCTION_MAX_BIDDERS) return fail("This builder takes at most " + AUCTION_MAX_BIDDERS + " bidders (you listed " + entries.length + ") — an auction with more bidders than that belongs in a dedicated auction contract, not a copyable plan.");
+  /* Total bid, summed forwards and in reverse — must agree. */
+  var bidFwd = 0n, bidRev = 0n;
+  for (var fi = 0; fi < entries.length; fi++) bidFwd += entries[fi].bidNano;
+  for (var ri = entries.length - 1; ri >= 0; ri--) bidRev += entries[ri].bidNano;
+  if (bidFwd !== bidRev) return fail("Internal check failed: the bids do not sum the same forwards and in reverse — refusing to show it.");
+  var totalBidsNano = bidFwd;
+  /* Winner: the highest bid, first-listed on a tie — found by a
+     forward scan that only replaces the winner on a STRICTLY
+     higher bid. Verified a second way below before any use. */
+  var winnerIndex = 0;
+  for (var wi2 = 1; wi2 < entries.length; wi2++) {
+    if (entries[wi2].bidNano > entries[winnerIndex].bidNano) winnerIndex = wi2;
+  }
+  var highestNano = entries[winnerIndex].bidNano;
+  var maxRev = 0n;
+  for (var mi = entries.length - 1; mi >= 0; mi--) if (entries[mi].bidNano > maxRev) maxRev = entries[mi].bidNano;
+  if (maxRev !== highestNano) return fail("Internal check failed: a reverse scan finds a different highest bid — refusing to show it.");
+  var aboveCount = 0, earlierTie = false, tieCount = 0;
+  for (var ci = 0; ci < entries.length; ci++) {
+    if (entries[ci].bidNano > highestNano) aboveCount++;
+    if (entries[ci].bidNano === highestNano) { tieCount++; if (ci < winnerIndex) earlierTie = true; }
+  }
+  if (aboveCount !== 0 || earlierTie) return fail("Internal check failed: the winner is not the first-listed highest bid — refusing to show it.");
+  var secondNano = 0n;
+  for (var si2 = 0; si2 < entries.length; si2++) {
+    if (si2 !== winnerIndex && entries[si2].bidNano > secondNano) secondNano = entries[si2].bidNano;
+  }
+  var sellerIsBidder = entries.some(function (e) { return e.address === sellerAddress; });
+  var includesFeeAddr = sellerAddress === SERVICE_FEE_ADDRESS || entries.some(function (e) { return e.address === SERVICE_FEE_ADDRESS; });
+  var sold = highestNano >= reserveNano;
+  var feeNano, wasMinimum, sellerNetNano, shortfallNano, minerTotalNano, totalNano;
+  var refunds;
+  if (sold) {
+    /* Service fee: same two-route check as tools 112-122, on the WINNING BID. */
+    var feeA = (highestNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+    var feeB = highestNano / 100n + (highestNano % 100n > 0n ? 1n : 0n);
+    if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a settlement rather than risk a wrong fee.");
+    feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+    wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+    sellerNetNano = highestNano - feeNano;
+    if (sellerNetNano <= 0n) return fail("The disclosed service fee (1% of the winning bid, rounded up, minimum 0.001 ERG) eats the whole winning bid — the seller would receive nothing. The winning bid is too small to settle.");
+    shortfallNano = 0n;
+    refunds = entries.map(function (e, i) { return i === winnerIndex ? 0n : e.bidNano - minerNano; });
+    var loserSum = 0n, refundSum = 0n;
+    for (var vi = 0; vi < entries.length; vi++) {
+      if (vi !== winnerIndex) { loserSum += entries[vi].bidNano; refundSum += refunds[vi]; }
+    }
+    if (refundSum + minerNano * BigInt(entries.length - 1) !== loserSum) return fail("Internal check failed: the loser refunds plus their miner fees do not account for every nanoERG of the losing bids — refusing to show it.");
+    if (sellerNetNano + feeNano !== highestNano) return fail("Internal check failed: the seller's net plus the service fee do not re-add to the winning bid — refusing to show it.");
+    minerTotalNano = minerNano * BigInt(entries.length);
+    totalNano = totalBidsNano + minerNano;
+  } else {
+    feeNano = 0n;
+    wasMinimum = false;
+    sellerNetNano = 0n;
+    shortfallNano = reserveNano - highestNano;
+    refunds = entries.map(function (e) { return e.bidNano - minerNano; });
+    var refundSum2 = 0n;
+    for (var wi3 = 0; wi3 < refunds.length; wi3++) refundSum2 += refunds[wi3];
+    if (refundSum2 + minerNano * BigInt(entries.length) !== totalBidsNano) return fail("Internal check failed: the refunds plus the miner fees do not account for every nanoERG bid — refusing to show it.");
+    minerTotalNano = minerNano * BigInt(entries.length);
+    totalNano = totalBidsNano;
+  }
+  var anyDust = false;
+  if (sold && sellerNetNano < SAFE_USER_MIN_BOX_NANO) anyDust = true;
+  var bidders = entries.map(function (e, i) {
+    var isWin = sold && i === winnerIndex;
+    var refundDust = !isWin && refunds[i] < SAFE_USER_MIN_BOX_NANO;
+    if (refundDust) anyDust = true;
+    return { name: e.name, address: e.address, network: e.network, type: e.type, bidNano: e.bidNano.toString(), bidErg: nanoToErg(e.bidNano.toString()), refundNano: refunds[i].toString(), refundErg: nanoToErg(refunds[i].toString()), isWinner: isWin, belowSafeMin: refundDust };
+  });
+  var winner = sold ? entries[winnerIndex] : null;
+  var lines = ["ERGO AUCTION SETTLEMENT PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Item: " + label,
+    "Seller (receives the winning bid if the item sells): " + sellerAddress,
+    "Reserve price: " + (reserveNano === 0n ? "none (0 ERG — any highest bid sells)" : nanoToErg(reserveNano.toString()) + " ERG (" + reserveNano.toString() + " nanoERG)") + ". Total bid: " + nanoToErg(totalBidsNano.toString()) + " ERG (" + totalBidsNano.toString() + " nanoERG) from " + bidders.length + " bidder(s). Highest bid: " + nanoToErg(highestNano.toString()) + " ERG (" + highestNano.toString() + " nanoERG) by " + entries[winnerIndex].name + (tieCount > 1 ? " — " + tieCount + " bids tie at the top, and the first-listed of them wins" : "") + ":"];
+  bidders.forEach(function (b, i) { lines.push("Bidder " + (i + 1) + " — " + b.name + ": bid " + b.bidErg + " ERG (" + b.bidNano + " nanoERG) from " + b.address); });
+  if (sold) {
+    lines.push("The item is SOLD — the highest bid " + (reserveNano === 0n ? "wins (there is no reserve)" : "reaches the reserve") + ". The settlement is ONE transaction, built from the winning bid box:");
+    lines.push("Winner: " + winner.name + " (" + winner.address + ") — pays their bid of " + nanoToErg(highestNano.toString()) + " ERG (" + highestNano.toString() + " nanoERG) and receives the item off-chain from the seller.");
+    lines.push("Seller receives: " + nanoToErg(sellerNetNano.toString()) + " ERG (" + sellerNetNano.toString() + " nanoERG) — the winning bid minus the service fee below.");
+    lines.push("Service fee (disclosed: 1% of the winning bid, rounded up, minimum 0.001 ERG — charged only because the item sold): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+    lines.push("Miner fee (one settlement transaction): " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG), paid by the seller on top of the winning bid.");
+    if (bidders.length > 1) {
+      lines.push("Every losing bid is refunded in its own transaction, the whole bid minus that transaction's miner fee:");
+      bidders.forEach(function (b, i) { if (i !== winnerIndex) lines.push("Bidder " + (i + 1) + " — " + b.name + ": refund " + b.refundErg + " ERG (" + b.refundNano + " nanoERG) to " + b.address + " (bid " + b.bidErg + " ERG minus the " + nanoToErg(minerNano.toString()) + " ERG miner fee)."); });
+      lines.push("Miner fees in total: " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG) — one settlement plus " + (bidders.length - 1) + " refund(s). The refunds plus the refund miner fees re-add to the losing bids exactly, and the seller's net plus the service fee re-adds to the winning bid exactly — verified a second way inside the tool before anything is shown.");
+    } else {
+      lines.push("There are no losing bids to refund — the winner was the only bidder.");
+    }
+    lines.push("Total moving through the settlement and refunds: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — every bid plus the settlement miner fee.");
+  } else {
+    lines.push("The item is NOT SOLD — the highest bid misses the reserve by " + nanoToErg(shortfallNano.toString()) + " ERG (" + shortfallNano.toString() + " nanoERG) — so NO service fee is charged, and every bid is refunded in its own transaction, the whole bid minus that transaction's miner fee:");
+    bidders.forEach(function (b, i) { lines.push("Bidder " + (i + 1) + " — " + b.name + ": refund " + b.refundErg + " ERG (" + b.refundNano + " nanoERG) to " + b.address + " (bid " + b.bidErg + " ERG minus the " + nanoToErg(minerNano.toString()) + " ERG miner fee)."); });
+    lines.push("Miner fees across the " + bidders.length + " refund transactions: " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG). The refunds plus those fees re-add to the total bid exactly — verified inside the tool before anything is shown. The seller receives nothing and keeps the item.");
+  }
+  lines.push("This is a settlement plan, not an auction contract: no script holds the bids, enforces a closing time or the reserve, or refunds anyone automatically — the seller (or the auction's own process) builds and signs the settlement or refund transactions in their own wallet, the item itself changes hands off-chain, and the bids are the ones typed in above, so check them against the auction's own records first. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network,
+    sellerAddress: sellerAddress, sellerType: sellerCheck.type,
+    label: label, sold: sold,
+    reserveNano: reserveNano.toString(), reserveErg: nanoToErg(reserveNano.toString()),
+    totalBidsNano: totalBidsNano.toString(), totalBidsErg: nanoToErg(totalBidsNano.toString()),
+    highestBidNano: highestNano.toString(), highestBidErg: nanoToErg(highestNano.toString()),
+    secondBidNano: secondNano.toString(), secondBidErg: nanoToErg(secondNano.toString()),
+    shortfallNano: shortfallNano.toString(), shortfallErg: nanoToErg(shortfallNano.toString()),
+    bidders: bidders, bidderCount: bidders.length,
+    winnerIndex: sold ? winnerIndex : null,
+    winnerName: winner ? winner.name : null,
+    winnerAddress: winner ? winner.address : null,
+    tieCount: tieCount,
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    sellerNetNano: sellerNetNano.toString(), sellerNetErg: nanoToErg(sellerNetNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust, sellerIsBidder: sellerIsBidder, includesServiceAddress: includesFeeAddr,
+    auctionText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -13491,7 +13694,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -14028,6 +14231,29 @@ if (typeof document !== "undefined") {
       if (res.creatorIsBacker) msg += "Note: the creator also appears as a backer, so that address is on both sides of the plan. ";
       if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
       msg += "Copyable crowdfunding campaign plan:\n" + res.crowdfundText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a crowdfunding contract, and no ERG has moved until the settlement or refund transactions are built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("auction-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("auction-result");
+      var res = buildAuctionPlan(document.getElementById("auction-seller").value, document.getElementById("auction-label").value, document.getElementById("auction-reserve").value, document.getElementById("auction-bids").value, document.getElementById("auction-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.sold) {
+        msg = "✓ Item \"" + res.label + "\" is SOLD on " + res.network + " — the highest bid of " + res.highestBidErg + " ERG (" + res.highestBidNano + " nanoERG) by " + res.winnerName + (res.tieCount > 1 ? " (one of " + res.tieCount + " bids tied at the top; the first-listed wins)" : "") + " out of " + res.bidderCount + " bidder(s) bidding " + res.totalBidsErg + " ERG in total: the seller " + res.sellerAddress + " receives " + res.sellerNetErg + " ERG (" + res.sellerNetNano + " nanoERG) in one settlement transaction, after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the winning bid, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "). ";
+        if (res.bidderCount > 1) msg += "Every losing bid is refunded its whole bid minus one " + res.minerFeeErg + " ERG miner fee in its own transaction, and the seller also pays the " + res.minerFeeErg + " ERG settlement miner fee on top of the winning bid (" + res.minerTotalErg + " ERG of miner fees in total). ";
+        else msg += "The winner was the only bidder, so there are no refunds; the seller also pays the " + res.minerFeeErg + " ERG settlement miner fee on top of the winning bid. ";
+      } else {
+        msg = "✓ Item \"" + res.label + "\" is NOT SOLD on " + res.network + " — the highest bid of " + res.highestBidErg + " ERG (" + res.highestBidNano + " nanoERG) from " + res.bidderCount + " bidder(s) misses the reserve of " + res.reserveErg + " ERG by " + res.shortfallErg + " ERG. No service fee is charged when an item does not sell: every bid is refunded its whole bid minus one " + res.minerFeeErg + " ERG miner fee in its own transaction (" + res.minerTotalErg + " ERG of miner fees across all the refunds), and the seller receives nothing and keeps the item. ";
+      }
+      if (res.anyBelowSafeMin) msg += "⚠ At least one output (the seller's net, or a refund) is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.sellerIsBidder) msg += "Note: the seller also appears as a bidder, so that address is on both sides of the plan. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable auction settlement plan:\n" + res.auctionText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not an auction contract, and no ERG has moved until the settlement or refund transactions are built and signed in a wallet.";
       out.textContent = msg;
     });
 

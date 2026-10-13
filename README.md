@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**122 free Ergo tools, local-first:** the live hub carries 122 tools that run
+**123 free Ergo tools, local-first:** the live hub carries 123 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor and crowdfunding campaign builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign and auction settlement builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 122 tools on one page it beats scrolling.
+headers) — with 123 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -349,6 +349,35 @@ headers) — with 122 tools on one page it beats scrolling.
   You get a copyable campaign block; the settlement or refund
   transactions are built and signed in a wallet. Plan only:
   it fetches nothing, signs nothing, and sends nothing.
+- **Ergo auction settlement builder** — selling an ERG item by
+  auction? Name the seller, the item and the reserve price, and
+  list each bid as name, address, bid. The highest bid wins —
+  a tie for the highest goes to the first-listed of the tied
+  bids. If the highest bid reaches the reserve, the item sells
+  and settles in one transaction: the seller receives the
+  winning bid minus the hub's disclosed service fee (1% of
+  the winning bid, rounded up, minimum 0.001 ERG, to my Ergo
+  address, charged only on a sale), and every losing bid is
+  refunded its whole bid minus one miner fee in its own
+  transaction, so the refunds plus their miner fees re-add to
+  the losing bids exactly. If the highest bid misses the
+  reserve, no service fee is charged at all and every bid is
+  refunded the same way; a bid too small to cover the miner
+  fee is refused. The winner is verified a second way inside
+  the tool before anything is shown (a reverse scan for the
+  maximum, and a check that no bid beats it and no earlier bid
+  ties it). Every address is checksum-verified, all addresses
+  must be on one network, duplicate bidder names and
+  addresses are refused, and sub-safe-minimum outputs are
+  flagged. Stated plainly in the plan: this is a settlement
+  plan, not an auction contract — no script holds the bids,
+  enforces a closing time or the reserve, or refunds anyone
+  automatically, the item itself changes hands off-chain, and
+  the bids are the ones typed in, to be checked against the
+  auction's own records. You get a copyable settlement
+  block; the settlement or refund transactions are built and
+  signed in a wallet. Plan only: it fetches nothing, signs
+  nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

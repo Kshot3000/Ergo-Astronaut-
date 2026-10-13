@@ -1,0 +1,108 @@
+'use strict';
+/* Offline tests for dual-chain.js — every network call is mocked. */
+const assert = require('node:assert');
+const dc = require('./dual-chain');
+
+let pass = 0;
+function ok(name, cond) {
+  if (!cond) throw new Error('FAIL: ' + name);
+  pass += 1;
+  console.log('PASS', name);
+}
+function jsonRes(body, status = 200) {
+  return { ok: status >= 200 && status < 300, status, json: async () => body };
+}
+async function throws(name, fn, needle) {
+  try {
+    await fn();
+  } catch (e) {
+    ok(name, String(e.message).includes(needle));
+    return;
+  }
+  throw new Error('FAIL (did not throw): ' + name);
+}
+
+const KYLE_ERG = '9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy';
+const MN_ADDR = 'mn_addr_test1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
+const CONTRACT = '1fca6b4cec100a425db72d769d1ef19f673de7552b4c9196611797f6b565e7ed';
+
+(async () => {
+  /* Ergo height via mocked explorer */
+  const ergoFetch = async (url) => {
+    assert.ok(url.includes('/blocks?'), 'ergo blocks url');
+    return jsonRes({ items: [{ height: 1890980, id: 'abc' }], total: 1 });
+  };
+  ok('ergo height parsed', (await dc.getErgoHeight({ fetchImpl: ergoFetch })) === 1890980);
+
+  await throws('ergo height http failure surfaces', () =>
+    dc.getErgoHeight({ fetchImpl: async () => jsonRes({}, 503) }), '503');
+  await throws('ergo height bad shape refused', () =>
+    dc.getErgoHeight({ fetchImpl: async () => jsonRes({ items: [] }) }), 'unexpected');
+
+  /* Ergo box + balance */
+  const boxFetch = async (url) => {
+    if (url.includes('/boxes/')) return jsonRes({ boxId: 'a'.repeat(64), value: 1000000 });
+    if (url.includes('/balance/confirmed')) return jsonRes({ nanoErgs: 42, tokens: [] });
+    throw new Error('unexpected url ' + url);
+  };
+  ok('ergo box fetched', (await dc.getErgoBox('a'.repeat(64), { fetchImpl: boxFetch })).value === 1000000);
+  await throws('ergo box id validated', () => dc.getErgoBox('xyz', { fetchImpl: boxFetch }), '64 hex');
+  ok('ergo balance parsed', (await dc.getErgoAddressBalance(KYLE_ERG, { fetchImpl: boxFetch })).nanoErgs === 42);
+  await throws('ergo balance bad shape refused', () =>
+    dc.getErgoAddressBalance(KYLE_ERG, { fetchImpl: async () => jsonRes({}) }), 'unexpected');
+
+  /* Midnight GraphQL */
+  let seenBody = null;
+  const mnFetch = async (url, opts) => {
+    seenBody = JSON.parse(opts.body);
+    if (seenBody.query.includes('contractAction')) {
+      return jsonRes({ data: { contractAction: { address: CONTRACT, state: 's', zswapState: 'z' } } });
+    }
+    return jsonRes({ data: { block: { height: 12345, hash: 'ff', timestamp: 1 } } });
+  };
+  ok('midnight height parsed', (await dc.getMidnightHeight({ fetchImpl: mnFetch })) === 12345);
+  ok('midnight default endpoint is preprod', dc.MIDNIGHT_INDEXER_DEFAULTS.preprod.includes('indexer.preprod.midnight.network'));
+  ok('midnight query targets v4 api', dc.MIDNIGHT_INDEXER_DEFAULTS.preprod.endsWith('/api/v4/graphql'));
+  const action = await dc.getMidnightContractAction(CONTRACT, { fetchImpl: mnFetch });
+  ok('midnight contract action fetched', action && action.address === CONTRACT);
+  ok('midnight contract address sent as variable', seenBody.variables.address === CONTRACT);
+  await throws('midnight graphql errors surface', () =>
+    dc.getMidnightHeight({ fetchImpl: async () => jsonRes({ errors: [{ message: 'boom' }] }) }), 'boom');
+  await throws('midnight contract address must be hex', () =>
+    dc.getMidnightContractAction('not-hex!', { fetchImpl: mnFetch }), 'hex');
+
+  /* Address format checks */
+  ok('ergo address format: kyle mainnet p2pk', dc.looksLikeErgoAddress(KYLE_ERG) === true);
+  ok('ergo address format: rejects symbols', dc.looksLikeErgoAddress('0OIl+/=') === false);
+  ok('ergo address format: rejects short', dc.looksLikeErgoAddress('9abc') === false);
+  ok('midnight address format: unshielded test', dc.looksLikeMidnightAddress(MN_ADDR) === true);
+  ok('midnight address format: dust', dc.looksLikeMidnightAddress('mn_dust1qqqqqqqqqqqqqqqqqqqqqqqqq') === true);
+  ok('midnight address format: rejects ergo address', dc.looksLikeMidnightAddress(KYLE_ERG) === false);
+
+  /* Intent planner */
+  const plan = dc.planBridgeIntent({ nanoErg: 2000000000n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: 7 });
+  ok('plan direction', plan.direction === 'ergo->midnight');
+  ok('plan amount is string nanoERG', plan.amountNanoErg === '2000000000');
+  ok('plan leg 1 is the live rosen leg', plan.legs[0].status === 'live' && plan.legs[0].via === 'Rosen Bridge');
+  ok('plan leg 2 honestly labelled design', plan.legs[1].status === 'design');
+  ok('plan overall status honestly design', plan.status === 'design');
+  ok('plan has refund path', plan.refund && plan.refund.chain === 'Ergo');
+  const plan2 = dc.planBridgeIntent({ nanoErg: 2000000000, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: 7 });
+  ok('intent id deterministic across bigint/number', plan.intentId === plan2.intentId);
+  ok('intent id is sha256 hex', /^[0-9a-f]{64}$/.test(plan.intentId));
+  const plan3 = dc.planBridgeIntent({ nanoErg: 2000000000n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: 8 });
+  ok('nonce changes intent id', plan3.intentId !== plan.intentId);
+  await throws('plan refuses zero amount', () =>
+    dc.planBridgeIntent({ nanoErg: 0n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR }), 'positive');
+  await throws('plan refuses bad ergo sender', () =>
+    dc.planBridgeIntent({ nanoErg: 1n, ergoSender: 'nope', midnightRecipient: MN_ADDR }), 'Ergo address');
+  await throws('plan refuses bad midnight recipient', () =>
+    dc.planBridgeIntent({ nanoErg: 1n, ergoSender: KYLE_ERG, midnightRecipient: KYLE_ERG }), 'Midnight address');
+  await throws('plan refuses float amount', () =>
+    dc.planBridgeIntent({ nanoErg: 1.5, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR }), 'BigInt or a safe integer');
+
+  console.log('ALL PASS (' + pass + ' checks)');
+})().catch((e) => {
+  console.error(e.message);
+  process.exit(1);
+});

@@ -3542,6 +3542,164 @@ function buildLoanSyndicatePlan(labelRaw, borrowerRaw, lendersRaw, repaymentStr,
   };
 }
 
+/* ---------- Tiered sales commission builder (tool 130) ---------- */
+/* A seller pays ONE agent commission on total sales, but the
+   rate is MARGINAL, like tax brackets: each bracket's rate
+   applies only to the slice of sales inside that bracket.
+   Brackets are listed as cumulative caps ("up to 100 ERG at
+   5%, up to 500 at 10%, the rest at 15%"), so on 1,000 ERG of
+   sales the commission is 100x5% + 400x10% + 500x15% = 120
+   ERG — NOT 15% of everything, and not a flat rate either.
+   That marginal-slice rule is what separates this from the
+   flat royalty of tool 116 and the capped fill of tool 127.
+   Each bracket's commission is floored to the nanoERG
+   (floor(portion x rateBps / 10000)); the sub-nanoERG
+   fractions stay with the seller, never invented. Verified a
+   second way inside the tool before anything is shown: every
+   bracket commission is recomputed by the split multiplication
+   (portion/10000)xbps + ((portion%10000)xbps)/10000, the
+   portions must re-add to the sales exactly, and the seller
+   net + agent net + service fee must re-add to the sales
+   exactly. The disclosed service fee is 1% of the GROSS
+   COMMISSION (rounded up, minimum 0.001 ERG — as its own
+   output to SERVICE_FEE_ADDRESS), taken out of the agent's
+   commission, charged once, never per bracket; a commission
+   the minimum fee would eat is refused outright. Seller and
+   agent are checksum-verified (tool 2), distinct, and on ONE
+   network. Sub-safe-minimum nets are flagged. Planning only,
+   stated plainly: this is a commission plan, NOT a sales
+   contract — nothing records the sales, holds the money, or
+   proves the sales figure. It fetches nothing, signs
+   nothing, sends nothing. */
+var TIERCOMM_MAX_BRACKETS = 6;
+var TIERCOMM_MAX_LABEL_CHARS = 60;
+function buildTieredCommissionPlan(labelRaw, sellerRaw, agentRaw, bracketsRaw, salesStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, label: null, seller: null, agent: null, brackets: null, bracketCount: null, salesNano: null, salesErg: null, grossCommissionNano: null, grossCommissionErg: null, effectiveRateBps: null, effectiveRatePercent: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, agentNetNano: null, agentNetErg: null, sellerNetNano: null, sellerNetErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, agentBelowSafeMin: null, sellerBelowSafeMin: null, sellerIsServiceAddress: null, agentIsServiceAddress: null, commissionText: null };
+  };
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > TIERCOMM_MAX_LABEL_CHARS) return fail("The sale name is " + label.length + " characters — keep it to " + TIERCOMM_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed sale)";
+  var sales = ergToNano(salesStr);
+  if (sales === null || BigInt(sales) <= 0n) return fail("The total sales must be an ERG amount above zero — commission on no sales pays nobody.");
+  var salesNano = BigInt(sales);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var rawLines = (bracketsRaw == null ? "" : String(bracketsRaw)).split(/\r?\n/);
+  var entries = [];
+  var prevCapNano = 0n;
+  var restCount = 0;
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — cap in ERG (or the word rest), rate percent (e.g. \"100, 5\").");
+    var capRaw = parts[0].replace(/\s+/g, " ").trim();
+    var rateRaw = parts[1].replace(/\s+/g, " ").trim();
+    var isRest = /^rest$/i.test(capRaw);
+    var capNano = null;
+    if (isRest) { restCount++; }
+    else {
+      var cap = ergToNano(capRaw);
+      if (cap === null || BigInt(cap) <= 0n) return fail("Line " + lineNo + "'s cap is refused: write a plain ERG amount above zero, or the word rest for the final bracket.");
+      capNano = BigInt(cap);
+      if (capNano <= prevCapNano) return fail("Line " + lineNo + "'s cap of " + nanoToErg(capNano.toString()) + " ERG does not exceed the previous bracket's cap — bracket caps are cumulative and must rise, bracket by bracket, or the slices between them make no sense.");
+      prevCapNano = capNano;
+    }
+    var rateBps = parsePrizePercentBps(rateRaw);
+    if (rateBps === null) return fail("Line " + lineNo + "'s rate is refused: write a plain percentage with at most two decimal places (e.g. 5, 12.5, 33.33) — anything else cannot be checked exactly.");
+    if (rateBps > 10000n) return fail("Line " + lineNo + "'s rate is refused: one bracket cannot take more than 100% of its own slice of the sales.");
+    entries.push({ line: lineNo, isRest: isRest, capNano: capNano, rateBps: rateBps });
+  }
+  if (entries.length < 2) return fail("A tiered commission needs at least two brackets — a single flat rate is a plain royalty split, which tool 116 builds and this builder does not fee.");
+  if (entries.length > TIERCOMM_MAX_BRACKETS) return fail("This builder takes at most " + TIERCOMM_MAX_BRACKETS + " brackets (you listed " + entries.length + ") — a commission table with more brackets than that belongs in a dedicated contract flow, not a copyable plan.");
+  if (restCount !== 1 || !entries[entries.length - 1].isRest) return fail("The last bracket must be the word rest, and it must be the only rest bracket — without an uncapped final bracket, sales above the highest cap would earn no commission and the plan would silently drop them.");
+  var seller = (sellerRaw == null ? "" : String(sellerRaw)).trim();
+  var scheck = checkErgoAddress(seller);
+  if (!scheck.valid) return fail("The seller's address is refused: " + scheck.reason);
+  var agent = (agentRaw == null ? "" : String(agentRaw)).trim();
+  var acheck = checkErgoAddress(agent);
+  if (!acheck.valid) return fail("The agent's address is refused: " + acheck.reason);
+  if (acheck.network !== scheck.network) return fail("The agent is a " + acheck.network + " address but the seller is " + scheck.network + " — one commission plan lives on one network, so both addresses must match.");
+  if (agent === seller) return fail("The seller and the agent are the same address — paying yourself a commission needs no plan and no fee.");
+  var network = scheck.network;
+  /* Route 1: marginal slices. Each bracket's portion is the
+     slice of sales between the previous cap and its own cap
+     (the rest bracket takes everything above the last cap),
+     and its commission is floored to the nanoERG. */
+  var brackets = [];
+  var grossNano = 0n;
+  var portionSum = 0n;
+  var prev = 0n;
+  for (var bi = 0; bi < entries.length; bi++) {
+    var e = entries[bi];
+    var portion;
+    if (e.isRest) portion = salesNano > prev ? salesNano - prev : 0n;
+    else {
+      var avail = salesNano > prev ? salesNano - prev : 0n;
+      var width = e.capNano - prev;
+      portion = avail < width ? avail : width;
+      prev = e.capNano;
+    }
+    var comm = (portion * e.rateBps) / 10000n;
+    /* Route 2 (the second-way verification): recompute this
+       bracket's commission by the split multiplication, and
+       keep the running portion total for the re-add check. */
+    var comm2 = (portion / 10000n) * e.rateBps + ((portion % 10000n) * e.rateBps) / 10000n;
+    if (comm !== comm2) return fail("Internal check failed: the two commission computations disagree on bracket " + (bi + 1) + " — refusing to show it.");
+    portionSum += portion;
+    grossNano += comm;
+    brackets.push({ index: bi + 1, isRest: e.isRest, capNano: e.capNano === null ? null : e.capNano.toString(), capErg: e.capNano === null ? null : nanoToErg(e.capNano.toString()), rateBps: e.rateBps.toString(), ratePercent: formatPrizePercent(e.rateBps), portionNano: portion.toString(), portionErg: nanoToErg(portion.toString()), commissionNano: comm.toString(), commissionErg: nanoToErg(comm.toString()), reached: portion > 0n });
+  }
+  if (portionSum !== salesNano) return fail("Internal check failed: the bracket slices do not re-add to the total sales — refusing to show it.");
+  if (grossNano <= 0n) return fail("Those brackets earn no commission on " + nanoToErg(salesNano.toString()) + " ERG of sales — every rate on the slices the sales actually reach is zero, so there is nothing to plan and nothing to fee.");
+  if (grossNano >= salesNano && brackets.every(function (b) { return b.rateBps !== "10000"; })) return fail("Internal check failed: the gross commission is not below the sales — refusing to show it.");
+  /* Service fee: same two-route check as tools 112-129, on the GROSS COMMISSION. */
+  var feeA = (grossNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = grossNano / 100n + (grossNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  if (feeNano >= grossNano) return fail("The disclosed service fee (1% of the gross commission, rounded up, minimum 0.001 ERG) would eat the whole commission of " + nanoToErg(grossNano.toString()) + " ERG — the agent would receive nothing. Raise the sales or the rates so the commission clears the minimum fee.");
+  var agentNetNano = grossNano - feeNano;
+  var sellerNetNano = salesNano - grossNano;
+  if (agentNetNano + feeNano + sellerNetNano !== salesNano) return fail("Internal check failed: the agent net plus the service fee plus the seller net do not re-add to the sales — refusing to show it.");
+  var effBps = (grossNano * 10000n) / salesNano;
+  var totalNano = salesNano + minerNano;
+  var agentDust = agentNetNano > 0n && agentNetNano < SAFE_USER_MIN_BOX_NANO;
+  var sellerDust = sellerNetNano < SAFE_USER_MIN_BOX_NANO;
+  var outBrackets = brackets;
+  var lines = ["ERGO TIERED SALES COMMISSION PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Sale: " + label,
+    "Sales: " + nanoToErg(salesNano.toString()) + " ERG (" + salesNano.toString() + " nanoERG) on " + network + ", settled in one transaction. The seller " + seller + " keeps the sales minus the gross commission; the agent " + agent + " receives the gross commission minus the service fee."];
+  outBrackets.forEach(function (b) {
+    lines.push("Bracket " + b.index + " — " + (b.isRest ? "all sales above the last cap" : "sales up to " + b.capErg + " ERG cumulative") + " at " + b.ratePercent + ": the slice of sales in this bracket is " + b.portionErg + " ERG (" + b.portionNano + " nanoERG), earning " + b.commissionErg + " ERG (" + b.commissionNano + " nanoERG)" + (b.reached ? "." : " — the sales never reach this bracket."));
+  });
+  lines.push("Gross commission: " + nanoToErg(grossNano.toString()) + " ERG (" + grossNano.toString() + " nanoERG) — an effective rate of " + formatPrizePercent(effBps) + " on the whole sales, because each bracket's rate applies only to its own slice (marginal, never the top rate on everything). Each bracket's commission is floored to the nanoERG, so the sub-nanoERG fractions stay with the seller.");
+  lines.push("Service fee (disclosed: 1% of the gross commission, rounded up, minimum 0.001 ERG): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS + " — taken out of the agent's commission, charged once on the whole commission, never per bracket. The agent receives " + nanoToErg(agentNetNano.toString()) + " ERG (" + agentNetNano.toString() + " nanoERG).");
+  lines.push("Seller net: " + nanoToErg(sellerNetNano.toString()) + " ERG (" + sellerNetNano.toString() + " nanoERG) — the sales minus the gross commission. Verified a second way inside the tool (every bracket commission recomputed by the split multiplication, the slices re-adding to the sales, and the agent net plus the fee plus the seller net re-adding to the sales) before anything is shown.");
+  lines.push("Total cost of settling: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the sales plus one " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) miner fee for the single settlement transaction, paid by the seller on top.");
+  lines.push("This is a commission plan, not a sales contract: no script records the sales, holds the money, or proves the sales figure — check the sales total and the bracket table against your own records before settling. The one transaction is built and signed in the seller's own wallet. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network, label: label, seller: seller, agent: agent,
+    brackets: outBrackets, bracketCount: outBrackets.length,
+    salesNano: salesNano.toString(), salesErg: nanoToErg(salesNano.toString()),
+    grossCommissionNano: grossNano.toString(), grossCommissionErg: nanoToErg(grossNano.toString()),
+    effectiveRateBps: effBps.toString(), effectiveRatePercent: formatPrizePercent(effBps),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    agentNetNano: agentNetNano.toString(), agentNetErg: nanoToErg(agentNetNano.toString()),
+    sellerNetNano: sellerNetNano.toString(), sellerNetErg: nanoToErg(sellerNetNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: agentDust || sellerDust, agentBelowSafeMin: agentDust, sellerBelowSafeMin: sellerDust,
+    sellerIsServiceAddress: seller === SERVICE_FEE_ADDRESS, agentIsServiceAddress: agent === SERVICE_FEE_ADDRESS,
+    commissionText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -14718,7 +14876,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -15388,6 +15546,22 @@ if (typeof document !== "undefined") {
       if (res.includesServiceAddress) msg += "Note: one lender in this plan is the service-fee address itself. ";
       if (res.borrowerIsServiceAddress) msg += "Note: the borrower in this plan is the service-fee address itself. ";
       msg += "Copyable loan syndicate plan:\n" + res.syndicateText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing \u2014 this is not a loan contract, and no ERG has moved until the funding and repayment transactions are built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("tiercomm-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("tiercomm-result");
+      var res = buildTieredCommissionPlan(document.getElementById("tiercomm-label").value, document.getElementById("tiercomm-seller").value, document.getElementById("tiercomm-agent").value, document.getElementById("tiercomm-brackets").value, document.getElementById("tiercomm-sales").value, document.getElementById("tiercomm-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg = "✓ Tiered commission \"" + res.label + "\" on " + res.network + " — " + res.salesErg + " ERG (" + res.salesNano + " nanoERG) of sales across " + res.bracketCount + " marginal brackets: " + res.brackets.map(function (b) { return "bracket " + b.index + " (" + b.ratePercent + " on " + b.portionErg + " ERG) earns " + b.commissionErg + " ERG"; }).join("; ") + ". Gross commission " + res.grossCommissionErg + " ERG (an effective " + res.effectiveRatePercent + " on the whole sales). A disclosed service fee of " + res.serviceFeeErg + " ERG goes to " + res.serviceFeeAddress + " (1% of the gross commission, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), taken out of the agent's commission, so the agent receives " + res.agentNetErg + " ERG and the seller keeps " + res.sellerNetErg + " ERG, plus one " + res.minerFeeErg + " ERG miner fee for the single settlement transaction — total cost of settling " + res.totalErg + " ERG. ";
+      if (res.anyBelowSafeMin) msg += "⚠ At least one net is below the recommended 0.001 ERG safe minimum per box (tool 5) — a net that small may be impractical to send as its own output. ";
+      if (res.agentIsServiceAddress) msg += "Note: the agent in this plan is the service-fee address itself. ";
+      if (res.sellerIsServiceAddress) msg += "Note: the seller in this plan is the service-fee address itself. ";
+      msg += "Copyable tiered commission plan:\n" + res.commissionText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a sales contract, and no ERG has moved until the settlement transaction is built and signed in a wallet.";
       out.textContent = msg;
     });
 

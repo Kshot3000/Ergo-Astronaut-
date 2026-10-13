@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**129 free Ergo tools, local-first:** the live hub carries 129 tools that run
+**130 free Ergo tools, local-first:** the live hub carries 130 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split and loan syndicate builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate and tiered sales commission builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -564,6 +564,43 @@ headers) — with 129 tools on one page it beats scrolling.
   block; the transactions are built and signed in each
   party's own wallet. Plan only: it fetches nothing,
   signs nothing, and sends nothing.
+- **Ergo tiered sales commission builder** — paying an
+  agent commission where the rate rises in brackets?
+  List each bracket (cumulative cap in ERG, rate
+  percent) with the last cap written as the word rest.
+  Each rate is marginal: it applies only to the slice
+  of sales inside its own bracket, so 5% up to 100,
+  10% up to 500 and 15% above earn 120 ERG on 1,000
+  ERG of sales — not 15% of everything. That marginal
+  rule is what separates it from a flat royalty split
+  and from a revenue waterfall, whose tiers take
+  amounts up to a cap rather than earning a rate on a
+  slice. The hub's disclosed service fee is 1% of the
+  gross commission (rounded up, minimum 0.001 ERG, to
+  my Ergo address), taken out of the agent's
+  commission and charged once on the whole commission,
+  never per bracket; a commission the minimum fee
+  would eat is refused. Each bracket's commission is
+  floored to the nanoERG (the sub-nanoERG fractions
+  stay with the seller) and verified a second way
+  inside the tool: every bracket commission is
+  recomputed by the split multiplication, the slices
+  re-add to the sales exactly, and the agent net plus
+  the fee plus the seller net re-add to the sales
+  exactly. The plan reports the effective rate on the
+  whole sales, since a marginal table's top rate is
+  never its real rate. The settlement is one
+  transaction with one miner fee, paid by the seller
+  on top. All addresses are checksum-verified, the
+  seller and the agent distinct, and all on one
+  network, and sub-safe-minimum nets are flagged.
+  Stated plainly in the plan: this is a commission
+  plan, not a sales contract — nothing records the
+  sales, holds the money, or proves the sales figure.
+  You get a copyable commission block; the one
+  transaction is built and signed in the seller's own
+  wallet. Plan only: it fetches nothing, signs
+  nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

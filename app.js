@@ -3365,6 +3365,183 @@ function buildPrizeSplitPlan(labelRaw, winnersRaw, poolStr, minerFeeStr) {
   };
 }
 
+/* ---------- Loan syndicate builder (tool 129) ---------- */
+/* Several lenders fund ONE loan between them and the borrower
+   makes ONE repayment, which is split back pro-rata by the
+   amount each lender funded. The repayment is an independent
+   input — it is NOT assumed to equal the funded total: more
+   than the funded total is interest (each lender profits
+   pro-rata), less is a shortfall (each lender loses pro-rata),
+   and it can land exactly on break-even. That independence is
+   what separates a syndicate from a stake/reward split
+   (tool 121), where the pool being split has no funded total
+   of its own to compare against, and from a single-lender
+   loan schedule (tool 119). The disclosed service fee is 1%
+   of the REPAYMENT (rounded up, minimum 0.001 ERG — as its
+   own output to SERVICE_FEE_ADDRESS), taken off the top of
+   the repayment before the split runs and charged once on
+   the whole repayment, never per lender; a repayment the
+   minimum fee would eat is refused outright. Payouts use
+   largest-remainder rounding over the distributable amount
+   with the total funded as the exact denominator, verified
+   a second way inside the tool before anything is shown:
+   every payout must be its exact floor or its floor plus
+   one nanoERG, the payouts must re-add to the distributable
+   amount (and, with the fee, to the repayment) exactly, and
+   no lender who was not bumped may hold a larger remainder
+   than one who was — equal remainders go to the earlier
+   lender. Each lender's profit or loss (payout minus what
+   they funded, an exact signed integer) is reported, and
+   the lenders' net must equal distributable minus funded.
+   All addresses are checksum-verified (tool 2), the
+   lenders distinct, the borrower distinct from every
+   lender, and all on ONE network. Sub-safe-minimum payouts
+   are flagged. Planning only, stated plainly: this is a
+   syndicate plan, NOT a loan contract — nothing holds the
+   lenders' ERG, collects the repayment, or proves the
+   borrower will pay. It fetches nothing, signs nothing,
+   sends nothing. */
+var SYNDICATE_MAX_LENDERS = 12;
+var SYNDICATE_MAX_NAME_CHARS = 40;
+var SYNDICATE_MAX_LABEL_CHARS = 60;
+function formatSignedNano(nano) {
+  var neg = nano < 0n;
+  var abs = neg ? -nano : nano;
+  var s = nanoToErg(abs.toString());
+  if (nano === 0n) return "0";
+  return (neg ? "-" : "+") + s;
+}
+function buildLoanSyndicatePlan(labelRaw, borrowerRaw, lendersRaw, repaymentStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, label: null, borrower: null, lenders: null, lenderCount: null, totalFundedNano: null, totalFundedErg: null, repaymentNano: null, repaymentErg: null, distributableNano: null, distributableErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, totalPayoutsNano: null, totalPayoutsErg: null, netNano: null, netErg: null, outcome: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, borrowerIsServiceAddress: null, syndicateText: null };
+  };
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > SYNDICATE_MAX_LABEL_CHARS) return fail("The loan name is " + label.length + " characters — keep it to " + SYNDICATE_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed loan)";
+  var repayment = ergToNano(repaymentStr);
+  if (repayment === null || BigInt(repayment) <= 0n) return fail("The repayment must be an ERG amount above zero — a syndicate settling no repayment pays nobody.");
+  var repaymentNano = BigInt(repayment);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var rawLines = (lendersRaw == null ? "" : String(lendersRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenAddr = {};
+  var seenNames = {};
+  var network = null;
+  var totalFundedNano = 0n;
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, amount funded in ERG (e.g. \"Alice, an address, 60\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addr = parts[1].trim();
+    var amtRaw = parts[2].replace(/\s+/g, " ").trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the lender a name before the first comma, so the plan says who funded what.");
+    if (name.length > SYNDICATE_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + SYNDICATE_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each lender once; combine one person's funding into a single line so their share is computed once.");
+    seenNames[nameKey] = lineNo;
+    var check = checkErgoAddress(addr);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (seenAddr[addr]) return fail("The address on line " + lineNo + " already appears on line " + seenAddr[addr] + " — list each address once, so the one repayment transaction never pays the same lender twice by accident.");
+    seenAddr[addr] = lineNo;
+    if (network === null) network = check.network;
+    else if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the earlier lenders are " + network + " — one syndicate lives on one network, so all addresses must match.");
+    var funded = ergToNano(amtRaw);
+    if (funded === null || BigInt(funded) <= 0n) return fail("Line " + lineNo + "'s funded amount is refused: write a plain ERG amount above zero (e.g. 60, 12.5) — a lender who funded nothing has no share of the repayment.");
+    totalFundedNano += BigInt(funded);
+    entries.push({ name: name, address: addr, network: check.network, type: check.type, line: lineNo, fundedNano: BigInt(funded) });
+  }
+  if (entries.length < 2) return fail("A syndicate needs at least two lenders — a loan from one lender is a plain loan, which tool 119 schedules and this builder does not fee.");
+  if (entries.length > SYNDICATE_MAX_LENDERS) return fail("This builder takes at most " + SYNDICATE_MAX_LENDERS + " lenders (you listed " + entries.length + ") — a syndicate with more lenders than that belongs in a dedicated contract flow, not a copyable plan.");
+  var borrower = (borrowerRaw == null ? "" : String(borrowerRaw)).trim();
+  var bcheck = checkErgoAddress(borrower);
+  if (!bcheck.valid) return fail("The borrower's address is refused: " + bcheck.reason);
+  if (bcheck.network !== network) return fail("The borrower is a " + bcheck.network + " address but the lenders are " + network + " — one syndicate lives on one network, so all addresses must match.");
+  if (seenAddr[borrower]) return fail("The borrower's address is also listed as a lender (line " + seenAddr[borrower] + ") — the borrower cannot fund their own loan in this plan; a lender who is also the borrower belongs in a dedicated contract flow.");
+  /* Service fee: same two-route check as tools 112-128, on the REPAYMENT. */
+  var feeA = (repaymentNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = repaymentNano / 100n + (repaymentNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a split rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  if (feeNano >= repaymentNano) return fail("The disclosed service fee (1% of the repayment, rounded up, minimum 0.001 ERG) would eat the whole repayment of " + nanoToErg(repaymentNano.toString()) + " ERG — no lender would receive anything. Raise the repayment so it clears the minimum fee.");
+  var distributableNano = repaymentNano - feeNano;
+  /* Route 1: largest-remainder allocation over the distributable,
+     each lender's exact share being funded / totalFunded. */
+  var floors = entries.map(function (e) { return (distributableNano * e.fundedNano) / totalFundedNano; });
+  var rems = entries.map(function (e, i) { return distributableNano * e.fundedNano - floors[i] * totalFundedNano; });
+  var floorSum = floors.reduce(function (s, x) { return s + x; }, 0n);
+  var leftover = distributableNano - floorSum;
+  var order = entries.map(function (_, i) { return i; }).sort(function (a, b) {
+    if (rems[a] !== rems[b]) return rems[a] > rems[b] ? -1 : 1;
+    return a - b;
+  });
+  var payouts = floors.slice();
+  var bumped = entries.map(function () { return false; });
+  for (var bi = 0; bi < Number(leftover); bi++) { payouts[order[bi]] += 1n; bumped[order[bi]] = true; }
+  /* Route 2 (the second-way verification): every payout is its
+     floor or its floor plus one, the payouts re-add to the
+     distributable exactly, and no unbumped lender holds a
+     larger remainder than a bumped one (ties go earlier). */
+  var totalPayoutsNano = 0n;
+  for (var vi = 0; vi < entries.length; vi++) {
+    var delta = payouts[vi] - floors[vi];
+    if (delta !== 0n && delta !== 1n) return fail("Internal check failed: a payout is neither its floor nor its floor plus one nanoERG — refusing to show it.");
+    totalPayoutsNano += payouts[vi];
+    for (var vj = 0; vj < entries.length; vj++) {
+      if (bumped[vi] && !bumped[vj] && (rems[vj] > rems[vi] || (rems[vj] === rems[vi] && vj < vi))) return fail("Internal check failed: the largest-remainder ordering does not hold — refusing to show it.");
+    }
+  }
+  if (totalPayoutsNano !== distributableNano || totalPayoutsNano + feeNano !== repaymentNano) return fail("Internal check failed: the payouts plus the service fee do not re-add to the repayment — refusing to show it.");
+  var netNano = totalPayoutsNano - totalFundedNano;
+  var sumProfits = 0n;
+  for (var pi = 0; pi < entries.length; pi++) sumProfits += payouts[pi] - entries[pi].fundedNano;
+  if (sumProfits !== netNano) return fail("Internal check failed: the lenders' profits and losses do not re-add to the syndicate net — refusing to show it.");
+  var outcome = netNano > 0n ? "profit" : (netNano < 0n ? "loss" : "break-even");
+  var totalNano = repaymentNano + minerNano;
+  var anyDust = false;
+  var includesFeeAddr = false;
+  var lenders = entries.map(function (e, i) {
+    var p = payouts[i];
+    var profit = p - e.fundedNano;
+    var dust = p > 0n && p < SAFE_USER_MIN_BOX_NANO;
+    if (dust) anyDust = true;
+    if (e.address === SERVICE_FEE_ADDRESS) includesFeeAddr = true;
+    return { name: e.name, address: e.address, network: e.network, type: e.type, fundedNano: e.fundedNano.toString(), fundedErg: nanoToErg(e.fundedNano.toString()), payoutNano: p.toString(), payoutErg: nanoToErg(p.toString()), profitNano: profit.toString(), profitErg: formatSignedNano(profit), bumped: bumped[i], belowSafeMin: dust };
+  });
+  var lines = ["ERGO LOAN SYNDICATE PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Loan: " + label,
+    "Borrower: " + borrower + " receives " + nanoToErg(totalFundedNano.toString()) + " ERG (" + totalFundedNano.toString() + " nanoERG) on " + network + ", funded by " + lenders.length + " lenders:"];
+  lenders.forEach(function (w, i) {
+    lines.push("Lender " + (i + 1) + " — " + w.name + ": funded " + w.fundedErg + " ERG (" + w.fundedNano + " nanoERG), repayment share receives " + w.payoutErg + " ERG (" + w.payoutNano + " nanoERG) to " + w.address + " — " + (w.profitNano === "0" ? "breaks even (0 ERG)" : (BigInt(w.profitNano) > 0n ? "a profit of " : "a loss of ") + w.profitErg + " ERG (" + w.profitNano + " nanoERG)") + ".");
+  });
+  lines.push("Repayment: the borrower pays back " + nanoToErg(repaymentNano.toString()) + " ERG (" + repaymentNano.toString() + " nanoERG) in one transaction — against " + nanoToErg(totalFundedNano.toString()) + " ERG funded, the lenders together " + (outcome === "break-even" ? "break exactly even after the fee" : (outcome === "profit" ? "come out ahead by " : "come up short by ") + nanoToErg((netNano < 0n ? -netNano : netNano).toString()) + " ERG (" + (netNano < 0n ? -netNano : netNano).toString() + " nanoERG) after the fee") + ".");
+  lines.push("Service fee (disclosed: 1% of the repayment, rounded up, minimum 0.001 ERG): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS + " — taken off the top of the repayment before the split runs, so the lenders share the " + nanoToErg(distributableNano.toString()) + " ERG (" + distributableNano.toString() + " nanoERG) that is left, and the fee is charged once on the whole repayment, never per lender.");
+  lines.push("Shares are each lender's funded amount over the total funded, applied by largest-remainder rounding in exact nanoERG, so the payouts plus the service fee re-add to the repayment exactly — verified a second way inside the tool (every payout is its floor or its floor plus one, and no unbumped lender holds a larger remainder than a bumped one) before anything is shown.");
+  lines.push("Total cost to the borrower: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the repayment plus one " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) miner fee for the single repayment transaction, paid by the borrower on top.");
+  lines.push("This is a syndicate plan, not a loan contract: no script holds the lenders' ERG, collects the repayment, or proves the borrower will pay or that the funding happened as listed — check the lenders, the funded amounts and the repayment against your own records before relying on it. The funding and repayment transactions are built and signed in each party's own wallet. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network, label: label, borrower: borrower,
+    lenders: lenders, lenderCount: lenders.length,
+    totalFundedNano: totalFundedNano.toString(), totalFundedErg: nanoToErg(totalFundedNano.toString()),
+    repaymentNano: repaymentNano.toString(), repaymentErg: nanoToErg(repaymentNano.toString()),
+    distributableNano: distributableNano.toString(), distributableErg: nanoToErg(distributableNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    totalPayoutsNano: totalPayoutsNano.toString(), totalPayoutsErg: nanoToErg(totalPayoutsNano.toString()),
+    netNano: netNano.toString(), netErg: formatSignedNano(netNano), outcome: outcome,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust, includesServiceAddress: includesFeeAddr,
+    borrowerIsServiceAddress: borrower === SERVICE_FEE_ADDRESS,
+    syndicateText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -14541,7 +14718,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -15194,6 +15371,25 @@ if (typeof document !== "undefined") {
       out.textContent = msg;
     });
 
+
+    document.getElementById("syndicate-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("syndicate-result");
+      var res = buildLoanSyndicatePlan(document.getElementById("syndicate-label").value, document.getElementById("syndicate-borrower").value, document.getElementById("syndicate-lenders").value, document.getElementById("syndicate-repayment").value, document.getElementById("syndicate-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "\u2717 " + res.reason;
+        return;
+      }
+      var msg = "\u2713 Loan syndicate \"" + res.label + "\" on " + res.network + " \u2014 " + res.lenderCount + " lenders funded " + res.totalFundedErg + " ERG (" + res.totalFundedNano + " nanoERG) to the borrower, and the " + res.repaymentErg + " ERG repayment splits back pro-rata by funded amount: " + res.lenders.map(function (w) { return w.name + " receives " + w.payoutErg + " ERG (" + w.profitErg + " ERG against their funding)"; }).join("; ") + ". A disclosed service fee of " + res.serviceFeeErg + " ERG goes to " + res.serviceFeeAddress + " (1% of the repayment, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), taken off the top of the repayment before the split runs, plus one " + res.minerFeeErg + " ERG miner fee for the single repayment transaction \u2014 total cost to the borrower " + res.totalErg + " ERG. ";
+      if (res.outcome === "profit") msg += "The lenders together come out ahead by " + res.netErg.replace("+", "") + " ERG after the fee. ";
+      if (res.outcome === "loss") msg += "The repayment is short of the funded total: the lenders together lose " + res.netErg.replace("-", "") + " ERG after the fee, shared pro-rata. ";
+      if (res.outcome === "break-even") msg += "The lenders break exactly even after the fee. ";
+      if (res.anyBelowSafeMin) msg += "\u26a0 At least one payout is below the recommended 0.001 ERG safe minimum per box (tool 5) \u2014 a payout that small may be impractical to send as its own output. ";
+      if (res.includesServiceAddress) msg += "Note: one lender in this plan is the service-fee address itself. ";
+      if (res.borrowerIsServiceAddress) msg += "Note: the borrower in this plan is the service-fee address itself. ";
+      msg += "Copyable loan syndicate plan:\n" + res.syndicateText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing \u2014 this is not a loan contract, and no ERG has moved until the funding and repayment transactions are built and signed in a wallet.";
+      out.textContent = msg;
+    });
 
     document.getElementById("tree-calc").addEventListener("submit", function (ev) {
       ev.preventDefault();

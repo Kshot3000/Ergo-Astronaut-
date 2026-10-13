@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**128 free Ergo tools, local-first:** the live hub carries 128 tools that run
+**129 free Ergo tools, local-first:** the live hub carries 129 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall and prize pool split builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split and loan syndicate builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 128 tools on one page it beats scrolling.
+headers) — with 129 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -531,6 +531,39 @@ headers) — with 128 tools on one page it beats scrolling.
   is built and signed in the distributor's own wallet.
   Plan only: it fetches nothing, signs nothing, and
   sends nothing.
+- **Ergo loan syndicate builder** — several lenders
+  funding one loan together, settled by one repayment?
+  List each lender (name, address, amount funded) and
+  enter the borrower's repayment as its own amount: it
+  is not assumed to equal the total funded, so more is
+  interest and less is a shortfall, and each lender's
+  exact profit or loss is reported either way. The
+  hub's disclosed service fee is 1% of the repayment
+  (rounded up, minimum 0.001 ERG, to my Ergo address),
+  taken off the top of the repayment before the split
+  runs — the lenders share exactly the repayment minus
+  the fee, charged once on the whole repayment, never
+  per lender; a repayment the minimum fee would eat is
+  refused. Payouts are pro-rata by funded amount,
+  applied by largest-remainder rounding in exact
+  nanoERG and verified a second way inside the tool:
+  every payout is its floor or its floor plus one
+  nanoERG, no unbumped lender holds a larger remainder
+  than a bumped one (equal remainders go to the earlier
+  lender), the payouts plus the fee re-add to the
+  repayment exactly, and the lenders' profits and
+  losses re-add to the syndicate net. The repayment is
+  one transaction with one miner fee, paid by the
+  borrower on top. All addresses are checksum-verified,
+  the lenders distinct, the borrower not also a lender,
+  and all on one network, and sub-safe-minimum payouts
+  are flagged. Stated plainly in the plan: this is a
+  syndicate plan, not a loan contract — nothing holds
+  the lenders' ERG, collects the repayment, or proves
+  the borrower will pay. You get a copyable syndicate
+  block; the transactions are built and signed in each
+  party's own wallet. Plan only: it fetches nothing,
+  signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

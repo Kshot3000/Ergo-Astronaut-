@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**136 free Ergo tools, local-first:** the live hub carries 136 tools that run
+**137 free Ergo tools, local-first:** the live hub carries 137 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement and invoice factoring builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement, invoice factoring and insurance claim settlement builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -798,6 +798,45 @@ headers) — with 129 tools on one page it beats scrolling.
   block; the transactions are built and signed
   in a wallet. Plan only: it fetches nothing,
   signs nothing, and sends nothing.
+- **Ergo insurance claim settlement builder** — a
+  covered loss, a policy, and a claim to settle.
+  Name the claimant, the insurer, the claim
+  amount, the deductible the claimant bears
+  first, and the coverage limit. The covered
+  amount is the claim minus the deductible, and
+  the gross payout is that amount capped at the
+  limit, so the claimant bears the deductible
+  plus any amount over the limit, reported
+  exactly, and the payout's share of the claim
+  is printed as a percentage. A claim at or
+  under the deductible pays out nothing and
+  charges no fee. The hub's disclosed service
+  fee is 1% of the payout (the money the insurer
+  actually pays; rounded up, minimum 0.001 ERG,
+  to my Ergo address), charged once out of the
+  payout — never on the claim, which includes
+  the deductible the claimant bears and any
+  amount over the limit nobody pays. A payout
+  the minimum fee would eat is refused. Every
+  figure is verified a second way inside the
+  tool: the payout recomputed by capping the
+  claim at the deductible plus the limit before
+  taking the deductible off, the claimant net
+  plus the fee re-adding to the payout, the
+  payout plus what the claimant bears re-adding
+  to the claim, and what the claimant bears
+  recomputed as the deductible borne plus the
+  over-limit excess. All addresses are
+  checksum-verified and a sub-safe-minimum
+  claimant net is flagged. Stated plainly in
+  the plan: this is a claim settlement plan,
+  not an insurance contract — nothing holds a
+  premium pool, judges whether a loss is
+  covered, or pays a claim automatically. You
+  get a copyable plan block; the settlement
+  transaction is built and signed in a wallet.
+  Plan only: it fetches nothing, signs nothing,
+  and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

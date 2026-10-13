@@ -4809,6 +4809,140 @@ function buildFactoringPlan(sellerRaw, factorRaw, labelRaw, faceStr, advancePctS
     factoringText: lines.join("\n")
   };
 }
+/* ---------- Insurance claim settlement builder ---------- */
+/* Tool 137: an Ergo insurance claim settlement plan. A claimant
+   files a claim of CLAIM for a covered loss. The claimant bears
+   the first DEDUCTIBLE themselves; the insurer covers the rest up
+   to the coverage LIMIT. Covered = max(0, claim - deductible);
+   the gross payout = min(covered, limit), capped when the covered
+   amount exceeds the limit. Verified BEFORE coding with an
+   independent Python oracle (hidden_files/oracle-claim.py, exact
+   integer arithmetic): MAIN, CAPPED, NODEDUCT, UNDER, EXACTDED,
+   CAPEXACT, MINFEE, JAGGED, BIG, DUST, ODD, FEEEATS refused.
+   The hub's disclosed service fee is 1% of the PAYOUT (the money
+   the insurer actually pays), rounded up, minimum 0.001 ERG, to
+   Kyle's Ergo address, charged once and taken out of the payout —
+   never on the claim, which includes the deductible the claimant
+   bears and any amount over the limit nobody pays. A claim at or
+   under the deductible pays out nothing and charges no fee. The
+   payout is computed two ways (min(covered, limit), and
+   min(claim, deductible + limit) - deductible); the claimant net
+   plus the fee must re-add to the payout, the payout plus what
+   the claimant bears to the claim, and what the claimant bears is
+   also recomputed as min(claim, deductible) + max(0, claim -
+   (deductible + limit)) — the deductible plus the over-limit
+   excess. Both addresses are checksum-verified (tool 2) and must
+   sit on one network; claimant and insurer must differ. A
+   sub-safe-minimum claimant net is flagged. Planning only, stated
+   plainly: this is a settlement plan, NOT an insurance contract —
+   no script holds a premium pool, judges whether a loss is
+   covered, or pays a claim automatically; whether the loss is
+   covered at all is the policy's own terms, agreed off-chain.
+   It fetches nothing, signs nothing, sends nothing. */
+var CLAIM_MAX_LABEL_CHARS = 60;
+function buildClaimPlan(claimantRaw, insurerRaw, labelRaw, claimStr, deductibleStr, limitStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, claimantAddress: null, claimantType: null, insurerAddress: null, insurerType: null, label: null, claimNano: null, claimErg: null, deductibleNano: null, deductibleErg: null, limitNano: null, limitErg: null, coveredNano: null, coveredErg: null, payoutNano: null, payoutErg: null, capped: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, claimantNetNano: null, claimantNetErg: null, claimantBearsNano: null, claimantBearsErg: null, coveragePercent: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, claimText: null };
+  };
+  var claimantCheck = checkErgoAddress(claimantRaw);
+  if (!claimantCheck.valid) return fail("The claimant address is refused: " + claimantCheck.reason);
+  var claimantAddress = typeof claimantRaw === "string" ? claimantRaw.trim() : "";
+  var insurerCheck = checkErgoAddress(insurerRaw);
+  if (!insurerCheck.valid) return fail("The insurer address is refused: " + insurerCheck.reason);
+  var insurerAddress = typeof insurerRaw === "string" ? insurerRaw.trim() : "";
+  if (insurerCheck.network !== claimantCheck.network) return fail("The insurer is a " + insurerCheck.network + " address but the claimant is " + claimantCheck.network + " — one claim settlement lives on one network, so every address must match.");
+  if (insurerAddress === claimantAddress) return fail("The claimant and the insurer are the same address — a claim is settled between two different sides, so the two addresses must differ.");
+  var network = claimantCheck.network;
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > CLAIM_MAX_LABEL_CHARS) return fail("The claim name is " + label.length + " characters — keep it to " + CLAIM_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed claim)";
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var claim = ergToNano(claimStr);
+  if (claim === null || BigInt(claim) <= 0n) return fail("The claim amount must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var claimNano = BigInt(claim);
+  var deductible = ergToNano(deductibleStr);
+  if (deductible === null || BigInt(deductible) < 0n) return fail("The deductible must be an ERG amount of zero or more, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var deductibleNano = BigInt(deductible);
+  var limit = ergToNano(limitStr);
+  if (limit === null || BigInt(limit) <= 0n) return fail("The coverage limit must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit) — a policy with a zero limit pays nothing by definition.");
+  var limitNano = BigInt(limit);
+  /* Covered amount and gross payout, each computed two ways:
+     route 1 works from the covered amount; route 2 caps the claim
+     at deductible + limit before taking the deductible off. */
+  var coveredNano = claimNano > deductibleNano ? claimNano - deductibleNano : 0n;
+  var payoutNano = coveredNano < limitNano ? coveredNano : limitNano;
+  var payout2 = claimNano > deductibleNano ? ((claimNano < deductibleNano + limitNano ? claimNano : deductibleNano + limitNano) - deductibleNano) : 0n;
+  if (payoutNano !== payout2) return fail("Internal check failed: the two payout computations disagree — refusing to show a settlement rather than risk a wrong payout.");
+  var capped = coveredNano > limitNano;
+  var claimantBearsNano = claimNano - payoutNano;
+  var bears2 = (claimNano < deductibleNano ? claimNano : deductibleNano) + (claimNano > deductibleNano + limitNano ? claimNano - (deductibleNano + limitNano) : 0n);
+  if (claimantBearsNano !== bears2) return fail("Internal check failed: the two computations of what the claimant bears disagree — refusing to show it.");
+  var noPayout = payoutNano === 0n;
+  var feeNano = 0n, wasMinimum = false, claimantNetNano = 0n;
+  if (!noPayout) {
+    /* Service fee: same two-route check as tools 112-136, on the PAYOUT. */
+    var feeA = (payoutNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+    var feeB = payoutNano / 100n + (payoutNano % 100n > 0n ? 1n : 0n);
+    if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+    feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+    wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+    if (feeNano >= payoutNano) return fail("The disclosed service fee (1% of the payout, rounded up, minimum 0.001 ERG) would eat the whole payout of " + nanoToErg(payoutNano.toString()) + " ERG — the claimant would receive nothing. The payout is too small to settle this way; a larger covered claim is needed.");
+    claimantNetNano = payoutNano - feeNano;
+    if (claimantNetNano + feeNano !== payoutNano) return fail("Internal check failed: the claimant net plus the service fee do not re-add to the payout — refusing to show it.");
+  }
+  if (payoutNano + claimantBearsNano !== claimNano) return fail("Internal check failed: the payout plus what the claimant bears do not re-add to the claim — refusing to show it.");
+  var coverageBps = payoutNano * 10000n / claimNano;
+  var coveragePercent = (coverageBps / 100n).toString() + "." + (coverageBps % 100n).toString().padStart(2, "0") + "%";
+  var minerTotalNano = noPayout ? 0n : minerNano;
+  var totalNano = noPayout ? 0n : payoutNano + minerNano;
+  var anyDust = !noPayout && claimantNetNano < SAFE_USER_MIN_BOX_NANO;
+  var includesFeeAddr = claimantAddress === SERVICE_FEE_ADDRESS || insurerAddress === SERVICE_FEE_ADDRESS;
+  var lines = ["ERGO INSURANCE CLAIM SETTLEMENT PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Claim: " + label,
+    "Claimant (filed the claim, receives the payout): " + claimantAddress,
+    "Insurer (pays the claim): " + insurerAddress,
+    "Claim amount: " + nanoToErg(claimNano.toString()) + " ERG (" + claimNano.toString() + " nanoERG) — the loss claimed.",
+    "Deductible (borne by the claimant first): " + nanoToErg(deductibleNano.toString()) + " ERG (" + deductibleNano.toString() + " nanoERG).",
+    "Coverage limit (the most the insurer pays on this claim): " + nanoToErg(limitNano.toString()) + " ERG (" + limitNano.toString() + " nanoERG).",
+    "Covered amount (the claim minus the deductible): " + nanoToErg(coveredNano.toString()) + " ERG (" + coveredNano.toString() + " nanoERG)."];
+  if (noPayout) {
+    lines.push("No payout: the claim of " + nanoToErg(claimNano.toString()) + " ERG does not exceed the deductible of " + nanoToErg(deductibleNano.toString()) + " ERG, so the insurer pays nothing, no service fee is charged, and no settlement transaction is built. The claimant bears the whole claim of " + nanoToErg(claimantBearsNano.toString()) + " ERG (" + claimantBearsNano.toString() + " nanoERG), and the payout covers " + coveragePercent + " of the claim.");
+  } else {
+    lines.push("Settlement transaction (built and signed by the insurer): the insurer pays a gross payout of " + nanoToErg(payoutNano.toString()) + " ERG (" + payoutNano.toString() + " nanoERG)" + (capped ? " — the covered amount of " + nanoToErg(coveredNano.toString()) + " ERG exceeds the coverage limit, so the payout is capped at the limit" : " — the covered amount, under the coverage limit, so it is paid in full") + ", less the service fee below:",
+      "Claimant receives: " + nanoToErg(claimantNetNano.toString()) + " ERG (" + claimantNetNano.toString() + " nanoERG).",
+      "Service fee (disclosed: 1% of the payout — the money the insurer actually pays — rounded up, minimum 0.001 ERG, charged once here and never on the claim, the deductible, or the amount over the limit): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS,
+      "Claimant bears in total: " + nanoToErg(claimantBearsNano.toString()) + " ERG (" + claimantBearsNano.toString() + " nanoERG) — the deductible plus any amount over the coverage limit. The payout covers " + coveragePercent + " of the claim.",
+      "Miner fee (one settlement transaction): " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG), paid by the insurer on top of the payout.",
+      "The claimant net plus the service fee re-add to the payout, and the payout plus what the claimant bears re-add to the claim — verified a second way inside the tool (the payout recomputed by capping the claim at the deductible plus the limit first, and what the claimant bears recomputed as the deductible borne plus the over-limit excess) before anything is shown.",
+      "Total moving through the plan: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the payout plus the miner fee.");
+  }
+  lines.push("This is a claim settlement plan, not an insurance contract: no script holds a premium pool, judges whether a loss is covered, or pays a claim automatically — the insurer builds and signs the settlement transaction in its own wallet, whether the loss is covered at all is the policy's own terms agreed off-chain, and the claim figures are the ones typed in above, so check them against the policy and the loss records first. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network,
+    claimantAddress: claimantAddress, claimantType: claimantCheck.type,
+    insurerAddress: insurerAddress, insurerType: insurerCheck.type,
+    label: label,
+    claimNano: claimNano.toString(), claimErg: nanoToErg(claimNano.toString()),
+    deductibleNano: deductibleNano.toString(), deductibleErg: nanoToErg(deductibleNano.toString()),
+    limitNano: limitNano.toString(), limitErg: nanoToErg(limitNano.toString()),
+    coveredNano: coveredNano.toString(), coveredErg: nanoToErg(coveredNano.toString()),
+    payoutNano: payoutNano.toString(), payoutErg: nanoToErg(payoutNano.toString()),
+    capped: capped,
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    claimantNetNano: claimantNetNano.toString(), claimantNetErg: nanoToErg(claimantNetNano.toString()),
+    claimantBearsNano: claimantBearsNano.toString(), claimantBearsErg: nanoToErg(claimantBearsNano.toString()),
+    coveragePercent: coveragePercent,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust,
+    includesServiceAddress: includesFeeAddr,
+    claimText: lines.join("\n")
+  };
+}
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -15985,7 +16119,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -16783,6 +16917,26 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ At least one output (the advance net, or a non-zero reserve) is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
       msg += "Copyable factoring plan:\n" + res.factoringText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a factoring contract, and no ERG has moved until the advance transaction is built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("claim-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("claim-result");
+      var res = buildClaimPlan(document.getElementById("claim-claimant").value, document.getElementById("claim-insurer").value, document.getElementById("claim-label").value, document.getElementById("claim-amount").value, document.getElementById("claim-deductible").value, document.getElementById("claim-limit").value, document.getElementById("claim-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.payoutNano === "0") {
+        msg = "✓ Claim \"" + res.label + "\" on " + res.network + " — claim " + res.claimErg + " ERG (" + res.claimNano + " nanoERG) against a deductible of " + res.deductibleErg + " ERG: the claim does not exceed the deductible, so the insurer pays nothing, no service fee is charged, and no settlement transaction is built. The claimant bears the whole claim. ";
+      } else {
+        msg = "✓ Claim \"" + res.label + "\" on " + res.network + " — claim " + res.claimErg + " ERG (" + res.claimNano + " nanoERG), deductible " + res.deductibleErg + " ERG, coverage limit " + res.limitErg + " ERG. The covered amount is " + res.coveredErg + " ERG and the insurer pays a gross payout of " + res.payoutErg + " ERG (" + res.payoutNano + " nanoERG)" + (res.capped ? ", capped at the coverage limit" : ", paid in full under the limit") + ", of which the claimant receives " + res.claimantNetErg + " ERG (" + res.claimantNetNano + " nanoERG) after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the payout, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + ", never of the claim, the deductible, or the amount over the limit). The payout covers " + res.coveragePercent + " of the claim; the claimant bears " + res.claimantBearsErg + " ERG in total, and the insurer pays the miner fee (" + res.minerFeeErg + " ERG) on top. ";
+      }
+      if (res.anyBelowSafeMin) msg += "⚠ The claimant net is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable claim settlement plan:\n" + res.claimText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not an insurance contract, and no ERG has moved until the settlement transaction is built and signed in a wallet.";
       out.textContent = msg;
     });
 

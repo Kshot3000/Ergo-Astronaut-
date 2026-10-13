@@ -4220,6 +4220,219 @@ function buildVickreyPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
   };
 }
 
+/* ---------- Launchpad allocation builder ---------- */
+/* Tool 134: an Ergo launchpad allocation plan. A token sale (or
+   any capped raise) takes pledges up to a hard cap. If the pledges
+   do not exceed the cap, every subscriber is allocated their full
+   pledge. If the sale is oversubscribed, allocations are PRO-RATA
+   against the cap by largest-remainder rounding — each allocation
+   is floor(pledge * cap / total pledged), and the leftover
+   nanoERG go one each to the largest remainders, ties to the
+   earlier line — and each subscriber's excess comes back as a
+   refund in its own transaction, minus that transaction's miner
+   fee. This is the launchpad pattern (a capped, pro-rata sale),
+   distinct from tool 121's crowdfunding (a goal that must be
+   reached or everyone is refunded in full): here the sale always
+   settles, at the cap when oversubscribed and at the pledged
+   total when not. Verified BEFORE coding with an independent
+   Python oracle (hidden_files/oracle-launchpad.py, exact integer
+   arithmetic): MAIN, OVER, EXACT, SINGLEOVER, MINFEE, JAGGED,
+   BIG, DUST, ODD, REFUNDSMALL and FEEEATS refused.
+   The hub's disclosed service fee is 1% of the amount actually
+   RAISED (rounded up, minimum 0.001 ERG, to Kyle's Ergo address),
+   charged once — never 1% of the total pledged, because the
+   oversubscribed excess is refunded and was never raised. A raise
+   the minimum fee would eat is refused, and a positive refund at
+   or below the miner fee is refused because it could never be
+   paid. Every figure is computed two ways inside the tool: the
+   allocations by the largest-remainder distribution and again by
+   the floor-or-floor-plus-one and remainder-ordering predicate,
+   the fee by both hub routes, and the allocations must re-add to
+   the raise while the refunds plus their miner fees re-add to
+   the oversubscribed excess exactly. All addresses are
+   checksum-verified (tool 2) and must sit on one network;
+   duplicate subscriber names and addresses are refused; the
+   project may also appear as a subscriber (reported, not
+   refused). Sub-safe-minimum outputs (the project net, an
+   allocation, a refund) are flagged. Planning only, stated
+   plainly: this is an allocation plan, NOT a launchpad contract
+   — no script holds the pledges, enforces the cap or the closing
+   time, allocates or refunds anyone automatically, or delivers
+   any token; the pledges are the ones typed in. It fetches
+   nothing, signs nothing, sends nothing. */
+var LAUNCHPAD_MAX_SUBSCRIBERS = 20;
+var LAUNCHPAD_MAX_NAME_CHARS = 40;
+var LAUNCHPAD_MAX_LABEL_CHARS = 60;
+function buildLaunchpadPlan(projectRaw, labelRaw, capStr, entriesRaw, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, projectAddress: null, projectType: null, label: null, capNano: null, capErg: null, totalPledgedNano: null, totalPledgedErg: null, raisedNano: null, raisedErg: null, oversubscribed: null, excessNano: null, excessErg: null, subscriptionPercent: null, subscribers: null, subscriberCount: null, refundCount: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, projectNetNano: null, projectNetErg: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, projectIsSubscriber: null, includesServiceAddress: null, launchpadText: null };
+  };
+  var projectCheck = checkErgoAddress(projectRaw);
+  if (!projectCheck.valid) return fail("The project address is refused: " + projectCheck.reason);
+  var projectAddress = typeof projectRaw === "string" ? projectRaw.trim() : "";
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > LAUNCHPAD_MAX_LABEL_CHARS) return fail("The sale name is " + label.length + " characters — keep it to " + LAUNCHPAD_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed sale)";
+  var cap = ergToNano(capStr);
+  if (cap === null || BigInt(cap) <= 0n) return fail("The hard cap must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit) — a sale with no cap is not a launchpad sale.");
+  var capNano = BigInt(cap);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenAddr = {};
+  var seenNames = {};
+  var network = projectCheck.network;
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, pledge in ERG (e.g. \"Ada, an address, 50\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addr = parts[1].trim();
+    var pledgeStr = parts[2].trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the subscriber a name before the first comma, so the plan says who each pledge is from.");
+    if (name.length > LAUNCHPAD_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + LAUNCHPAD_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each subscriber once, so nobody is counted twice by accident.");
+    seenNames[nameKey] = lineNo;
+    var check = checkErgoAddress(addr);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (seenAddr[addr]) return fail("The address on line " + lineNo + " already appears on line " + seenAddr[addr] + " — list each address once and add its pledges together, so each subscriber gets exactly one allocation in the plan.");
+    seenAddr[addr] = lineNo;
+    if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the project is " + network + " — one sale lives on one network, so every address must match.");
+    var pledge = ergToNano(pledgeStr);
+    if (pledge === null || BigInt(pledge) <= 0n) return fail("Line " + lineNo + "'s pledge is refused: pledges must be ERG amounts above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+    if (BigInt(pledge) <= minerNano) return fail("Line " + lineNo + "'s pledge of " + nanoToErg(BigInt(pledge).toString()) + " ERG does not cover the " + nanoToErg(minerNano.toString()) + " ERG miner fee a refund transaction needs — if the sale is oversubscribed, that pledge's excess could never be refunded. Raise the pledge or lower the miner fee.");
+    entries.push({ name: name, address: addr, network: check.network, type: check.type, pledgeNano: BigInt(pledge), line: lineNo });
+  }
+  if (entries.length < 1) return fail("A sale needs at least one subscriber — list who has pledged before building the plan.");
+  if (entries.length > LAUNCHPAD_MAX_SUBSCRIBERS) return fail("This builder takes at most " + LAUNCHPAD_MAX_SUBSCRIBERS + " subscribers (you listed " + entries.length + ") — a sale with more subscribers than that belongs in a dedicated launchpad contract, not a copyable plan.");
+  /* Total pledged, summed forwards and in reverse — must agree. */
+  var pledgeFwd = 0n, pledgeRev = 0n;
+  for (var fi = 0; fi < entries.length; fi++) pledgeFwd += entries[fi].pledgeNano;
+  for (var ri = entries.length - 1; ri >= 0; ri--) pledgeRev += entries[ri].pledgeNano;
+  if (pledgeFwd !== pledgeRev) return fail("Internal check failed: the pledges do not sum the same forwards and in reverse — refusing to show it.");
+  var totalPledgedNano = pledgeFwd;
+  var oversubscribed = totalPledgedNano > capNano;
+  var raisedNano = oversubscribed ? capNano : totalPledgedNano;
+  var excessTotalNano = totalPledgedNano - raisedNano;
+  var allocs, floors = null, rems = null, leftover = 0n;
+  if (!oversubscribed) {
+    allocs = entries.map(function (e) { return e.pledgeNano; });
+  } else {
+    /* Route 1: largest-remainder pro-rata distribution. */
+    floors = entries.map(function (e) { return e.pledgeNano * capNano / totalPledgedNano; });
+    rems = entries.map(function (e) { return e.pledgeNano * capNano % totalPledgedNano; });
+    var floorSum = 0n;
+    for (var si = 0; si < floors.length; si++) floorSum += floors[si];
+    leftover = capNano - floorSum;
+    var order = entries.map(function (_, i) { return i; }).sort(function (a, b) {
+      if (rems[a] !== rems[b]) return rems[a] > rems[b] ? -1 : 1;
+      return a - b;
+    });
+    allocs = floors.slice();
+    for (var ki = 0; ki < Number(leftover); ki++) allocs[order[ki]] += 1n;
+    /* Route 2 (the second-way verification): every allocation is
+       its floor or its floor plus one, the count of plus-ones is
+       exactly the leftover, and no plus-one sits behind a strictly
+       larger remainder or an earlier equal remainder without one. */
+    var plusCount = 0n;
+    for (var vi2 = 0; vi2 < entries.length; vi2++) {
+      var delta = allocs[vi2] - floors[vi2];
+      if (delta !== 0n && delta !== 1n) return fail("Internal check failed: an allocation is neither its pro-rata floor nor the floor plus one nanoERG — refusing to show it.");
+      if (delta === 1n) plusCount++;
+    }
+    if (plusCount !== leftover) return fail("Internal check failed: the plus-one count does not match the leftover nanoERG — refusing to show it.");
+    for (var ai = 0; ai < entries.length; ai++) {
+      for (var bi = 0; bi < entries.length; bi++) {
+        var aPlus = allocs[ai] - floors[ai] === 1n, bPlus = allocs[bi] - floors[bi] === 1n;
+        if (aPlus && !bPlus && (rems[bi] > rems[ai] || (rems[bi] === rems[ai] && bi < ai))) return fail("Internal check failed: a leftover nanoERG went past a larger or earlier-equal remainder — refusing to show it.");
+      }
+    }
+  }
+  var allocSum = 0n;
+  for (var qi = 0; qi < allocs.length; qi++) allocSum += allocs[qi];
+  if (allocSum !== raisedNano) return fail("Internal check failed: the allocations do not re-add to the amount raised — refusing to show it.");
+  var excesses = entries.map(function (e, i) { return e.pledgeNano - allocs[i]; });
+  var excessSum = 0n;
+  for (var ei = 0; ei < excesses.length; ei++) excessSum += excesses[ei];
+  if (excessSum !== excessTotalNano) return fail("Internal check failed: the excesses do not re-add to the oversubscribed amount — refusing to show it.");
+  for (var di = 0; di < excesses.length; di++) {
+    if (excesses[di] > 0n && excesses[di] <= minerNano) return fail(entries[di].name + "'s excess of " + nanoToErg(excesses[di].toString()) + " ERG does not cover the " + nanoToErg(minerNano.toString()) + " ERG miner fee its refund transaction needs — that excess could never be refunded. Raise the cap, lower the miner fee, or settle that excess together with another refund.");
+  }
+  /* Service fee: same two-route check as tools 112-133, on the RAISE. */
+  var feeA = (raisedNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+  var feeB = raisedNano / 100n + (raisedNano % 100n > 0n ? 1n : 0n);
+  if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+  var feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+  var wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  if (feeNano >= raisedNano) return fail("The disclosed service fee (1% of the amount raised, rounded up, minimum 0.001 ERG) would eat the whole raise of " + nanoToErg(raisedNano.toString()) + " ERG — the project would receive nothing. The sale is too small to settle; a higher cap or larger pledges are needed.");
+  var projectNetNano = raisedNano - feeNano;
+  if (projectNetNano + feeNano !== raisedNano) return fail("Internal check failed: the project net plus the service fee do not re-add to the amount raised — refusing to show it.");
+  var refundsNet = excesses.map(function (x) { return x > 0n ? x - minerNano : 0n; });
+  var refundCount = 0, netRefundSum = 0n;
+  for (var gi = 0; gi < refundsNet.length; gi++) { if (excesses[gi] > 0n) { refundCount++; netRefundSum += refundsNet[gi]; } }
+  if (netRefundSum + minerNano * BigInt(refundCount) !== excessTotalNano) return fail("Internal check failed: the refunds plus their miner fees do not account for every nanoERG of the oversubscribed excess — refusing to show it.");
+  var minerTotalNano = minerNano * BigInt(1 + refundCount);
+  var totalNano = totalPledgedNano + minerNano;
+  var bps = totalPledgedNano * 10000n / capNano;
+  var subscriptionPercent = (bps / 100n).toString() + "." + (bps % 100n).toString().padStart(2, "0") + "%";
+  var projectIsSubscriber = entries.some(function (e) { return e.address === projectAddress; });
+  var includesFeeAddr = projectAddress === SERVICE_FEE_ADDRESS || entries.some(function (e) { return e.address === SERVICE_FEE_ADDRESS; });
+  var anyDust = projectNetNano < SAFE_USER_MIN_BOX_NANO;
+  var subscribers = entries.map(function (e, i) {
+    var outDust = (oversubscribed && allocs[i] < SAFE_USER_MIN_BOX_NANO) || (refundsNet[i] > 0n && refundsNet[i] < SAFE_USER_MIN_BOX_NANO);
+    if (outDust) anyDust = true;
+    return { name: e.name, address: e.address, network: e.network, type: e.type, pledgeNano: e.pledgeNano.toString(), pledgeErg: nanoToErg(e.pledgeNano.toString()), allocNano: allocs[i].toString(), allocErg: nanoToErg(allocs[i].toString()), excessNano: excesses[i].toString(), excessErg: nanoToErg(excesses[i].toString()), refundNano: refundsNet[i].toString(), refundErg: nanoToErg(refundsNet[i].toString()), belowSafeMin: outDust };
+  });
+  var lines = ["ERGO LAUNCHPAD ALLOCATION PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Sale: " + label,
+    "Project (receives the raise): " + projectAddress,
+    "Hard cap: " + nanoToErg(capNano.toString()) + " ERG (" + capNano.toString() + " nanoERG). Total pledged: " + nanoToErg(totalPledgedNano.toString()) + " ERG (" + totalPledgedNano.toString() + " nanoERG) from " + subscribers.length + " subscriber(s) — the sale is " + subscriptionPercent + " subscribed:"];
+  subscribers.forEach(function (s, i) { lines.push("Subscriber " + (i + 1) + " — " + s.name + ": pledged " + s.pledgeErg + " ERG (" + s.pledgeNano + " nanoERG) from " + s.address); });
+  if (oversubscribed) {
+    lines.push("The sale is OVERSUBSCRIBED — the pledges exceed the cap, so the cap is what is raised and every allocation is scaled down pro-rata by largest-remainder rounding (each allocation is the floor of pledge × cap ÷ total pledged, and the leftover nanoERG go one each to the largest remainders, ties to the earlier line), so the allocations re-add to the cap exactly:");
+    subscribers.forEach(function (s, i) { lines.push("Subscriber " + (i + 1) + " — " + s.name + ": allocated " + s.allocErg + " ERG (" + s.allocNano + " nanoERG) of their " + s.pledgeErg + " ERG pledge; excess " + s.excessErg + " ERG (" + s.excessNano + " nanoERG) refunded as " + s.refundErg + " ERG (" + s.refundNano + " nanoERG) in its own transaction, minus that transaction's miner fee" + (s.allocNano === "0" ? " — this pledge was small enough next to the oversubscription that its allocation rounds to zero, so it is refunded (nearly) in full" : "") + "."); });
+  } else {
+    lines.push("The sale is NOT oversubscribed — the pledges " + (totalPledgedNano === capNano ? "meet the cap exactly" : "sit under the cap") + ", so every subscriber is allocated their full pledge and nothing is refunded:");
+    subscribers.forEach(function (s, i) { lines.push("Subscriber " + (i + 1) + " — " + s.name + ": allocated their full pledge of " + s.allocErg + " ERG (" + s.allocNano + " nanoERG)."); });
+  }
+  lines.push("Amount raised: " + nanoToErg(raisedNano.toString()) + " ERG (" + raisedNano.toString() + " nanoERG) — " + (oversubscribed ? "the hard cap" : "the total pledged") + ". The settlement is ONE transaction, built from the pledged boxes:");
+  lines.push("Project receives: " + nanoToErg(projectNetNano.toString()) + " ERG (" + projectNetNano.toString() + " nanoERG) — the amount raised minus the service fee below.");
+  lines.push("Service fee (disclosed: 1% of the amount actually raised, rounded up, minimum 0.001 ERG — charged once on the raise, and never on the oversubscribed excess that is refunded): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+  lines.push("Miner fee (one settlement transaction): " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG), paid by the project on top of the pledges.");
+  if (refundCount > 0) lines.push("Miner fees in total: " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG) — one settlement plus " + refundCount + " refund(s). The allocations re-add to the amount raised exactly, and the refunds plus their miner fees re-add to the oversubscribed excess exactly — the allocations verified a second way by the floor-or-floor-plus-one and remainder-ordering predicate before anything is shown.");
+  else lines.push("There are no refunds — every pledge was allocated in full. The allocations re-add to the amount raised exactly — verified inside the tool before anything is shown.");
+  lines.push("Total moving through the settlement and refunds: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — every pledge plus the settlement miner fee.");
+  lines.push("This is an allocation plan, not a launchpad contract: no script holds the pledges, enforces the cap or a closing time, allocates or refunds anyone automatically, or delivers any token — the project (or the sale's own process) builds and signs the settlement and refund transactions in their own wallet, any token changes hands by the sale's own process, and the pledges are the ones typed in above, so check them against the sale's own records first. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network,
+    projectAddress: projectAddress, projectType: projectCheck.type,
+    label: label,
+    capNano: capNano.toString(), capErg: nanoToErg(capNano.toString()),
+    totalPledgedNano: totalPledgedNano.toString(), totalPledgedErg: nanoToErg(totalPledgedNano.toString()),
+    raisedNano: raisedNano.toString(), raisedErg: nanoToErg(raisedNano.toString()),
+    oversubscribed: oversubscribed,
+    excessNano: excessTotalNano.toString(), excessErg: nanoToErg(excessTotalNano.toString()),
+    subscriptionPercent: subscriptionPercent,
+    subscribers: subscribers, subscriberCount: subscribers.length,
+    refundCount: refundCount,
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    projectNetNano: projectNetNano.toString(), projectNetErg: nanoToErg(projectNetNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust,
+    projectIsSubscriber: projectIsSubscriber,
+    includesServiceAddress: includesFeeAddr,
+    launchpadText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -15396,7 +15609,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -16137,6 +16350,27 @@ if (typeof document !== "undefined") {
       if (res.sellerIsBidder) msg += "Note: the seller also appears as a bidder, so that address is on both sides of the plan. ";
       if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
       msg += "Copyable second-price auction settlement plan:\n" + res.vickreyText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not an auction contract, and no ERG has moved until the settlement or refund transactions are built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("launchpad-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("launchpad-result");
+      var res = buildLaunchpadPlan(document.getElementById("launchpad-project").value, document.getElementById("launchpad-label").value, document.getElementById("launchpad-cap").value, document.getElementById("launchpad-subscribers").value, document.getElementById("launchpad-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.oversubscribed) {
+        msg = "✓ Sale \"" + res.label + "\" on " + res.network + " is OVERSUBSCRIBED — " + res.subscriberCount + " subscriber(s) pledged " + res.totalPledgedErg + " ERG (" + res.totalPledgedNano + " nanoERG) against a hard cap of " + res.capErg + " ERG (" + res.subscriptionPercent + " subscribed), so the cap is what is raised and every allocation is scaled down pro-rata by largest-remainder rounding, re-adding to the cap exactly. The project " + res.projectAddress + " receives " + res.projectNetErg + " ERG (" + res.projectNetNano + " nanoERG) in one settlement transaction, after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the amount actually raised, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + ", never of the total pledged — the oversubscribed excess is refunded, not raised). The excess of " + res.excessErg + " ERG is refunded across " + res.refundCount + " transaction(s), each minus one " + res.minerFeeErg + " ERG miner fee, and the project also pays the " + res.minerFeeErg + " ERG settlement miner fee on top of the pledges (" + res.minerTotalErg + " ERG of miner fees in total). ";
+      } else {
+        msg = "✓ Sale \"" + res.label + "\" on " + res.network + " is NOT oversubscribed — " + res.subscriberCount + " subscriber(s) pledged " + res.totalPledgedErg + " ERG (" + res.totalPledgedNano + " nanoERG) against a hard cap of " + res.capErg + " ERG (" + res.subscriptionPercent + " subscribed), so every subscriber is allocated their full pledge and nothing is refunded. The project " + res.projectAddress + " receives " + res.projectNetErg + " ERG (" + res.projectNetNano + " nanoERG) in one settlement transaction, after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the amount raised, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), plus the " + res.minerFeeErg + " ERG settlement miner fee on top of the pledges. ";
+      }
+      if (res.anyBelowSafeMin) msg += "⚠ At least one output (the project net, an allocation, or a refund) is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.projectIsSubscriber) msg += "Note: the project also appears as a subscriber, so that address is on both sides of the plan. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable launchpad allocation plan:\n" + res.launchpadText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a launchpad contract, and no ERG has moved until the settlement or refund transactions are built and signed in a wallet.";
       out.textContent = msg;
     });
 

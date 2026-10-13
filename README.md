@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**133 free Ergo tools, local-first:** the live hub carries 133 tools that run
+**134 free Ergo tools, local-first:** the live hub carries 134 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction and second-price (Vickrey) auction settlement builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement and launchpad allocation builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -712,6 +712,51 @@ headers) — with 129 tools on one page it beats scrolling.
   transactions are built and signed in a wallet.
   Plan only: it fetches nothing, signs nothing,
   and sends nothing.
+- **Ergo launchpad allocation builder** — running
+  a capped sale — a token launch, a limited mint,
+  a fixed-size raise — where more ERG may be
+  pledged than the sale can take? Name the
+  project, the sale and its hard cap, and list
+  the pledges. If the pledges do not exceed the
+  cap, every subscriber is allocated their full
+  pledge and nothing is refunded. If the sale is
+  oversubscribed, the cap is what is raised and
+  every allocation is scaled down pro-rata by
+  largest-remainder rounding — each allocation
+  is the floor of pledge × cap ÷ total pledged,
+  and the leftover nanoERG go one each to the
+  largest remainders, ties to the earlier line —
+  so the allocations re-add to the cap exactly,
+  and each subscriber's excess comes back as a
+  refund in its own transaction minus that
+  transaction's miner fee; an excess too small
+  to cover its refund's miner fee is refused.
+  That always-settles rule is what separates it
+  from the crowdfunding builder, which must
+  reach its goal or refund everyone in full.
+  The hub's disclosed service fee is 1% of the
+  amount actually raised (rounded up, minimum
+  0.001 ERG, to my Ergo address), charged once
+  on the raise — never on the oversubscribed
+  excess that is refunded, because that ERG was
+  pledged, not raised. A raise the minimum fee
+  would eat is refused. Every figure is verified
+  a second way inside the tool: every allocation
+  must be its pro-rata floor or the floor plus
+  one nanoERG with the plus-ones on the largest
+  remainders, the allocations re-adding to the
+  raise exactly, and the refunds plus their
+  miner fees re-adding to the excess exactly.
+  All addresses are checksum-verified and
+  sub-safe-minimum outputs are flagged. Stated
+  plainly in the plan: this is an allocation
+  plan, not a launchpad contract — nothing holds
+  the pledges, enforces the cap or a closing
+  time, or delivers any token. You get a
+  copyable plan block; the transactions are
+  built and signed in a wallet. Plan only: it
+  fetches nothing, signs nothing, and sends
+  nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

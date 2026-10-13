@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**124 free Ergo tools, local-first:** the live hub carries 124 tools that run
+**125 free Ergo tools, local-first:** the live hub carries 125 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement and escrow settlement builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement and shared expense settlement builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 124 tools on one page it beats scrolling.
+headers) — with 125 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -410,6 +410,35 @@ headers) — with 124 tools on one page it beats scrolling.
   against the deal's own records. You get a copyable
   settlement block; the settlement or refund transaction is
   built and signed in a wallet. Plan only: it fetches
+  nothing, signs nothing, and sends nothing.
+- **Ergo shared expense settlement builder** — a group shared
+  a cost and different people fronted different parts of it?
+  List each person (name, address, amount they already paid —
+  zero is fine) and the expense is settled in three exact
+  steps: equal shares of the total fronted (floored, the
+  first shares in list order carrying one extra nanoERG, so
+  the shares re-add to the total exactly), netting (each
+  person's balance is what they paid minus their share, and
+  the balances sum to zero), and greedy debt simplification
+  (largest debtor matched with largest creditor, ties by
+  list order, verified a second way by applying the finished
+  transfers to the balances and zeroing every person). The
+  hub's disclosed service fee is 1% of the total settled
+  debt only (rounded up, minimum 0.001 ERG, to my Ergo
+  address), paid by the first transfer's sender on top of
+  that transfer — charged only on the amount that actually
+  moves: a group that already paid exactly equal shares
+  owes nothing and is charged nothing. Each transfer is
+  its own transaction with its own miner fee, paid by its
+  sender on top. All addresses are checksum-verified,
+  distinct and on one network, and sub-safe-minimum
+  transfers are flagged. Stated plainly in the plan: this
+  is a settlement plan, not a group wallet — no script
+  holds the group's money, splits a bill at a till, or
+  proves anyone fronted what is typed in, to be checked
+  against the group's own receipts. You get a copyable
+  settlement block; each transfer is built and signed by
+  its sender in their own wallet. Plan only: it fetches
   nothing, signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded

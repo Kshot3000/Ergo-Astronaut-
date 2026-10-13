@@ -2692,6 +2692,203 @@ function buildEscrowPlan(buyerRaw, sellerRaw, labelRaw, depositStr, outcomeStr, 
   };
 }
 
+/* ---------- Ergo shared expense settlement builder (equal shares, netted balances, simplified debts) ---------- */
+/* Tools 112-124 split one pot paid by one payer, or settle one
+   deposit between two parties. None of them settles a GROUP's
+   shared costs, where several people each fronted part of one
+   expense and now owe each other in a tangle: Alice paid the
+   cabin, Bob paid nothing, Carol paid the fuel. The pattern here
+   is new in three steps. (1) EQUAL SHARES in exact integers: the
+   total paid is divided by the headcount, floored, and the first
+   (total mod n) people in list order carry one extra nanoERG, so
+   the shares re-add to the total exactly and differ by at most
+   1 nanoERG. (2) NETTING: each person's balance is what they
+   paid minus their share — positive means the group owes them,
+   negative means they owe the group — and the balances sum to
+   zero by construction. (3) GREEDY DEBT SIMPLIFICATION: the
+   largest debtor is matched with the largest creditor (ties by
+   list order), paying the smaller of the two amounts, repeated
+   until every balance is zero — at most (debtors + creditors - 1)
+   transfers, instead of every debtor paying every creditor
+   separately. Verified a second way inside the tool: applying
+   the finished transfers to the balances must zero every person,
+   and the transfers must re-add to the total debt, itself the
+   sum of the positive balances computed independently. The
+   service fee is the hub's standard 1% — here of the TOTAL
+   SETTLED DEBT only (rounded up, minimum 0.001 ERG, two-route
+   checked like tools 112-124) — paid by the first transfer's
+   sender on top of that transfer, and charged ONLY when there
+   is a debt to settle: a group that already paid exactly equal
+   shares owes nothing and is charged nothing. A person may
+   legitimately have paid 0 (they simply owe their whole share);
+   the group total must be above zero. All addresses are
+   checksum-verified (tool 2), distinct, and on ONE network.
+   Sub-safe-minimum transfers are flagged. Planning only: this
+   is a settlement plan, NOT a group wallet or expense contract —
+   no script holds the group's money, splits a bill at a till,
+   or proves anyone fronted anything; the amounts are the ones
+   typed in. It fetches nothing, signs nothing, sends nothing. */
+var GROUPXP_MAX_PEOPLE = 12;
+var GROUPXP_MAX_NAME_CHARS = 40;
+var GROUPXP_MAX_LABEL_CHARS = 60;
+function buildGroupExpensePlan(labelRaw, entriesRaw, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, label: null, participants: null, participantCount: null, transfers: null, transferCount: null, totalPaidNano: null, totalPaidErg: null, totalDebtNano: null, totalDebtErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, feePayerName: null, feePayerAddress: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, groupText: null };
+  };
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > GROUPXP_MAX_LABEL_CHARS) return fail("The expense name is " + label.length + " characters — keep it to " + GROUPXP_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed shared expense)";
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenAddr = {};
+  var seenNames = {};
+  var network = null;
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, amount they already paid in ERG (e.g. \"Ada, an address, 50\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var addr = parts[1].trim();
+    var paidStr = parts[2].trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the person a name before the first comma, so the plan says who each balance belongs to.");
+    if (name.length > GROUPXP_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + GROUPXP_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each person once, with everything they fronted added into one line.");
+    seenNames[nameKey] = lineNo;
+    var check = checkErgoAddress(addr);
+    if (!check.valid) return fail("Line " + lineNo + "'s address is refused: " + check.reason);
+    if (seenAddr[addr]) return fail("The address on line " + lineNo + " already appears on line " + seenAddr[addr] + " — list each address once, so each person settles exactly once.");
+    seenAddr[addr] = lineNo;
+    if (network === null) network = check.network;
+    else if (check.network !== network) return fail("Line " + lineNo + " is a " + check.network + " address but the earlier people are " + network + " — one settlement lives on one network, so all addresses must match.");
+    var paid = ergToNano(paidStr);
+    if (paid === null || BigInt(paid) < 0n) return fail("Line " + lineNo + "'s amount paid is refused: amounts they already paid must be ERG amounts of zero or more, with at most 9 decimal places (nanoERG is the smallest unit) — zero is fine, it means they fronted nothing and owe their whole share.");
+    entries.push({ name: name, address: addr, network: check.network, type: check.type, paidNano: BigInt(paid), line: lineNo });
+  }
+  if (entries.length < 2) return fail("A shared expense needs at least two people — a cost carried by one person alone has nobody to settle with.");
+  if (entries.length > GROUPXP_MAX_PEOPLE) return fail("This builder takes at most " + GROUPXP_MAX_PEOPLE + " people (you listed " + entries.length + ") — a settlement with more people than that belongs in a dedicated group flow, not a copyable plan.");
+  var totalPaidNano = 0n;
+  for (var ti = 0; ti < entries.length; ti++) totalPaidNano += entries[ti].paidNano;
+  if (totalPaidNano <= 0n) return fail("The group paid nothing in total — with no shared cost there is no share to compute and nothing to settle. Enter what each person actually fronted.");
+  var n = BigInt(entries.length);
+  var baseShare = totalPaidNano / n;
+  var remainder = totalPaidNano % n;
+  var shares = entries.map(function (e, i) { return baseShare + (BigInt(i) < remainder ? 1n : 0n); });
+  var balances = entries.map(function (e, i) { return e.paidNano - shares[i]; });
+  /* Second route for the shares and balances: the shares re-add
+     to the total, each is the base or the base plus one, exactly
+     `remainder` people (the first in list order) carry the extra
+     nanoERG, and the balances sum to exactly zero. */
+  var shareSum = 0n, bumpCount = 0n;
+  for (var si = 0; si < shares.length; si++) {
+    shareSum += shares[si];
+    if (shares[si] !== baseShare && shares[si] !== baseShare + 1n) return fail("Internal check failed: a share is neither the base share nor the base plus one nanoERG — refusing to show it.");
+    if (shares[si] === baseShare + 1n) { bumpCount++; if (BigInt(si) >= remainder) return fail("Internal check failed: an extra nanoERG landed past the first shares in list order — refusing to show it."); }
+  }
+  if (shareSum !== totalPaidNano || bumpCount !== remainder) return fail("Internal check failed: the equal shares do not re-add to the total paid — refusing to show it.");
+  var balanceSum = 0n, totalDebtNano = 0n;
+  for (var bi = 0; bi < balances.length; bi++) { balanceSum += balances[bi]; if (balances[bi] > 0n) totalDebtNano += balances[bi]; }
+  if (balanceSum !== 0n) return fail("Internal check failed: the balances do not sum to zero — refusing to show it.");
+  /* Greedy debt simplification: largest debtor meets largest
+     creditor, ties by list order, until nobody owes anything. */
+  var debtLeft = balances.map(function (b) { return b < 0n ? -b : 0n; });
+  var credLeft = balances.map(function (b) { return b > 0n ? b : 0n; });
+  var debtorCount = debtLeft.filter(function (x) { return x > 0n; }).length;
+  var creditorCount = credLeft.filter(function (x) { return x > 0n; }).length;
+  var rawTransfers = [];
+  for (;;) {
+    var dIdx = -1, cIdx = -1;
+    for (var di = 0; di < debtLeft.length; di++) if (debtLeft[di] > 0n && (dIdx === -1 || debtLeft[di] > debtLeft[dIdx])) dIdx = di;
+    for (var ci = 0; ci < credLeft.length; ci++) if (credLeft[ci] > 0n && (cIdx === -1 || credLeft[ci] > credLeft[cIdx])) cIdx = ci;
+    if (dIdx === -1 || cIdx === -1) break;
+    var amt = debtLeft[dIdx] < credLeft[cIdx] ? debtLeft[dIdx] : credLeft[cIdx];
+    rawTransfers.push({ from: dIdx, to: cIdx, amountNano: amt });
+    debtLeft[dIdx] -= amt;
+    credLeft[cIdx] -= amt;
+  }
+  /* Second route: applying the transfers to the balances must
+     zero every person, each transfer must run from a debtor to a
+     creditor for no more than either side's balance, and the
+     transfers must re-add to the total debt. */
+  var settled = balances.slice();
+  var transferSum = 0n;
+  for (var vi = 0; vi < rawTransfers.length; vi++) {
+    var t = rawTransfers[vi];
+    if (t.amountNano <= 0n) return fail("Internal check failed: a transfer of zero or less was produced — refusing to show it.");
+    if (balances[t.from] >= 0n || balances[t.to] <= 0n) return fail("Internal check failed: a transfer does not run from a debtor to a creditor — refusing to show it.");
+    if (t.amountNano > -balances[t.from] || t.amountNano > balances[t.to]) return fail("Internal check failed: a transfer exceeds one side's balance — refusing to show it.");
+    settled[t.from] += t.amountNano;
+    settled[t.to] -= t.amountNano;
+    transferSum += t.amountNano;
+  }
+  for (var zi = 0; zi < settled.length; zi++) if (settled[zi] !== 0n) return fail("Internal check failed: the transfers leave a balance unsettled — refusing to show it.");
+  if (transferSum !== totalDebtNano) return fail("Internal check failed: the transfers do not re-add to the total debt — refusing to show it.");
+  if (rawTransfers.length > 0 && rawTransfers.length > debtorCount + creditorCount - 1) return fail("Internal check failed: the simplification produced more transfers than debtors plus creditors minus one — refusing to show it.");
+  /* Service fee: same two-route check as tools 112-124, on the
+     TOTAL SETTLED DEBT only, and only when there is a debt. */
+  var feeNano = 0n, wasMinimum = false;
+  if (totalDebtNano > 0n) {
+    var feeA = (totalDebtNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+    var feeB = totalDebtNano / 100n + (totalDebtNano % 100n > 0n ? 1n : 0n);
+    if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a settlement rather than risk a wrong fee.");
+    feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+    wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+  }
+  var totalNano = totalDebtNano > 0n ? totalDebtNano + feeNano + BigInt(rawTransfers.length) * minerNano : 0n;
+  var anyDust = false, includesFeeAddr = false;
+  var fmtSigned = function (v) { return (v < 0n ? "-" : "") + nanoToErg((v < 0n ? -v : v).toString()); };
+  var participants = entries.map(function (e, i) {
+    if (e.address === SERVICE_FEE_ADDRESS) includesFeeAddr = true;
+    var bal = balances[i];
+    return { name: e.name, address: e.address, network: e.network, type: e.type, paidNano: e.paidNano.toString(), paidErg: nanoToErg(e.paidNano.toString()), shareNano: shares[i].toString(), shareErg: nanoToErg(shares[i].toString()), balanceNano: bal.toString(), balanceErg: fmtSigned(bal), role: bal < 0n ? "pays" : bal > 0n ? "receives" : "settled" };
+  });
+  var transfers = rawTransfers.map(function (t, i) {
+    var dust = t.amountNano < SAFE_USER_MIN_BOX_NANO;
+    if (dust) anyDust = true;
+    return { fromName: entries[t.from].name, fromAddress: entries[t.from].address, toName: entries[t.to].name, toAddress: entries[t.to].address, amountNano: t.amountNano.toString(), amountErg: nanoToErg(t.amountNano.toString()), belowSafeMin: dust, paysServiceFee: i === 0 };
+  });
+  var feePayer = rawTransfers.length > 0 ? entries[rawTransfers[0].from] : null;
+  var lines = ["ERGO SHARED EXPENSE SETTLEMENT PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Shared expense: " + label,
+    "Total the group fronted: " + nanoToErg(totalPaidNano.toString()) + " ERG (" + totalPaidNano.toString() + " nanoERG) on " + network + ", split equally among " + participants.length + " people" + (remainder > 0n ? " — the shares differ by at most 1 nanoERG, the first " + remainder.toString() + " in list order carrying the extra nanoERG so they re-add to the total exactly" : " — every share is exactly equal") + ":"];
+  participants.forEach(function (p, i) {
+    var balLine = p.role === "pays" ? "owes " + nanoToErg((-balances[i]).toString()) + " ERG (" + (-balances[i]).toString() + " nanoERG)" : p.role === "receives" ? "is owed " + nanoToErg(balances[i].toString()) + " ERG (" + balances[i].toString() + " nanoERG)" : "paid exactly their share and settles nothing";
+    lines.push("Person " + (i + 1) + " — " + p.name + ": fronted " + p.paidErg + " ERG (" + p.paidNano + " nanoERG), equal share " + p.shareErg + " ERG (" + p.shareNano + " nanoERG), so " + balLine + ". Address: " + p.address);
+  });
+  if (rawTransfers.length === 0) {
+    lines.push("Every person already paid exactly their equal share, so there is NOTHING TO SETTLE: no transfers, and NO service fee is charged — a fee is only ever taken on an amount that actually moves.");
+    lines.push("Total cost of settling: 0 ERG (0 nanoERG).");
+  } else {
+    lines.push("Netting the balances against each other and simplifying the debts (largest debtor matched with largest creditor, ties by list order) settles the whole group in " + rawTransfers.length + " transfer(s) — never more than the number of debtors plus creditors minus one, instead of every debtor paying every creditor separately:");
+    transfers.forEach(function (t, i) {
+      lines.push("Transfer " + (i + 1) + " — " + t.fromName + " pays " + t.toName + ": " + t.amountErg + " ERG (" + t.amountNano + " nanoERG) to " + t.toAddress + ", in one transaction, with the " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) miner fee paid by " + t.fromName + " on top" + (t.paysServiceFee ? ", and this first transfer also carries the service fee below as an extra output from " + t.fromName : "") + ".");
+    });
+    lines.push("Service fee (disclosed: 1% of the total settled debt, rounded up, minimum 0.001 ERG — charged on the amount that actually moves, never on the whole expense): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS + ", paid by " + feePayer.name + " on top of transfer 1.");
+    lines.push("Total cost of settling: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the settled debt of " + nanoToErg(totalDebtNano.toString()) + " ERG plus the service fee plus one miner fee per transfer. Applying the transfers to the balances zeroes every person exactly — verified a second way inside the tool before anything is shown.");
+  }
+  lines.push("This is a settlement plan, not a group wallet or an expense contract: no script holds the group's money, splits a bill at a till, or proves anyone fronted what is typed above — the amounts each person fronted are the ones entered here, so check them against the group's own receipts before settling, and each transfer is built and signed by its sender in their own wallet. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network, label: label,
+    participants: participants, participantCount: participants.length,
+    transfers: transfers, transferCount: transfers.length,
+    totalPaidNano: totalPaidNano.toString(), totalPaidErg: nanoToErg(totalPaidNano.toString()),
+    totalDebtNano: totalDebtNano.toString(), totalDebtErg: nanoToErg(totalDebtNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    feePayerName: feePayer ? feePayer.name : null, feePayerAddress: feePayer ? feePayer.address : null,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust, includesServiceAddress: includesFeeAddr,
+    groupText: lines.join("\n")
+  };
+}
+
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -13868,7 +14065,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -14450,6 +14647,27 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ At least one output (the seller's net, or a share) is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
       msg += "Copyable escrow settlement plan:\n" + res.escrowText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not an escrow contract, and no ERG has moved until the settlement or refund transaction is built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
+
+    document.getElementById("groupexp-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("groupexp-result");
+      var res = buildGroupExpensePlan(document.getElementById("groupexp-label").value, document.getElementById("groupexp-people").value, document.getElementById("groupexp-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.transferCount === 0) {
+        msg = "✓ Shared expense \"" + res.label + "\" on " + res.network + " — the group fronted " + res.totalPaidErg + " ERG (" + res.totalPaidNano + " nanoERG) in total and every one of the " + res.participantCount + " people already paid exactly their equal share, so there is nothing to settle: no transfers and no service fee. ";
+      } else {
+        msg = "✓ Shared expense \"" + res.label + "\" on " + res.network + " — the group fronted " + res.totalPaidErg + " ERG (" + res.totalPaidNano + " nanoERG) in total, split equally among " + res.participantCount + " people, and the netted balances settle in " + res.transferCount + " transfer(s) moving " + res.totalDebtErg + " ERG of debt: " + res.transfers.map(function (t) { return t.fromName + " pays " + t.toName + " " + t.amountErg + " ERG"; }).join("; ") + ". A disclosed service fee of " + res.serviceFeeErg + " ERG goes to " + res.serviceFeeAddress + " (1% of the total settled debt, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), paid by " + res.feePayerName + " on top of transfer 1, plus one " + res.minerFeeErg + " ERG miner fee per transfer — total cost of settling " + res.totalErg + " ERG. ";
+      }
+      if (res.anyBelowSafeMin) msg += "⚠ At least one transfer is below the recommended 0.001 ERG safe minimum per box (tool 5) — a transfer that small may be impractical to send as its own output. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable shared expense settlement plan:\n" + res.groupText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a group wallet, and no ERG has moved until each transfer is built and signed in its sender's wallet.";
       out.textContent = msg;
     });
 

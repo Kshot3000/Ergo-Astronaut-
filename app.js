@@ -4943,6 +4943,187 @@ function buildClaimPlan(claimantRaw, insurerRaw, labelRaw, claimStr, deductibleS
     claimText: lines.join("\n")
   };
 }
+/* ---------- Security deposit settlement builder ---------- */
+/* Tool 138: an Ergo security deposit settlement plan. A tenant
+   paid a security DEPOSIT, held by the landlord. At the end of
+   the tenancy the landlord lists itemized deductions (name,
+   amount), applied against the deposit in list order — each is
+   covered up to what is left of the deposit, so the applied
+   total is min(total deductions, deposit) and a deduction the
+   deposit runs out on is covered partly or not at all, named as
+   such. The REFUND is the deposit minus the applied total: the
+   money that actually moves back to the tenant. Deductions past
+   the deposit are still owed by the tenant. Verified BEFORE
+   coding with an independent Python oracle
+   (hidden_files/oracle-deposit.py, exact integer arithmetic):
+   MAIN, NODED, EXCEED, EXACT, MINFEE, JAGGED, BIG, DUST, ODD,
+   FEEEATS refused. The hub's disclosed service fee is 1% of the
+   REFUND (rounded up, minimum 0.001 ERG, to Kyle's Ergo
+   address), charged once and taken out of the refund — never on
+   the deposit, most of which the landlord may keep, and never
+   on the deductions the landlord keeps. A deposit fully
+   consumed by deductions refunds nothing and charges no fee.
+   The deduction total is summed forwards and in reverse, the
+   refund and the amount still owed are recomputed straight from
+   the totals (refund = deposit - min(total, deposit); owed =
+   max(0, total - deposit)), the per-deduction applied amounts
+   must re-add to the applied total, the tenant net plus the fee
+   to the refund, and the applied total plus the refund to the
+   deposit. Both addresses are checksum-verified (tool 2) and
+   must sit on one network; tenant and landlord must differ.
+   A sub-safe-minimum tenant net is flagged. Planning only,
+   stated plainly: this is a settlement plan, NOT a deposit
+   contract or escrow — no script holds the deposit, judges
+   whether a deduction is fair, or refunds anything
+   automatically; which deductions are legitimate is the lease's
+   own terms, agreed off-chain. It fetches nothing, signs
+   nothing, sends nothing. */
+var DEPOSIT_MAX_DEDUCTIONS = 20;
+var DEPOSIT_MAX_NAME_CHARS = 40;
+var DEPOSIT_MAX_LABEL_CHARS = 60;
+function buildDepositPlan(tenantRaw, landlordRaw, labelRaw, depositStr, deductionsRaw, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, tenantAddress: null, tenantType: null, landlordAddress: null, landlordType: null, label: null, depositNano: null, depositErg: null, deductions: null, deductionCount: null, totalDeductionsNano: null, totalDeductionsErg: null, appliedNano: null, appliedErg: null, refundNano: null, refundErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, tenantNetNano: null, tenantNetErg: null, stillOwedNano: null, stillOwedErg: null, refundPercent: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, depositText: null };
+  };
+  var tenantCheck = checkErgoAddress(tenantRaw);
+  if (!tenantCheck.valid) return fail("The tenant address is refused: " + tenantCheck.reason);
+  var tenantAddress = typeof tenantRaw === "string" ? tenantRaw.trim() : "";
+  var landlordCheck = checkErgoAddress(landlordRaw);
+  if (!landlordCheck.valid) return fail("The landlord address is refused: " + landlordCheck.reason);
+  var landlordAddress = typeof landlordRaw === "string" ? landlordRaw.trim() : "";
+  if (landlordCheck.network !== tenantCheck.network) return fail("The landlord is a " + landlordCheck.network + " address but the tenant is " + tenantCheck.network + " — one deposit settlement lives on one network, so every address must match.");
+  if (landlordAddress === tenantAddress) return fail("The tenant and the landlord are the same address — a deposit is settled between two different sides, so the two addresses must differ.");
+  var network = tenantCheck.network;
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > DEPOSIT_MAX_LABEL_CHARS) return fail("The tenancy name is " + label.length + " characters — keep it to " + DEPOSIT_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed tenancy)";
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var deposit = ergToNano(depositStr);
+  if (deposit === null || BigInt(deposit) <= 0n) return fail("The deposit must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var depositNano = BigInt(deposit);
+  var rawLines = (deductionsRaw == null ? "" : String(deductionsRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenNames = {};
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — name, amount (e.g. \"Cleaning, 40\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var amtRaw = parts[1].replace(/\s+/g, " ").trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the deduction a name before the comma, so the plan says what each deduction is for.");
+    if (name.length > DEPOSIT_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + DEPOSIT_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The deduction name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each deduction once; combine same-named charges into one line so the itemization stays exact.");
+    seenNames[nameKey] = lineNo;
+    var amtParsed = ergToNano(amtRaw);
+    if (amtParsed === null || BigInt(amtParsed) <= 0n) return fail("Line " + lineNo + "'s amount is refused: a deduction must be an ERG amount above zero, with at most 9 decimal places — a zero deduction deducts nothing and only clutters the plan.");
+    entries.push({ name: name, line: lineNo, amountNano: BigInt(amtParsed) });
+  }
+  if (entries.length > DEPOSIT_MAX_DEDUCTIONS) return fail("This builder takes at most " + DEPOSIT_MAX_DEDUCTIONS + " deductions (you listed " + entries.length + ") — a longer itemization belongs in a dedicated settlement flow, not a copyable plan.");
+  /* Deduction total, summed forwards and in reverse: the two
+     sums must agree before anything is shown. */
+  var totalDedNano = 0n;
+  for (var fi = 0; fi < entries.length; fi++) totalDedNano += entries[fi].amountNano;
+  var totalRev = 0n;
+  for (var ri = entries.length - 1; ri >= 0; ri--) totalRev += entries[ri].amountNano;
+  if (totalDedNano !== totalRev) return fail("Internal check failed: the two deduction totals disagree — refusing to show a settlement rather than risk a wrong refund.");
+  /* Route 1: apply the deductions in list order, each covered
+     up to what is left of the deposit. */
+  var remaining = depositNano;
+  var appliedList = entries.map(function (e) {
+    var ap = e.amountNano < remaining ? e.amountNano : remaining;
+    remaining -= ap;
+    return ap;
+  });
+  var appliedNano = 0n;
+  for (var ai = 0; ai < appliedList.length; ai++) appliedNano += appliedList[ai];
+  var refundNano = depositNano - appliedNano;
+  var stillOwedNano = totalDedNano - appliedNano;
+  /* Route 2 (the second-way verification): the same figures
+     straight from the totals. */
+  var applied2 = totalDedNano < depositNano ? totalDedNano : depositNano;
+  var refund2 = depositNano - applied2;
+  var owed2 = totalDedNano > depositNano ? totalDedNano - depositNano : 0n;
+  if (appliedNano !== applied2 || refundNano !== refund2 || stillOwedNano !== owed2) return fail("Internal check failed: the totals route disagrees with the in-order application — refusing to show it.");
+  if (appliedNano + refundNano !== depositNano) return fail("Internal check failed: the applied total plus the refund do not re-add to the deposit — refusing to show it.");
+  var noRefund = refundNano === 0n;
+  var feeNano = 0n, wasMinimum = false, tenantNetNano = 0n;
+  if (!noRefund) {
+    /* Service fee: same two-route check as tools 112-137, on the REFUND. */
+    var feeA = (refundNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+    var feeB = refundNano / 100n + (refundNano % 100n > 0n ? 1n : 0n);
+    if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+    feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+    wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+    if (feeNano >= refundNano) return fail("The disclosed service fee (1% of the refund, rounded up, minimum 0.001 ERG) would eat the whole refund of " + nanoToErg(refundNano.toString()) + " ERG — the tenant would receive nothing. The refund is too small to settle this way; a larger refund is needed.");
+    tenantNetNano = refundNano - feeNano;
+    if (tenantNetNano + feeNano !== refundNano) return fail("Internal check failed: the tenant net plus the service fee do not re-add to the refund — refusing to show it.");
+  }
+  var refundBps = refundNano * 10000n / depositNano;
+  var refundPercent = (refundBps / 100n).toString() + "." + (refundBps % 100n).toString().padStart(2, "0") + "%";
+  var minerTotalNano = noRefund ? 0n : minerNano;
+  var totalNano = noRefund ? 0n : refundNano + minerNano;
+  var anyDust = !noRefund && tenantNetNano < SAFE_USER_MIN_BOX_NANO;
+  var includesFeeAddr = tenantAddress === SERVICE_FEE_ADDRESS || landlordAddress === SERVICE_FEE_ADDRESS;
+  var deductions = entries.map(function (e, i) {
+    var ap = appliedList[i];
+    return { name: e.name, amountNano: e.amountNano.toString(), amountErg: nanoToErg(e.amountNano.toString()), appliedNano: ap.toString(), appliedErg: nanoToErg(ap.toString()), fullyCovered: ap === e.amountNano, notCovered: ap === 0n };
+  });
+  var lines = ["ERGO SECURITY DEPOSIT SETTLEMENT PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Tenancy: " + label,
+    "Tenant (paid the deposit, receives the refund): " + tenantAddress,
+    "Landlord (holds the deposit, makes the deductions): " + landlordAddress,
+    "Security deposit held: " + nanoToErg(depositNano.toString()) + " ERG (" + depositNano.toString() + " nanoERG)."];
+  if (entries.length === 0) {
+    lines.push("Deductions: none — the landlord lists no deduction, so the whole deposit is refundable.");
+  } else {
+    lines.push("Deductions, applied against the deposit in list order:");
+    deductions.forEach(function (d, i) {
+      if (d.notCovered) lines.push("Deduction " + (i + 1) + " — " + d.name + ": " + d.amountErg + " ERG (" + d.amountNano + " nanoERG) claimed, 0 ERG applied — the deposit was already consumed by the deductions above it, so this amount is part of what the tenant still owes below.");
+      else if (d.fullyCovered) lines.push("Deduction " + (i + 1) + " — " + d.name + ": " + d.amountErg + " ERG (" + d.amountNano + " nanoERG), applied in full against the deposit.");
+      else lines.push("Deduction " + (i + 1) + " — " + d.name + ": " + d.amountErg + " ERG (" + d.amountNano + " nanoERG) claimed, " + d.appliedErg + " ERG (" + d.appliedNano + " nanoERG) applied — the deposit ran out on this deduction, and the rest is part of what the tenant still owes below.");
+    });
+    lines.push("Total deductions: " + nanoToErg(totalDedNano.toString()) + " ERG (" + totalDedNano.toString() + " nanoERG), of which " + nanoToErg(appliedNano.toString()) + " ERG (" + appliedNano.toString() + " nanoERG) is applied against the deposit.");
+  }
+  if (noRefund) {
+    lines.push("No refund: the deductions consume the whole deposit, so the landlord returns nothing, no service fee is charged, and no settlement transaction is built. The refund is 0.00% of the deposit" + (stillOwedNano > 0n ? ", and the tenant still owes " + nanoToErg(stillOwedNano.toString()) + " ERG (" + stillOwedNano.toString() + " nanoERG) of deductions past the deposit, to be settled between the two sides off this plan." : "."));
+  } else {
+    lines.push("Settlement transaction (built and signed by the landlord): the landlord refunds " + nanoToErg(refundNano.toString()) + " ERG (" + refundNano.toString() + " nanoERG) of the deposit — " + refundPercent + " of it — less the service fee below:",
+      "Tenant receives: " + nanoToErg(tenantNetNano.toString()) + " ERG (" + tenantNetNano.toString() + " nanoERG).",
+      "Service fee (disclosed: 1% of the refund — the money that actually moves back to the tenant — rounded up, minimum 0.001 ERG, charged once here and never on the deposit or on the deductions the landlord keeps): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS,
+      "Miner fee (one settlement transaction): " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG), paid by the landlord on top of the refund.",
+      "The tenant net plus the service fee re-add to the refund, and the applied deductions plus the refund re-add to the deposit — verified a second way inside the tool (the deduction total summed in reverse, and the refund and the amount still owed recomputed straight from the totals) before anything is shown.");
+    if (stillOwedNano > 0n) lines.push("Still owed: the deductions exceed the deposit, so on top of keeping the whole applied amount the landlord is still owed " + nanoToErg(stillOwedNano.toString()) + " ERG (" + stillOwedNano.toString() + " nanoERG) by the tenant, to be settled between the two sides off this plan.");
+    lines.push("Total moving through the plan: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the refund plus the miner fee.");
+  }
+  lines.push("This is a deposit settlement plan, not a deposit contract or an escrow: no script holds the deposit, judges whether a deduction is fair, or refunds anything automatically — the landlord builds and signs the settlement transaction in its own wallet, which deductions are legitimate is the lease's own terms agreed off-chain, and the figures are the ones typed in above, so check them against the lease and the move-out records first. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network,
+    tenantAddress: tenantAddress, tenantType: tenantCheck.type,
+    landlordAddress: landlordAddress, landlordType: landlordCheck.type,
+    label: label,
+    depositNano: depositNano.toString(), depositErg: nanoToErg(depositNano.toString()),
+    deductions: deductions, deductionCount: deductions.length,
+    totalDeductionsNano: totalDedNano.toString(), totalDeductionsErg: nanoToErg(totalDedNano.toString()),
+    appliedNano: appliedNano.toString(), appliedErg: nanoToErg(appliedNano.toString()),
+    refundNano: refundNano.toString(), refundErg: nanoToErg(refundNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    tenantNetNano: tenantNetNano.toString(), tenantNetErg: nanoToErg(tenantNetNano.toString()),
+    stillOwedNano: stillOwedNano.toString(), stillOwedErg: nanoToErg(stillOwedNano.toString()),
+    refundPercent: refundPercent,
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust,
+    includesServiceAddress: includesFeeAddr,
+    depositText: lines.join("\n")
+  };
+}
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -16119,7 +16300,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -16937,6 +17118,27 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ The claimant net is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
       msg += "Copyable claim settlement plan:\n" + res.claimText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not an insurance contract, and no ERG has moved until the settlement transaction is built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("deposit-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("deposit-result");
+      var res = buildDepositPlan(document.getElementById("deposit-tenant").value, document.getElementById("deposit-landlord").value, document.getElementById("deposit-label").value, document.getElementById("deposit-amount").value, document.getElementById("deposit-deductions").value, document.getElementById("deposit-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.refundNano === "0") {
+        msg = "✓ Tenancy \"" + res.label + "\" on " + res.network + " — deposit " + res.depositErg + " ERG (" + res.depositNano + " nanoERG), deductions " + res.totalDeductionsErg + " ERG: the deductions consume the whole deposit, so the landlord returns nothing, no service fee is charged, and no settlement transaction is built." + (res.stillOwedNano !== "0" ? " The tenant still owes " + res.stillOwedErg + " ERG of deductions past the deposit. " : " ");
+      } else {
+        msg = "✓ Tenancy \"" + res.label + "\" on " + res.network + " — deposit " + res.depositErg + " ERG (" + res.depositNano + " nanoERG), deductions " + res.totalDeductionsErg + " ERG of which " + res.appliedErg + " ERG is applied against the deposit. The landlord refunds " + res.refundErg + " ERG (" + res.refundNano + " nanoERG) — " + res.refundPercent + " of the deposit — of which the tenant receives " + res.tenantNetErg + " ERG (" + res.tenantNetNano + " nanoERG) after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the refund, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + ", never of the deposit or the deductions). The landlord pays the miner fee (" + res.minerFeeErg + " ERG) on top. ";
+        if (res.stillOwedNano !== "0") msg += "The tenant still owes " + res.stillOwedErg + " ERG of deductions past the deposit. ";
+      }
+      if (res.anyBelowSafeMin) msg += "⚠ The tenant net is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable deposit settlement plan:\n" + res.depositText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a deposit contract or an escrow, and no ERG has moved until the settlement transaction is built and signed in a wallet.";
       out.textContent = msg;
     });
 

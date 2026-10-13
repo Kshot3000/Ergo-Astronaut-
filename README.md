@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**137 free Ergo tools, local-first:** the live hub carries 137 tools that run
+**138 free Ergo tools, local-first:** the live hub carries 138 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement, invoice factoring and insurance claim settlement builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement, invoice factoring, insurance claim settlement and security deposit settlement builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -837,6 +837,47 @@ headers) — with 129 tools on one page it beats scrolling.
   transaction is built and signed in a wallet.
   Plan only: it fetches nothing, signs nothing,
   and sends nothing.
+- **Ergo security deposit settlement builder** — a
+  tenancy ends and a deposit to settle. Name the
+  tenant, the landlord, the deposit, and the
+  landlord's itemized deductions (name, amount,
+  one per line). The deductions are applied
+  against the deposit in list order — each is
+  covered up to what is left of the deposit, so
+  a deduction the deposit runs out on is covered
+  partly or not at all and is named as such —
+  and the refund is what is left, reported with
+  its percentage of the deposit. Deductions past
+  the deposit are reported as an amount the
+  tenant still owes. A deposit fully consumed
+  by deductions refunds nothing and charges no
+  fee. The hub's disclosed service fee is 1% of
+  the refund (the money that actually moves back
+  to the tenant; rounded up, minimum 0.001 ERG,
+  to my Ergo address), charged once out of the
+  refund — never on the deposit, most of which
+  the landlord may keep, and never on the
+  deductions. A refund the minimum fee would
+  eat is refused. Every figure is verified a
+  second way inside the tool: the deduction
+  total summed forwards and in reverse, the
+  refund and the amount still owed recomputed
+  straight from the totals, the per-deduction
+  applied amounts re-adding to the applied
+  total, the tenant net plus the fee re-adding
+  to the refund, and the applied total plus the
+  refund re-adding to the deposit. All
+  addresses are checksum-verified and a
+  sub-safe-minimum tenant net is flagged. Stated
+  plainly in the plan: this is a deposit
+  settlement plan, not a deposit contract or an
+  escrow — nothing holds the deposit, judges
+  whether a deduction is fair, or refunds
+  anything automatically. You get a copyable
+  plan block; the settlement transaction is
+  built and signed in a wallet. Plan only: it
+  fetches nothing, signs nothing, and sends
+  nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

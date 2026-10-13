@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**123 free Ergo tools, local-first:** the live hub carries 123 tools that run
+**124 free Ergo tools, local-first:** the live hub carries 124 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign and auction settlement builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement and escrow settlement builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -78,7 +78,7 @@ Every catalogue link was checked live (HTTP 200) when this page was written.
 A **tool finder** sits at the top of the tools section on the hub:
 search by name or keyword, or filter by family (amounts & mining,
 addresses & trees, boxes, codecs & constants, transactions, block
-headers) — with 123 tools on one page it beats scrolling.
+headers) — with 124 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
   nanoERG), no floating-point drift.
@@ -378,6 +378,39 @@ headers) — with 123 tools on one page it beats scrolling.
   block; the settlement or refund transactions are built and
   signed in a wallet. Plan only: it fetches nothing, signs
   nothing, and sends nothing.
+- **Ergo escrow settlement builder** — two people, one deal,
+  one deposit of ERG held in escrow? Name the buyer who placed
+  it, the seller, the deal and the deposit, and pick the
+  outcome. Release — the deal completed: the seller receives
+  the deposit minus the hub's disclosed service fee (1% of
+  the deposit, rounded up, minimum 0.001 ERG, to my Ergo
+  address) in one transaction, with the miner fee paid by
+  the seller on top. Refund — the deal fell through: no
+  service fee is charged at all, and the buyer receives the
+  whole deposit minus one miner fee, so the refund plus the
+  fee re-adds to the deposit exactly; a deposit too small to
+  cover the miner fee is refused. Split — the two sides
+  settle at an agreed percentage: the seller's share is the
+  deposit times that percentage, the buyer's share is the
+  rest, the two shares re-add to the deposit exactly, and
+  the fee (1% of the seller's share only, rounded up,
+  minimum 0.001 ERG) is never taken from the buyer's share —
+  a refund is never charged. A split is verified a second
+  way inside the tool before anything is shown (recomputed
+  from the buyer's side), and every outcome must re-add to
+  the deposit exactly. Both addresses are checksum-verified,
+  must be on one network, and must be two different
+  addresses, and sub-safe-minimum outputs are flagged.
+  Stated plainly in the plan: this is a settlement plan,
+  not an escrow contract — no script holds the deposit,
+  judges whether the deal completed, or releases or refunds
+  anything automatically, whatever the deposit was held
+  against changes hands off-chain, and the deposit figure
+  and the outcome are the ones typed in, to be checked
+  against the deal's own records. You get a copyable
+  settlement block; the settlement or refund transaction is
+  built and signed in a wallet. Plan only: it fetches
+  nothing, signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

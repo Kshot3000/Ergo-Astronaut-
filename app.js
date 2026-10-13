@@ -2518,6 +2518,180 @@ function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
   };
 }
 
+/* ---------- Ergo escrow settlement builder (one deposit, three outcomes: release, refund, or split) ---------- */
+/* Tools 112-123 split pots by shares, stages, stakes, a goal, or
+   pick a winner from competing bids. None of them settles a
+   TWO-PARTY ESCROW: one buyer has placed one deposit with a
+   seller for one deal, and the deposit ends in exactly one of
+   three outcomes. RELEASE — the deal completed: the seller
+   receives the deposit minus the disclosed service fee (the hub's
+   standard 1% — here of the DEPOSIT, rounded up, minimum
+   0.001 ERG, two-route checked like tools 112-123) in ONE
+   settlement transaction, with the miner fee paid by the seller on
+   top of the deposit. REFUND — the deal fell through: NO service
+   fee is charged at all, and the buyer receives the whole deposit
+   minus one miner fee in one refund transaction, so the refund
+   plus the miner fee re-adds to the deposit exactly; a deposit
+   that does not exceed the miner fee is refused, because nothing
+   could ever come back from it. SPLIT — the two sides settle
+   between themselves: the seller's share is the deposit times the
+   agreed percentage (in basis points, floored), the buyer's share
+   is the rest, so the two shares re-add to the deposit exactly —
+   verified a second way inside the tool by recomputing the
+   seller's share as the deposit minus the ceiling of the buyer's
+   percentage. The service fee is 1% of the SELLER'S SHARE ONLY
+   (rounded up, minimum 0.001 ERG): the buyer's share is a partial
+   refund, and a refund is never charged. A split whose fee would
+   eat the seller's whole share is refused. Buyer and seller must
+   be two different addresses (an escrow with yourself settles
+   nothing), both checksum-verified (tool 2) and on ONE network.
+   Sub-safe-minimum outputs (the seller's net, or a share) are
+   flagged. Planning only: this is a settlement plan, NOT an
+   escrow contract — no script holds the deposit, judges whether
+   the deal completed, or releases or refunds anything
+   automatically; the deposit figure and the outcome are the ones
+   typed in. It fetches nothing, signs nothing, sends nothing. */
+var ESCROW_MAX_LABEL_CHARS = 60;
+function parseEscrowSplitBps(splitStr) {
+  var s = (splitStr == null ? "" : String(splitStr)).trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+  var dot = s.indexOf(".");
+  var whole = dot === -1 ? s : s.slice(0, dot);
+  var frac = dot === -1 ? "00" : (s.slice(dot + 1) + "0").slice(0, 2);
+  var bps = BigInt(whole) * 100n + BigInt(frac);
+  if (bps < 1n || bps > 9999n) return null;
+  return bps;
+}
+function formatEscrowPercent(bps) {
+  var whole = bps / 100n, frac = bps % 100n;
+  if (frac === 0n) return whole.toString();
+  return whole.toString() + "." + frac.toString().padStart(2, "0").replace(/0$/, "");
+}
+function buildEscrowPlan(buyerRaw, sellerRaw, labelRaw, depositStr, outcomeStr, splitStr, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, buyerAddress: null, buyerType: null, sellerAddress: null, sellerType: null, label: null, outcome: null, depositNano: null, depositErg: null, splitBps: null, splitPercent: null, sellerShareNano: null, sellerShareErg: null, buyerShareNano: null, buyerShareErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, sellerNetNano: null, sellerNetErg: null, buyerNetNano: null, buyerNetErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, escrowText: null };
+  };
+  var buyerCheck = checkErgoAddress(buyerRaw);
+  if (!buyerCheck.valid) return fail("The buyer address is refused: " + buyerCheck.reason);
+  var sellerCheck = checkErgoAddress(sellerRaw);
+  if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
+  var buyerAddress = typeof buyerRaw === "string" ? buyerRaw.trim() : "";
+  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  if (buyerAddress === sellerAddress) return fail("The buyer and seller are the same address — an escrow settles a deal between two different parties, so a deposit to yourself has nothing to release, refund or split.");
+  if (buyerCheck.network !== sellerCheck.network) return fail("The buyer is on " + buyerCheck.network + " but the seller is on " + sellerCheck.network + " — one escrow lives on one network, so both addresses must match.");
+  var network = buyerCheck.network;
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > ESCROW_MAX_LABEL_CHARS) return fail("The deal name is " + label.length + " characters — keep it to " + ESCROW_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed deal)";
+  var deposit = ergToNano(depositStr);
+  if (deposit === null || BigInt(deposit) <= 0n) return fail("The deposit must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
+  var depositNano = BigInt(deposit);
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var outcomeRaw = (outcomeStr == null ? "" : String(outcomeStr)).toLowerCase();
+  var outcome = outcomeRaw.indexOf("split") !== -1 ? "split" : outcomeRaw.indexOf("refund") !== -1 ? "refund" : outcomeRaw.indexOf("release") !== -1 ? "release" : null;
+  if (outcome === null) return fail("Pick the escrow outcome: release the deposit to the seller, refund it to the buyer, or split it between them.");
+  var feeNano = 0n, wasMinimum = false, sellerShareNano = 0n, buyerShareNano = 0n;
+  var sellerNetNano = 0n, buyerNetNano = 0n, totalNano = 0n, splitBps = null;
+  if (outcome === "release") {
+    sellerShareNano = depositNano;
+    buyerShareNano = 0n;
+    /* Service fee: same two-route check as tools 112-123, on the DEPOSIT. */
+    var feeA = (depositNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+    var feeB = depositNano / 100n + (depositNano % 100n > 0n ? 1n : 0n);
+    if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a settlement rather than risk a wrong fee.");
+    feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+    wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+    sellerNetNano = depositNano - feeNano;
+    if (sellerNetNano <= 0n) return fail("The disclosed service fee (1% of the deposit, rounded up, minimum 0.001 ERG) eats the whole deposit — the seller would receive nothing. The deposit is too small to release.");
+    if (sellerNetNano + feeNano !== depositNano) return fail("Internal check failed: the seller's net plus the service fee do not re-add to the deposit — refusing to show it.");
+    totalNano = depositNano + minerNano;
+  } else if (outcome === "refund") {
+    if (depositNano <= minerNano) return fail("The deposit of " + nanoToErg(depositNano.toString()) + " ERG does not cover the " + nanoToErg(minerNano.toString()) + " ERG miner fee a refund transaction needs — nothing could ever come back to the buyer. Raise the deposit or lower the miner fee.");
+    buyerShareNano = depositNano;
+    buyerNetNano = depositNano - minerNano;
+    if (buyerNetNano + minerNano !== depositNano) return fail("Internal check failed: the refund plus the miner fee do not re-add to the deposit — refusing to show it.");
+    totalNano = depositNano;
+  } else {
+    splitBps = parseEscrowSplitBps(splitStr);
+    if (splitBps === null) return fail("The seller's share must be a percentage above 0 and below 100, with at most 2 decimal places (e.g. 50 or 33.33) — a 0% split is a refund and a 100% split is a release, so pick that outcome instead.");
+    sellerShareNano = depositNano * splitBps / 10000n;
+    buyerShareNano = depositNano - sellerShareNano;
+    /* Second route: the seller's share must also be the deposit
+       minus the ceiling of the buyer's percentage share. */
+    var buyerCeil = (depositNano * (10000n - splitBps) + 9999n) / 10000n;
+    if (depositNano - buyerCeil !== sellerShareNano) return fail("Internal check failed: the split does not recompute the same way from the buyer's side — refusing to show it.");
+    if (sellerShareNano + buyerShareNano !== depositNano) return fail("Internal check failed: the two shares do not re-add to the deposit — refusing to show it.");
+    /* Service fee on the SELLER'S SHARE ONLY — the buyer's share is
+       a partial refund, and a refund is never charged. */
+    var feeA2 = (sellerShareNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+    var feeB2 = sellerShareNano / 100n + (sellerShareNano % 100n > 0n ? 1n : 0n);
+    if (feeA2 !== feeB2) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a settlement rather than risk a wrong fee.");
+    feeNano = feeA2 > SERVICE_FEE_MIN_NANO ? feeA2 : SERVICE_FEE_MIN_NANO;
+    wasMinimum = feeA2 <= SERVICE_FEE_MIN_NANO;
+    sellerNetNano = sellerShareNano - feeNano;
+    if (sellerNetNano <= 0n) return fail("The disclosed service fee (1% of the seller's share, rounded up, minimum 0.001 ERG) eats the seller's whole share of " + nanoToErg(sellerShareNano.toString()) + " ERG — the seller would receive nothing. Give the seller a larger share or a larger deposit.");
+    buyerNetNano = buyerShareNano;
+    if (sellerNetNano + feeNano + buyerNetNano !== depositNano) return fail("Internal check failed: the seller's net plus the service fee plus the buyer's share do not re-add to the deposit — refusing to show it.");
+    totalNano = depositNano + minerNano;
+  }
+  var anyDust = false;
+  if (outcome !== "refund" && sellerNetNano < SAFE_USER_MIN_BOX_NANO) anyDust = true;
+  if (outcome === "refund" && buyerNetNano < SAFE_USER_MIN_BOX_NANO) anyDust = true;
+  if (outcome === "split" && buyerShareNano < SAFE_USER_MIN_BOX_NANO) anyDust = true;
+  var includesFeeAddr = buyerAddress === SERVICE_FEE_ADDRESS || sellerAddress === SERVICE_FEE_ADDRESS;
+  var outcomeLabel = outcome === "release" ? "RELEASE to the seller (the deal completed)" : outcome === "refund" ? "REFUND to the buyer (the deal fell through)" : "SPLIT between buyer and seller (settled between themselves)";
+  var lines = ["ERGO ESCROW SETTLEMENT PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Deal: " + label,
+    "Buyer (placed the deposit): " + buyerAddress,
+    "Seller: " + sellerAddress,
+    "Deposit held in escrow: " + nanoToErg(depositNano.toString()) + " ERG (" + depositNano.toString() + " nanoERG) on " + network + ".",
+    "Outcome: " + outcomeLabel + "."];
+  if (outcome === "release") {
+    lines.push("The deposit settles in ONE transaction, built from the deposit box:");
+    lines.push("Seller receives: " + nanoToErg(sellerNetNano.toString()) + " ERG (" + sellerNetNano.toString() + " nanoERG) — the deposit minus the service fee below.");
+    lines.push("Service fee (disclosed: 1% of the deposit, rounded up, minimum 0.001 ERG): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+    lines.push("Miner fee (one settlement transaction): " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG), paid by the seller on top of the deposit.");
+    lines.push("The buyer receives nothing back — the deposit was the price of the deal. The seller's net plus the service fee re-adds to the deposit exactly — verified inside the tool before anything is shown.");
+    lines.push("Total moving through the settlement: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the deposit plus the miner fee.");
+  } else if (outcome === "refund") {
+    lines.push("NO service fee is charged on a refund. The buyer is refunded in ONE transaction, the whole deposit minus that transaction's miner fee:");
+    lines.push("Buyer receives: " + nanoToErg(buyerNetNano.toString()) + " ERG (" + buyerNetNano.toString() + " nanoERG) — the deposit minus the " + nanoToErg(minerNano.toString()) + " ERG miner fee.");
+    lines.push("The seller receives nothing. The refund plus the miner fee re-adds to the deposit exactly — verified inside the tool before anything is shown.");
+    lines.push("Total moving through the refund: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the deposit itself.");
+  } else {
+    lines.push("Agreed split: the seller's share is " + formatEscrowPercent(splitBps) + "% of the deposit, the buyer's share is the rest. The deposit settles in ONE transaction, built from the deposit box:");
+    lines.push("Seller's share: " + nanoToErg(sellerShareNano.toString()) + " ERG (" + sellerShareNano.toString() + " nanoERG), of which:");
+    lines.push("Seller receives: " + nanoToErg(sellerNetNano.toString()) + " ERG (" + sellerNetNano.toString() + " nanoERG) — their share minus the service fee below.");
+    lines.push("Service fee (disclosed: 1% of the seller's share only, rounded up, minimum 0.001 ERG — the buyer's share is a partial refund and is never charged): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS);
+    lines.push("Buyer receives: " + nanoToErg(buyerNetNano.toString()) + " ERG (" + buyerNetNano.toString() + " nanoERG) — their whole share, no fee taken from it.");
+    lines.push("Miner fee (one settlement transaction): " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG), paid on top of the deposit.");
+    lines.push("The two shares re-add to the deposit exactly, and the seller's net plus the service fee plus the buyer's share re-adds to the deposit exactly — verified a second way inside the tool before anything is shown.");
+    lines.push("Total moving through the settlement: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) — the deposit plus the miner fee.");
+  }
+  lines.push("This is a settlement plan, not an escrow contract: no script holds the deposit, judges whether the deal completed, or releases or refunds anything automatically — the parties (or the escrow holder's own process) build and sign the settlement or refund transaction in their own wallet, whatever the deposit was held against changes hands off-chain, and the deposit figure and the outcome are the ones typed in above, so check them against the deal's own records first. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network,
+    buyerAddress: buyerAddress, buyerType: buyerCheck.type,
+    sellerAddress: sellerAddress, sellerType: sellerCheck.type,
+    label: label, outcome: outcome,
+    depositNano: depositNano.toString(), depositErg: nanoToErg(depositNano.toString()),
+    splitBps: splitBps === null ? null : splitBps.toString(),
+    splitPercent: splitBps === null ? null : formatEscrowPercent(splitBps),
+    sellerShareNano: sellerShareNano.toString(), sellerShareErg: nanoToErg(sellerShareNano.toString()),
+    buyerShareNano: buyerShareNano.toString(), buyerShareErg: nanoToErg(buyerShareNano.toString()),
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    sellerNetNano: sellerNetNano.toString(), sellerNetErg: nanoToErg(sellerNetNano.toString()),
+    buyerNetNano: buyerNetNano.toString(), buyerNetErg: nanoToErg(buyerNetNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    totalNano: totalNano.toString(), totalErg: nanoToErg(totalNano.toString()),
+    anyBelowSafeMin: anyDust, includesServiceAddress: includesFeeAddr,
+    escrowText: lines.join("\n")
+  };
+}
+
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -13694,7 +13868,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -14254,6 +14428,28 @@ if (typeof document !== "undefined") {
       if (res.sellerIsBidder) msg += "Note: the seller also appears as a bidder, so that address is on both sides of the plan. ";
       if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
       msg += "Copyable auction settlement plan:\n" + res.auctionText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not an auction contract, and no ERG has moved until the settlement or refund transactions are built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("escrow-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("escrow-result");
+      var res = buildEscrowPlan(document.getElementById("escrow-buyer").value, document.getElementById("escrow-seller").value, document.getElementById("escrow-label").value, document.getElementById("escrow-deposit").value, document.getElementById("escrow-outcome").value, document.getElementById("escrow-split").value, document.getElementById("escrow-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.outcome === "release") {
+        msg = "✓ Escrow for \"" + res.label + "\" RELEASED on " + res.network + " — the deposit of " + res.depositErg + " ERG (" + res.depositNano + " nanoERG) settles in one transaction: the seller " + res.sellerAddress + " receives " + res.sellerNetErg + " ERG (" + res.sellerNetNano + " nanoERG), after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the deposit, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), and the seller also pays the " + res.minerFeeErg + " ERG miner fee on top of the deposit. The buyer receives nothing back. ";
+      } else if (res.outcome === "refund") {
+        msg = "✓ Escrow for \"" + res.label + "\" REFUNDED on " + res.network + " — no service fee is charged on a refund: the buyer " + res.buyerAddress + " receives " + res.buyerNetErg + " ERG (" + res.buyerNetNano + " nanoERG), the deposit of " + res.depositErg + " ERG minus the " + res.minerFeeErg + " ERG miner fee, in one refund transaction, and the seller receives nothing. ";
+      } else {
+        msg = "✓ Escrow for \"" + res.label + "\" SPLIT on " + res.network + " — the deposit of " + res.depositErg + " ERG (" + res.depositNano + " nanoERG) settles in one transaction: the seller's " + res.splitPercent + "% share is " + res.sellerShareErg + " ERG, of which the seller " + res.sellerAddress + " receives " + res.sellerNetErg + " ERG (" + res.sellerNetNano + " nanoERG) after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the seller's share only, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + "), and the buyer " + res.buyerAddress + " receives their whole share of " + res.buyerNetErg + " ERG (" + res.buyerNetNano + " nanoERG) with no fee taken from it. The miner fee of " + res.minerFeeErg + " ERG is paid on top of the deposit. ";
+      }
+      if (res.anyBelowSafeMin) msg += "⚠ At least one output (the seller's net, or a share) is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable escrow settlement plan:\n" + res.escrowText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not an escrow contract, and no ERG has moved until the settlement or refund transaction is built and signed in a wallet.";
       out.textContent = msg;
     });
 

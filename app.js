@@ -5124,6 +5124,228 @@ function buildDepositPlan(tenantRaw, landlordRaw, labelRaw, depositStr, deductio
     depositText: lines.join("\n")
   };
 }
+/* ---------- Ergo matching donation builder (a matcher matches donor contributions at a percent, up to a cap) ---------- */
+/* Tool 139, the twenty-eighth fee-earning builder and the first
+   MATCHING pattern: a matcher pledges to add a percent of
+   whatever donors give — 100% is a 1:1 match, 50% is half,
+   200% is 2:1 — up to a cap on the matcher's total. Tools
+   112-138 split, stage, settle or auction one pot nobody tops
+   up; none of them grows a pot by a pledged ratio against a
+   ceiling. The match total is floor(total contributions x
+   match bps / 10000), capped at the cap, and it is allocated
+   back to the donors pro-rata by LARGEST REMAINDER, so the
+   per-donor matches re-add to the match total exactly and the
+   plan can say precisely how much of the match each donor's
+   gift unlocked. The hub's disclosed service fee is 1% of the
+   MATCH (rounded up, minimum 0.001 ERG, to Kyle's Ergo
+   address), charged once and taken out of the match — never
+   out of the donors' contributions, which reach the charity
+   in full: a donor's gift is their own money moving straight
+   to the charity, and only the match is money this plan's
+   settlement actually adds. A match the minimum fee would
+   eat is refused; a match that floors to zero charges no fee
+   and builds no match settlement. Verified a second way
+   inside the tool: the contribution total is summed forwards
+   and in reverse, every allocation must be its pro-rata floor
+   or that floor plus one with the bonuses going to the
+   largest remainders first (list order on a tie), the
+   allocations must re-add to the match total, the match net
+   plus the fee to the match, and the contributions plus the
+   match net to what the charity receives. Both addresses are
+   checksum-verified (tool 2) and must sit on one network;
+   charity and matcher must differ. Sub-safe-minimum outputs
+   are flagged. Planning only, stated plainly: this is a
+   matching plan, NOT a matching contract or a donation
+   platform — no script collects the contributions, checks
+   that the matcher pays, or moves anything automatically;
+   the donors and the matcher build and sign their own
+   transactions in their own wallets, and whether the matcher
+   honours the pledge is a matter of their word, agreed
+   off-chain. It fetches nothing, signs nothing, sends
+   nothing. Oracle cases (hidden_files/oracle-match.py, exact
+   integer arithmetic, run before coding): MAIN, CAPPED (match
+   100000000000, allocations 57142857143 / 28571428571 /
+   14285714286 pinned), HALF, DOUBLE, JAGGED (a 1-nanoERG
+   donor unlocks 0 match), BIG (match 185185183685184, fee
+   1851851836852, net 183333331848332 pinned), MINFEE, DUST
+   (500-nanoERG match net flagged), NOMATCH (match floors to
+   zero, no fee), ODD, FEEEATS refused. */
+var MATCH_MAX_DONORS = 20;
+var MATCH_MAX_NAME_CHARS = 40;
+var MATCH_MAX_LABEL_CHARS = 60;
+var MATCH_MAX_BPS = 100000n; /* 1000% — a 10:1 match is the ceiling */
+function parseMatchBps(percentStr) {
+  var s = (percentStr == null ? "" : String(percentStr)).trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+  var dot = s.indexOf(".");
+  var whole = dot === -1 ? s : s.slice(0, dot);
+  var frac = dot === -1 ? "00" : (s.slice(dot + 1) + "0").slice(0, 2);
+  var bps = BigInt(whole) * 100n + BigInt(frac);
+  if (bps < 1n || bps > MATCH_MAX_BPS) return null;
+  return bps;
+}
+function buildMatchPlan(charityRaw, matcherRaw, labelRaw, percentStr, capStr, donorsRaw, minerFeeStr) {
+  var fail = function (reason) {
+    return { valid: false, reason: reason, network: null, charityAddress: null, charityType: null, matcherAddress: null, matcherType: null, label: null, donors: null, donorCount: null, totalContributionsNano: null, totalContributionsErg: null, matchBps: null, matchPercent: null, capNano: null, capErg: null, rawMatchNano: null, rawMatchErg: null, matchNano: null, matchErg: null, capped: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, matchNetNano: null, matchNetErg: null, charityTotalNano: null, charityTotalErg: null, minerFeeNano: null, minerFeeErg: null, minerTotalNano: null, minerTotalErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, matchText: null };
+  };
+  var charityCheck = checkErgoAddress(charityRaw);
+  if (!charityCheck.valid) return fail("The charity address is refused: " + charityCheck.reason);
+  var charityAddress = typeof charityRaw === "string" ? charityRaw.trim() : "";
+  var matcherCheck = checkErgoAddress(matcherRaw);
+  if (!matcherCheck.valid) return fail("The matcher address is refused: " + matcherCheck.reason);
+  var matcherAddress = typeof matcherRaw === "string" ? matcherRaw.trim() : "";
+  if (matcherCheck.network !== charityCheck.network) return fail("The matcher is a " + matcherCheck.network + " address but the charity is " + charityCheck.network + " — one matching campaign lives on one network, so every address must match.");
+  if (matcherAddress === charityAddress) return fail("The charity and the matcher are the same address — a match is pledged by a different side from the one that receives it, so the two addresses must differ.");
+  var network = charityCheck.network;
+  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  if (label.length > MATCH_MAX_LABEL_CHARS) return fail("The campaign name is " + label.length + " characters — keep it to " + MATCH_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
+  if (label === "") label = "(unnamed campaign)";
+  var miner = ergToNano(minerFeeStr);
+  if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
+  var minerNano = BigInt(miner);
+  var bps = parseMatchBps(percentStr);
+  if (bps === null) return fail("The match percent is refused: give a percent above zero and at most 1000, with at most two decimal places (e.g. 100 for a 1:1 match, 50 for half, 200 for 2:1) — a zero match matches nothing and only clutters the plan.");
+  var cap = ergToNano(capStr);
+  if (cap === null || BigInt(cap) <= 0n) return fail("The match cap must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit) — the cap is the most the matcher can be asked to pay, so a campaign without one is an open-ended pledge this builder will not write.");
+  var capNano = BigInt(cap);
+  var rawLines = (donorsRaw == null ? "" : String(donorsRaw)).split(/\r?\n/);
+  var entries = [];
+  var seenNames = {};
+  for (var li = 0; li < rawLines.length; li++) {
+    var line = rawLines[li].trim();
+    if (line === "") continue;
+    var lineNo = li + 1;
+    var parts = line.split(",");
+    if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — name, amount (e.g. \"Alice, 100\").");
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var amtRaw = parts[1].replace(/\s+/g, " ").trim();
+    if (name === "") return fail("Line " + lineNo + " is refused: give the donor a name before the comma, so the plan says whose gift unlocked each part of the match.");
+    if (name.length > MATCH_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + MATCH_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
+    var nameKey = name.toLowerCase();
+    if (seenNames[nameKey]) return fail("The donor name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each donor once; combine one donor's gifts into a single line so the pro-rata shares stay exact.");
+    seenNames[nameKey] = lineNo;
+    var amtParsed = ergToNano(amtRaw);
+    if (amtParsed === null || BigInt(amtParsed) <= 0n) return fail("Line " + lineNo + "'s amount is refused: a contribution must be an ERG amount above zero, with at most 9 decimal places — a zero gift unlocks no match and only clutters the plan.");
+    entries.push({ name: name, line: lineNo, amountNano: BigInt(amtParsed) });
+  }
+  if (entries.length === 0) return fail("List at least one donor — a matching campaign with no contributions has nothing to match.");
+  if (entries.length > MATCH_MAX_DONORS) return fail("This builder takes at most " + MATCH_MAX_DONORS + " donors (you listed " + entries.length + ") — a longer donor roll belongs in a dedicated campaign flow, not a copyable plan.");
+  /* Contribution total, summed forwards and in reverse: the
+     two sums must agree before anything is shown. */
+  var totalNano = 0n;
+  for (var fi = 0; fi < entries.length; fi++) totalNano += entries[fi].amountNano;
+  var totalRev = 0n;
+  for (var ri = entries.length - 1; ri >= 0; ri--) totalRev += entries[ri].amountNano;
+  if (totalNano !== totalRev) return fail("Internal check failed: the two contribution totals disagree — refusing to show a plan rather than risk a wrong match.");
+  /* The match total: the pledged percent of the contributions,
+     floored to the nanoERG, capped at the matcher's cap. */
+  var rawMatchNano = totalNano * bps / 10000n;
+  var matchNano = rawMatchNano < capNano ? rawMatchNano : capNano;
+  var capped = rawMatchNano > capNano;
+  /* Route 1: allocate the match pro-rata by largest remainder —
+     each donor's exact quota is match x contribution / total;
+     hand out the floors, then the leftover nanoERG one each to
+     the largest remainders, list order breaking a tie. */
+  var quotas = entries.map(function (e) {
+    var q = matchNano * e.amountNano;
+    return { floor: q / totalNano, rem: q % totalNano };
+  });
+  var floorSum = 0n;
+  for (var qi = 0; qi < quotas.length; qi++) floorSum += quotas[qi].floor;
+  var leftover = matchNano - floorSum;
+  var order = entries.map(function (_, i) { return i; }).sort(function (a, b) {
+    if (quotas[a].rem !== quotas[b].rem) return quotas[a].rem > quotas[b].rem ? -1 : 1;
+    return a - b;
+  });
+  var bonus = entries.map(function () { return 0n; });
+  for (var bi = 0; bi < Number(leftover); bi++) bonus[order[bi]] = 1n;
+  var allocList = entries.map(function (_, i) { return quotas[i].floor + bonus[i]; });
+  /* Route 2 (the second-way verification): every allocation is
+     its floor or its floor plus one, the bonuses went to the
+     largest remainders first, and the allocations re-add to
+     the match total. */
+  var allocSum = 0n;
+  for (var ai = 0; ai < allocList.length; ai++) {
+    if (allocList[ai] !== quotas[ai].floor && allocList[ai] !== quotas[ai].floor + 1n) return fail("Internal check failed: a donor's match is neither its pro-rata floor nor that floor plus one — refusing to show it.");
+    allocSum += allocList[ai];
+  }
+  if (allocSum !== matchNano) return fail("Internal check failed: the per-donor matches do not re-add to the match total — refusing to show it.");
+  for (var oi = 0; oi < entries.length; oi++) for (var oj = 0; oj < entries.length; oj++) {
+    if (bonus[oi] === 1n && bonus[oj] === 0n) {
+      if (quotas[oj].rem > quotas[oi].rem) return fail("Internal check failed: a larger remainder was passed over for a bonus nanoERG — refusing to show it.");
+      if (quotas[oj].rem === quotas[oi].rem && oj < oi) return fail("Internal check failed: a remainder tie was broken against list order — refusing to show it.");
+    }
+  }
+  var noMatch = matchNano === 0n;
+  var feeNano = 0n, wasMinimum = false, matchNetNano = 0n;
+  if (!noMatch) {
+    /* Service fee: same two-route check as tools 112-138, on the MATCH. */
+    var feeA = (matchNano * SERVICE_FEE_BPS + 9999n) / 10000n;
+    var feeB = matchNano / 100n + (matchNano % 100n > 0n ? 1n : 0n);
+    if (feeA !== feeB) return fail("Internal check failed: the two service-fee computations disagree — refusing to show a plan rather than risk a wrong fee.");
+    feeNano = feeA > SERVICE_FEE_MIN_NANO ? feeA : SERVICE_FEE_MIN_NANO;
+    wasMinimum = feeA <= SERVICE_FEE_MIN_NANO;
+    if (feeNano >= matchNano) return fail("The disclosed service fee (1% of the match, rounded up, minimum 0.001 ERG) would eat the whole match of " + nanoToErg(matchNano.toString()) + " ERG — the charity would gain nothing from the match. The match is too small to settle this way; a larger match is needed.");
+    matchNetNano = matchNano - feeNano;
+    if (matchNetNano + feeNano !== matchNano) return fail("Internal check failed: the match net plus the service fee do not re-add to the match — refusing to show it.");
+  }
+  var charityTotalNano = totalNano + matchNetNano;
+  var minerTotalNano = minerNano * BigInt(entries.length + (noMatch ? 0 : 1));
+  var grandTotalNano = totalNano + matchNano + minerTotalNano;
+  var donors = entries.map(function (e, i) {
+    return { name: e.name, amountNano: e.amountNano.toString(), amountErg: nanoToErg(e.amountNano.toString()), matchNano: allocList[i].toString(), matchErg: nanoToErg(allocList[i].toString()), belowSafeMin: e.amountNano < SAFE_USER_MIN_BOX_NANO };
+  });
+  var anyDust = (!noMatch && matchNetNano < SAFE_USER_MIN_BOX_NANO) || donors.some(function (d) { return d.belowSafeMin; });
+  var includesFeeAddr = charityAddress === SERVICE_FEE_ADDRESS || matcherAddress === SERVICE_FEE_ADDRESS;
+  var matchPercent = formatEscrowPercent(bps);
+  var lines = ["ERGO MATCHING DONATION PLAN — built with Ergo Astronaut by Kyle Cox (@kshot9000)",
+    "Campaign: " + label,
+    "Charity (receives every contribution in full, plus the match below): " + charityAddress,
+    "Matcher (pledged the match): " + matcherAddress,
+    "Match pledge: " + matchPercent + "% of the contributions, up to a cap of " + nanoToErg(capNano.toString()) + " ERG (" + capNano.toString() + " nanoERG).",
+    "Contributions, with the part of the match each gift unlocks (pro-rata by largest remainder, so the parts re-add to the match exactly):"];
+  donors.forEach(function (d, i) {
+    lines.push("Donor " + (i + 1) + " — " + d.name + ": gives " + d.amountErg + " ERG (" + d.amountNano + " nanoERG), unlocking " + d.matchErg + " ERG (" + d.matchNano + " nanoERG) of match.");
+  });
+  lines.push("Total contributions: " + nanoToErg(totalNano.toString()) + " ERG (" + totalNano.toString() + " nanoERG) from " + entries.length + " donor(s). At " + matchPercent + "% the uncapped match would be " + nanoToErg(rawMatchNano.toString()) + " ERG (" + rawMatchNano.toString() + " nanoERG).");
+  if (noMatch) {
+    lines.push("No match: the pledged percent of these contributions floors to 0 nanoERG, so the matcher pays nothing, no service fee is charged, and no match settlement transaction is built — the charity receives the contributions alone.");
+  } else {
+    if (capped) lines.push("The cap binds: the matcher pays the cap of " + nanoToErg(matchNano.toString()) + " ERG (" + matchNano.toString() + " nanoERG), not the uncapped figure above.");
+    else lines.push("The cap does not bind: the matcher pays the full pledged match of " + nanoToErg(matchNano.toString()) + " ERG (" + matchNano.toString() + " nanoERG).");
+    lines.push("Match settlement transaction (built and signed by the matcher): the matcher sends the match of " + nanoToErg(matchNano.toString()) + " ERG (" + matchNano.toString() + " nanoERG), less the service fee below, to the charity:",
+      "Charity receives from the match: " + nanoToErg(matchNetNano.toString()) + " ERG (" + matchNetNano.toString() + " nanoERG), on top of the " + nanoToErg(totalNano.toString()) + " ERG of contributions it receives in full — " + nanoToErg(charityTotalNano.toString()) + " ERG (" + charityTotalNano.toString() + " nanoERG) in all.",
+      "Service fee (disclosed: 1% of the match — the money this settlement actually adds — rounded up, minimum 0.001 ERG, charged once here and never on the donors' contributions, which reach the charity in full): " + nanoToErg(feeNano.toString()) + " ERG (" + feeNano.toString() + " nanoERG) to " + SERVICE_FEE_ADDRESS,
+      "Miner fees: " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) per transaction — one per donor contribution, paid by that donor, plus one for the match settlement, paid by the matcher — " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG) across the plan.",
+      "The per-donor matches re-add to the match total, the match net plus the service fee re-add to the match, and the contributions plus the match net re-add to what the charity receives — verified a second way inside the tool (the contribution total summed in reverse, and every per-donor match checked as its pro-rata floor or that floor plus one, bonuses to the largest remainders first) before anything is shown.");
+  }
+  if (noMatch) lines.push("Miner fees: " + nanoToErg(minerNano.toString()) + " ERG (" + minerNano.toString() + " nanoERG) per donor contribution transaction, paid by that donor — " + nanoToErg(minerTotalNano.toString()) + " ERG (" + minerTotalNano.toString() + " nanoERG) across the plan.");
+  lines.push("Total moving through the plan: " + nanoToErg(grandTotalNano.toString()) + " ERG (" + grandTotalNano.toString() + " nanoERG) — the contributions, the match and the miner fees.");
+  lines.push("This is a matching plan, not a matching contract or a donation platform: no script collects the contributions, checks that the matcher pays, or moves anything automatically — the donors and the matcher build and sign their own transactions in their own wallets, whether the matcher honours the pledge is a matter of their word agreed off-chain, and the figures are the ones typed in above, so check them against the campaign's own records first. Plan only: nothing has been signed or sent, and no ERG has moved.");
+  return {
+    valid: true, reason: null, network: network,
+    charityAddress: charityAddress, charityType: charityCheck.type,
+    matcherAddress: matcherAddress, matcherType: matcherCheck.type,
+    label: label,
+    donors: donors, donorCount: donors.length,
+    totalContributionsNano: totalNano.toString(), totalContributionsErg: nanoToErg(totalNano.toString()),
+    matchBps: bps.toString(), matchPercent: matchPercent,
+    capNano: capNano.toString(), capErg: nanoToErg(capNano.toString()),
+    rawMatchNano: rawMatchNano.toString(), rawMatchErg: nanoToErg(rawMatchNano.toString()),
+    matchNano: matchNano.toString(), matchErg: nanoToErg(matchNano.toString()),
+    capped: capped,
+    serviceFeeNano: feeNano.toString(), serviceFeeErg: nanoToErg(feeNano.toString()),
+    serviceFeeAddress: SERVICE_FEE_ADDRESS, serviceFeeWasMinimum: wasMinimum,
+    matchNetNano: matchNetNano.toString(), matchNetErg: nanoToErg(matchNetNano.toString()),
+    charityTotalNano: charityTotalNano.toString(), charityTotalErg: nanoToErg(charityTotalNano.toString()),
+    minerFeeNano: minerNano.toString(), minerFeeErg: nanoToErg(minerNano.toString()),
+    minerTotalNano: minerTotalNano.toString(), minerTotalErg: nanoToErg(minerTotalNano.toString()),
+    totalNano: grandTotalNano.toString(), totalErg: nanoToErg(grandTotalNano.toString()),
+    anyBelowSafeMin: anyDust,
+    includesServiceAddress: includesFeeAddr,
+    matchText: lines.join("\n")
+  };
+}
 /* ---------- ErgoTree inspector (script hex -> address) ---------- */
 /* An ErgoTree serializes as [header byte][optional VLQ size]
    [proposition bytes][optional segregated constants]. In the header,
@@ -16300,7 +16522,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -17139,6 +17361,26 @@ if (typeof document !== "undefined") {
       if (res.anyBelowSafeMin) msg += "⚠ The tenant net is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
       if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
       msg += "Copyable deposit settlement plan:\n" + res.depositText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a deposit contract or an escrow, and no ERG has moved until the settlement transaction is built and signed in a wallet.";
+      out.textContent = msg;
+    });
+
+    document.getElementById("match-calc").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var out = document.getElementById("match-result");
+      var res = buildMatchPlan(document.getElementById("match-charity").value, document.getElementById("match-matcher").value, document.getElementById("match-label").value, document.getElementById("match-percent").value, document.getElementById("match-cap").value, document.getElementById("match-donors").value, document.getElementById("match-minerfee").value);
+      if (!res.valid) {
+        out.textContent = "✗ " + res.reason;
+        return;
+      }
+      var msg;
+      if (res.matchNano === "0") {
+        msg = "✓ Campaign \"" + res.label + "\" on " + res.network + " — contributions " + res.totalContributionsErg + " ERG (" + res.totalContributionsNano + " nanoERG) from " + res.donorCount + " donor(s), matched at " + res.matchPercent + "%: the match floors to 0 nanoERG, so the matcher pays nothing, no service fee is charged, and no match settlement transaction is built — the charity receives the contributions alone. ";
+      } else {
+        msg = "✓ Campaign \"" + res.label + "\" on " + res.network + " — contributions " + res.totalContributionsErg + " ERG (" + res.totalContributionsNano + " nanoERG) from " + res.donorCount + " donor(s), matched at " + res.matchPercent + "% up to a cap of " + res.capErg + " ERG. The matcher pays a match of " + res.matchErg + " ERG (" + res.matchNano + " nanoERG)" + (res.capped ? ", capped at the cap (the uncapped match would be " + res.rawMatchErg + " ERG)" : ", in full under the cap") + ", of which the charity receives " + res.matchNetErg + " ERG (" + res.matchNetNano + " nanoERG) after a disclosed service fee of " + res.serviceFeeErg + " ERG to " + res.serviceFeeAddress + " (1% of the match, rounded up" + (res.serviceFeeWasMinimum ? ", with the 0.001 ERG minimum applying here" : "") + ", never of the contributions, which reach the charity in full). The charity receives " + res.charityTotalErg + " ERG (" + res.charityTotalNano + " nanoERG) in all. ";
+      }
+      if (res.anyBelowSafeMin) msg += "⚠ A figure in this plan is below the recommended 0.001 ERG safe minimum per box (tool 5) — an output that small may be impractical to create. ";
+      if (res.includesServiceAddress) msg += "Note: one address in this plan is the service-fee address itself. ";
+      msg += "Copyable matching donation plan:\n" + res.matchText + "\nPlan only, built locally: it fetches nothing, signs nothing and sends nothing — this is not a matching contract, and no ERG has moved until the transactions are built and signed in wallets.";
       out.textContent = msg;
     });
 

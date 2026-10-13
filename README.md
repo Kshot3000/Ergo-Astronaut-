@@ -3,13 +3,13 @@
 My builder hub for the **Ergo blockchain** — new websites and apps, fixes and
 improvements, built and maintained by Kyle Cox (@kshot9000).
 
-**138 free Ergo tools, local-first:** the live hub carries 138 tools that run
+**139 free Ergo tools, local-first:** the live hub carries 139 tools that run
 entirely in your browser — an ERG ⇄ nanoERG converter, an Ergo address
 checker, storage rent and Autolykos mining estimators, and serialized box,
 transaction and block header parsers and builders. Nothing you paste leaves
 the page and there is no sign-up. The tools are free to use; the tools
 that earn are the invoice, split-payment, milestone-payment, payroll,
-marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement, invoice factoring, insurance claim settlement and security deposit settlement builders below, whose
+marketplace sale split, vesting schedule, recurring payment, loan repayment, savings goal, staking reward distributor, crowdfunding campaign, auction settlement, escrow settlement, shared expense settlement, rotating savings circle, revenue waterfall, prize pool split, loan syndicate, tiered sales commission, cascading royalty split, Dutch auction, second-price (Vickrey) auction settlement, launchpad allocation, reverse auction settlement, invoice factoring, insurance claim settlement, security deposit settlement and matching donation builders below, whose
 disclosed 1% service fee is printed in every plan they build.
 
 **Live hub:** https://kshot3000.github.io/Ergo-Astronaut-/
@@ -878,6 +878,47 @@ headers) — with 129 tools on one page it beats scrolling.
   built and signed in a wallet. Plan only: it
   fetches nothing, signs nothing, and sends
   nothing.
+- **Ergo matching donation builder** — a
+  fundraiser with a matcher. Name the charity,
+  the matcher, the match percent (100 is a 1:1
+  match, 50 is half, 200 is 2:1) and the cap —
+  the most the matcher can be asked to pay —
+  then list the donors (name, amount, one per
+  line). The match total is the contributions
+  times the percent, floored to the nanoERG
+  and capped at the cap, and it is allocated
+  back to the donors pro-rata by largest
+  remainder, so the plan names exactly how
+  much of the match each gift unlocked and the
+  parts re-add to the match exactly. The hub's
+  disclosed service fee is 1% of the match
+  (the money the settlement actually adds;
+  rounded up, minimum 0.001 ERG, to my Ergo
+  address), charged once out of the match —
+  never on the donors' contributions, which
+  reach the charity in full. A match that
+  floors to zero charges no fee, and a match
+  the minimum fee would eat is refused. Every
+  figure is verified a second way inside the
+  tool: the contribution total summed forwards
+  and in reverse, every per-donor match
+  checked as its pro-rata floor or that floor
+  plus one with the bonuses going to the
+  largest remainders first, the parts
+  re-adding to the match, the match net plus
+  the fee re-adding to the match, and the
+  contributions plus the match net re-adding
+  to what the charity receives. All addresses
+  are checksum-verified and sub-safe-minimum
+  outputs are flagged. Stated plainly in the
+  plan: this is a matching plan, not a
+  matching contract or a donation platform —
+  nothing collects the contributions, checks
+  that the matcher pays, or moves anything
+  automatically. You get a copyable plan
+  block; the transactions are built and signed
+  in wallets. Plan only: it fetches nothing,
+  signs nothing, and sends nothing.
 - **ErgoTree inspector** — paste a box's ErgoTree hex and it reads the
   header byte locally (version, the 0x08 size flag with its VLQ-encoded
   proposition size, the 0x10 constant-segregation flag), recognises

@@ -119,10 +119,68 @@ function looksLikeErgoAddress(address) {
   );
 }
 
-// Midnight unshielded addresses are Bech32m with the mn_addr prefix
+// Midnight unshielded addresses are Bech32m (BIP-350) with an mn_addr HRP
 // (e.g. mn_addr_test1... on test networks); DUST addresses use mn_dust.
+// The old check was a loose regex over [0-9a-z]: Bech32's data charset
+// excludes 'b', 'i', 'o' and '1', and the regex never verified the
+// 6-character checksum, so a corrupted or mistyped recipient passed and an
+// intent could be planned for an address no wallet accepts. This is a real
+// Bech32m validation instead — HRP, charset, separator and the polymod
+// checksum (Bech32m constant 0x2bc830a3): any single-character change to a
+// valid address fails. Verified against an independent Python
+// implementation of BIP-350 (fixtures and mutation sweep in the tests).
+const BECH32M_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+const BECH32M_CONST = 0x2bc830a3;
+const BECH32M_GENERATORS = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+
+function bech32mPolymod(values) {
+  let chk = 1;
+  for (const v of values) {
+    const top = chk >>> 25;
+    chk = ((chk & 0x1ffffff) << 5) ^ v;
+    for (let i = 0; i < 5; i++) {
+      if ((top >>> i) & 1) chk ^= BECH32M_GENERATORS[i];
+    }
+  }
+  return chk >>> 0;
+}
+
+// Returns { hrp, payload } (payload = 5-bit values, checksum stripped) or
+// null when the string is not valid Bech32m. Lowercase only: Bech32 strings
+// must be single-case and Midnight addresses are lowercase.
+function decodeBech32m(address) {
+  if (typeof address !== 'string' || address.length < 8 || address.length > 200) return null;
+  if (address !== address.toLowerCase()) return null;
+  const pos = address.lastIndexOf('1');
+  if (pos < 1 || pos + 7 > address.length) return null; // HRP + '1' + >=6 checksum chars
+  const hrp = address.slice(0, pos);
+  for (let i = 0; i < hrp.length; i++) {
+    const c = hrp.charCodeAt(i);
+    if (c < 33 || c > 126) return null;
+  }
+  const data = [];
+  for (let i = pos + 1; i < address.length; i++) {
+    const v = BECH32M_CHARSET.indexOf(address[i]);
+    if (v === -1) return null;
+    data.push(v);
+  }
+  const expanded = [];
+  for (let i = 0; i < hrp.length; i++) expanded.push(hrp.charCodeAt(i) >> 5);
+  expanded.push(0);
+  for (let i = 0; i < hrp.length; i++) expanded.push(hrp.charCodeAt(i) & 31);
+  if (bech32mPolymod(expanded.concat(data)) !== BECH32M_CONST) return null;
+  return { hrp, payload: data.slice(0, data.length - 6) };
+}
+
 function looksLikeMidnightAddress(address) {
-  return typeof address === 'string' && /^mn_(addr|dust)(_[a-z0-9]+)?1[0-9a-z]+$/.test(address);
+  const decoded = decodeBech32m(address);
+  if (!decoded || decoded.payload.length === 0) return false;
+  return (
+    decoded.hrp === 'mn_addr' ||
+    decoded.hrp === 'mn_dust' ||
+    decoded.hrp.startsWith('mn_addr_') ||
+    decoded.hrp.startsWith('mn_dust_')
+  );
 }
 
 /* ---------------- Bridge intent planner ---------------- */
@@ -201,6 +259,7 @@ module.exports = {
   getMidnightHeight,
   getMidnightContractAction,
   looksLikeErgoAddress,
+  decodeBech32m,
   looksLikeMidnightAddress,
   planBridgeIntent,
 };

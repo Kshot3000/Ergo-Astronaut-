@@ -1026,6 +1026,7 @@ function buildSplitPayment(potStr, recipientsRaw, minerFeeStr) {
     var addr = parts[0].trim();
     var shareStr = parts[1].trim();
     if (!/^\d+$/.test(shareStr)) return fail("Line " + lineNo + " is refused: shares must be a whole number of parts (no decimals, no percent signs) — use 2 and 1 for a two-to-one split, not 66.7 and 33.3.");
+    if (shareStr.length > 100) return fail("Line " + lineNo + " is refused: shares are judged from their length before they are parsed — at most 100 digits, far beyond the 1,000,000-part cap (7 digits).");
     var share = BigInt(shareStr);
     if (share <= 0n) return fail("Line " + lineNo + " is refused: shares must be above zero — remove a recipient instead of giving them zero shares.");
     if (share > SPLIT_MAX_SHARE) return fail("Line " + lineNo + " is refused: shares are capped at 1,000,000 parts per recipient so a typo cannot silently swallow the whole pot.");
@@ -1162,6 +1163,7 @@ function buildMilestonePlan(sellerRaw, contractStr, milestonesRaw, minerFeeStr) 
     if (seenLabels[labelKey]) return fail("The milestone name on line " + lineNo + " repeats line " + seenLabels[labelKey] + " — name each milestone once and combine its shares into one line, so each stage is paid exactly once.");
     seenLabels[labelKey] = lineNo;
     if (!/^\d+$/.test(shareStr)) return fail("Line " + lineNo + " is refused: shares must be a whole number of parts (no decimals, no percent signs) — use 2 and 1 for a two-to-one split, not 66.7 and 33.3.");
+    if (shareStr.length > 100) return fail("Line " + lineNo + " is refused: shares are judged from their length before they are parsed — at most 100 digits, far beyond the 1,000,000-part cap (7 digits).");
     var share = BigInt(shareStr);
     if (share <= 0n) return fail("Line " + lineNo + " is refused: shares must be above zero — remove a milestone instead of giving it zero shares.");
     if (share > MILESTONE_MAX_SHARE) return fail("Line " + lineNo + " is refused: shares are capped at 1,000,000 parts per milestone so a typo cannot silently swallow the whole contract.");
@@ -5884,6 +5886,7 @@ function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersR
   var poolNano = BigInt(pool);
   var pctRaw = (withholdingStr == null ? "" : String(withholdingStr)).trim();
   if (!/^[0-9]+$/.test(pctRaw)) return fail("The withholding percent must be a whole number from 0 to 100 (e.g. \"10\" for 10%) — fractional percents are refused so the withholding stays exact to the nanoERG.");
+  if (pctRaw.length > 100) return fail("The withholding percent is refused: it is judged from its length before it is parsed — at most 100 digits, far beyond the 100% maximum (3 digits).");
   var pct = BigInt(pctRaw);
   if (pct > 100n) return fail("The withholding percent is " + pctRaw + "% — a withholding above 100% would take more than the pool itself.");
   var rawLines = (holdersRaw == null ? "" : String(holdersRaw)).split(/\r?\n/);
@@ -5911,6 +5914,7 @@ function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersR
     if (seenAddresses[addrRaw]) return fail("The holder address on line " + lineNo + " repeats line " + seenAddresses[addrRaw] + " — list each holder address once; combine one person's shares into a single line so the pro-rata shares stay exact.");
     seenAddresses[addrRaw] = lineNo;
     if (!/^[0-9]+$/.test(sharesRaw)) return fail("Line " + lineNo + "'s shares are refused: give a whole number of shares above zero (e.g. \"300\") — fractional shares are refused so the pro-rata split stays exact to the nanoERG.");
+    if (sharesRaw.length > 100) return fail("Line " + lineNo + "'s shares are refused: shares are judged from their length before they are parsed — at most 100 digits, far beyond any share register a person types.");
     var shares = BigInt(sharesRaw);
     if (shares <= 0n) return fail("Line " + lineNo + "'s shares are refused: give a whole number of shares above zero — a holder with no shares receives no dividend and only clutters the plan.");
     entries.push({ name: name, line: lineNo, address: addrRaw, type: check.type, shares: shares });
@@ -8497,7 +8501,7 @@ function encodeSigmaConstant(spec) {
   if (colon < 1) return fail("Register spec \"" + s + "\" is not in kind:value form — use one of: " + SIGMA_SPEC_KINDS + ".");
   var kind = s.slice(0, colon).trim().toLowerCase();
   var val = s.slice(colon + 1).trim();
-  var intStr = function (x) { return /^-?\d+$/.test(x); };
+  var intStr = function (x) { return x.length <= 100 && /^-?\d+$/.test(x); }; /* judged from length before any BigInt parse — the widest kind here, a 256-bit bigint, needs at most 79 characters with its sign */
   var ranged = function (x, lo, hi) { return intStr(x) && BigInt(x) >= lo && BigInt(x) <= hi; };
   var done = function (typeByte, data, typeName, value) {
     return { valid: true, typeName: typeName, value: value, bytes: [typeByte].concat(data), rawHex: bytesToHex(Uint8Array.from([typeByte].concat(data))) };
@@ -8563,7 +8567,7 @@ function buildErgoBox(fields) {
     return { valid: false, reason: reason, boxHex: null, boxId: null, byteLength: null, registers: null };
   };
   if (!fields) return fail("No fields supplied.");
-  var digits = function (x) { return typeof x === "string" && /^\d+$/.test(x.trim()); };
+  var digits = function (x) { return typeof x === "string" && x.trim().length <= 100 && /^\d+$/.test(x.trim()); }; /* judged from length before any BigInt parse — every field checked here is at most a signed 64-bit integer (19 digits) */
   if (!digits(fields.valueNano)) return fail("Enter the box value as a whole number of nanoERG (digits only — tool 1 converts ERG to nanoERG).");
   var value = BigInt(fields.valueNano.trim());
   if (value < 1n || value > 9223372036854775807n) return fail("A box value is a positive signed 64-bit amount of nanoERG (1 to 9,223,372,036,854,775,807) — and a spendable box must also clear the minimum-value rule in tool 5.");
@@ -8688,7 +8692,7 @@ function buildErgoTransaction(fields) {
     return { valid: false, reason: reason, txHex: null, txId: null, byteLength: null, signed: null, tokenIds: null, outputs: null, totalOutputNano: null, totalOutputErg: null };
   };
   if (!fields) return fail("No fields supplied.");
-  var digits = function (x) { return typeof x === "string" && /^\d+$/.test(x.trim()); };
+  var digits = function (x) { return typeof x === "string" && x.trim().length <= 100 && /^\d+$/.test(x.trim()); }; /* judged from length before any BigInt parse — every field checked here is at most a signed 64-bit integer (19 digits) */
   var hexId = function (x) { var b = hexToBytes(x == null ? "" : String(x).trim().toLowerCase()); return b && b.length === 32 ? b : null; };
   /* --- inputs --- */
   var inFields = fields.inputs || [];
@@ -10346,7 +10350,7 @@ function planTokenPayment(boxesText, paymentStr, feeStr, tokensText) {
   if (tokLines.length > 100) return fail("That is " + tokLines.length + " token lines — at most 100 token requirements at a time.");
   for (var r = 0; r < tokLines.length; r++) {
     var parts = tokLines[r].split(/\s+/);
-    if (parts.length !== 2 || !/^[0-9a-fA-F]{64}$/.test(parts[0]) || !/^[0-9]+$/.test(parts[1]) || BigInt(parts[1]) <= 0n) return fail("Token line " + (r + 1) + " is not in the form \"<64-hex token ID> <raw amount>\" with a positive whole raw amount — amounts are the raw on-chain integers (tool 6 converts a display amount once you know the token's decimals).");
+    if (parts.length !== 2 || !/^[0-9a-fA-F]{64}$/.test(parts[0]) || parts[1].length > 100 || !/^[0-9]+$/.test(parts[1]) || BigInt(parts[1]) <= 0n) return fail("Token line " + (r + 1) + " is not in the form \"<64-hex token ID> <raw amount>\" with a positive whole raw amount — amounts are the raw on-chain integers, judged from their length before they are parsed (at most 100 digits; an on-chain amount is a signed 64-bit integer, at most 19), and tool 6 converts a display amount once you know the token's decimals.");
     var tid = parts[0].toLowerCase();
     if (Object.prototype.hasOwnProperty.call(reqSeen, tid)) return fail("Token line " + (r + 1) + " repeats token " + tid + " — state each token's total raw requirement on one line, so the plan's per-token accounting stays unambiguous.");
     reqSeen[tid] = true;
@@ -11326,6 +11330,7 @@ function planTokenMint(firstInputId, nameStr, descStr, decStr, amountStr, typeSt
   if (!regs) return fail("The metadata does not encode (tool 27's EIP-4 rules): the name must be non-empty, the decimals a whole number written without a leading zero (0–999), and the asset type one of the listed EIP-4 types.");
   var amt = (amountStr == null ? "" : String(amountStr)).trim();
   if (!/^\d+$/.test(amt)) return fail("The amount is the raw token amount as a whole decimal number — on-chain token amounts are integers; the decimals only shape how the amount is displayed.");
+  if (amt.length > 100) return fail("The amount is refused: it is judged from its length before it is parsed — at most 100 digits, far beyond a signed 64-bit raw amount (at most 19 digits).");
   if (BigInt(amt) === 0n) return fail("The amount is zero — a mint that creates zero tokens creates nothing. Give the raw amount to issue (with " + regs.decimals + " decimals, raw 1 is the smallest displayable step).");
   var registers = { R4: regs.r4Hex };
   if (regs.r5Hex) registers.R5 = regs.r5Hex;
@@ -16502,6 +16507,7 @@ function buildBlockHeader(fields) {
   var transactionsRoot = hexField("transactionsRoot", 64); if (transactionsRoot === null) return fail("The transactions root must be 64 hex characters (32 bytes) — on the wire it precedes the state root.");
   var stateRoot = hexField("stateRoot", 66); if (stateRoot === null) return fail("The state root must be 66 hex characters (33 bytes) — the AVL tree digest carries one extra byte over a plain 32-byte hash.");
   if (!/^\d+$/.test(get("timestampMs"))) return fail("The timestamp must be a whole number of milliseconds since the Unix epoch — the value a block explorer shows for the block's time.");
+  if (get("timestampMs").length > 100) return fail("The timestamp does not fit in 64 bits — the reference layout stores it as a u64."); /* judged from length before the BigInt parse — a u64 needs at most 20 digits */
   var timestampMs = BigInt(get("timestampMs"));
   if (timestampMs > 0xffffffffffffffffn) return fail("The timestamp does not fit in 64 bits — the reference layout stores it as a u64.");
   var extensionRoot = hexField("extensionRoot", 64); if (extensionRoot === null) return fail("The extension root must be 64 hex characters (32 bytes).");
@@ -16511,6 +16517,7 @@ function buildBlockHeader(fields) {
   else if (/^\d+$/.test(nBitsStr)) nBits = Number(nBitsStr);
   if (nBits === null || !Number.isSafeInteger(nBits) || nBits < 0 || nBits > 0xffffffff) return fail("nBits must be a 32-bit number, decimal or 0x-prefixed hex (e.g. 104520992 or 0x063add20) — it serializes as the header's one fixed-width field, 4 big-endian bytes.");
   if (!/^\d+$/.test(get("height"))) return fail("The height must be a whole number — the block's position in the chain.");
+  if (get("height").length > 100) return fail("The height does not fit in 32 bits — the reference layout stores it as a u32."); /* judged from length before the BigInt parse — a u32 needs at most 10 digits */
   var height = BigInt(get("height"));
   if (height > 0xffffffffn) return fail("The height does not fit in 32 bits — the reference layout stores it as a u32.");
   var votesHex = hexField("votesHex", 6); if (votesHex === null) return fail("The miner votes must be exactly 6 hex characters (3 bytes).");
@@ -16530,6 +16537,7 @@ function buildBlockHeader(fields) {
     onetimePk = hexField("onetimePk", 66); if (onetimePk === null) return fail("Version 1 (Autolykos v1) solutions carry a one-time public key — 66 hex characters (33 bytes). Supply it, or build a version 2+ header.");
     if (onetimePk.slice(0, 2) !== "02" && onetimePk.slice(0, 2) !== "03") return fail("The one-time public key must start with a compressed-point prefix (02 or 03).");
     if (!/^\d+$/.test(get("powDistance"))) return fail("Version 1 (Autolykos v1) solutions carry the distance d as a whole number — supply it, or build a version 2+ header.");
+    if (get("powDistance").length > 1000) return fail("The distance d is refused: it is judged from its length before it is parsed or assembled — at most 1,000 digits. On the wire d is a length-prefixed byte array of at most 255 bytes (about 614 digits), so no header this builder could assemble carries more."); /* the sigma-proof scalar cap is the in-module precedent for the 1,000-digit bound */
     powDistance = get("powDistance");
   } else {
     if (get("onetimePk") !== "" || get("powDistance") !== "") return fail("Version 2+ solutions serialize only the miner key and the nonce — the one-time key and distance exist in JSON displays but are NOT serialized, so they are refused here rather than silently dropped. Clear them, or build a version 1 header.");

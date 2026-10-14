@@ -1,6 +1,6 @@
 # Native Bitcoin DeFi on Ergo — design & code
 
-**Status: first primitives shipped (Phase 0). No new bridge is live. Nothing here moves funds.**
+**Status: Phase 0 and Phase 1 verification shipped. No new bridge is live. Nothing here moves funds.**
 
 Built by Kyle Cox (@kshot9000) — independent builder, not affiliated with the Ergo Foundation, the Ergo Platform team, or the Rosen Bridge team. This folder is MIT-licensed like the rest of this repo — use and change anything here to benefit Ergo.
 
@@ -15,7 +15,7 @@ Bitcoin has the largest idle capital base in crypto and almost no native DeFi �
 ## What ships here
 
 - **Phase 0 (`btc-spv.js`)** — the verification primitive everything in route 2 needs, as dependency-free Node code: Bitcoin header parsing, double-SHA256 block hashing, nBits→target conversion and PoW checking, Merkle root computation, and transaction-inclusion proof verification. Pinned by tests against the real Bitcoin genesis block and an independent Python (hashlib) oracle — the same oracle-first discipline as the rest of this repo's integration code. Plus a route planner that labels each leg live or design, like the Midnight planner.
-- **Phase 1** — header-chain verification (a sequence of headers with cumulative work and difficulty-retarget checks) and an ErgoScript guard sketch that consumes an inclusion proof, honestly labelled draft until it can be compiled and tested on testnet.
+- **Phase 1 (`btc-chain.js`)** — header-chain verification on top of Phase 0: prev-hash linkage, every header's hash against its own target, targets confined to (0, pow-limit], bits frozen between retargets, and the 2016-block retarget itself checked exactly as Bitcoin Core computes it (actual timespan clamped to [two weeks / 4, two weeks × 4], result capped at the pow limit), plus cumulative work in Core's GetBlockProof units (floor(2^256 / (target + 1)) per block). When a segment starts mid-period, the retarget at its boundary is reported as *unverified* unless the caller supplies the period's first timestamp — the check is never silently assumed. Tests are pinned against real Bitcoin headers (genesis through block 3, and the retargets at 2016 — capped at the limit — and 32256, the first difficulty increase in Bitcoin's history) and an independent Python oracle implementing the same consensus rules from the spec. The folder also carries an ErgoScript guard sketch that consumes a verified chain and an inclusion proof, honestly labelled draft-source-not-compiled until it can be compiled and tested on testnet.
 - **Phase 2** — a worked one-way flow on testnet: a tBTC payment proven via SPV releases a testnet Ergo box. Federation/threshold outflow design only after that, with audits before any real value.
 
 ## Why this matters for Ergo
@@ -25,7 +25,8 @@ Every BTC holder who wants yield without giving up self-custody stories is a pot
 ## Running the Phase 0 code
 
 ```sh
-node integration/bitcoin-defi/test-btc-spv.js   # offline tests, no network
+node integration/bitcoin-defi/test-btc-spv.js    # Phase 0, offline tests, no network
+node integration/bitcoin-defi/test-btc-chain.js  # Phase 1, offline tests, no network
 ```
 
 ---

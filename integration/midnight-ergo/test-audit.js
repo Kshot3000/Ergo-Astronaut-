@@ -221,6 +221,19 @@ fails('a reordered ledger fails the ledger link',
   mainBundle({ ledger: [e1, e0] }), 'ledger-invalid');
 fails('an empty ledger records no claim',
   mainBundle({ ledger: [] }), 'claim-not-in-ledger');
+/* The ids the ledger scan compares are length-judged ONCE before the
+ * scan, never lowercased once per ledger entry: an oversize claim or
+ * record id is a plain miss (a verified entry's ids are exactly 64
+ * chars, so no other length could ever match), and a genuine
+ * uppercase claim id still finds its entry and audits. */
+fails('an oversize claim id is a plain ledger miss, judged from its length',
+  mainBundle({ claim: { ...claimMain, claimId: 'ab'.repeat(100000) } }), 'claim-not-in-ledger');
+fails('an oversize settlement record id is a plain ledger miss',
+  mainBundle({ settlementRecord: { ...settleMain.record, recordId: 'cd'.repeat(100000) } }), 'claim-not-in-ledger');
+ok('an uppercase genuine claim id still audits end to end', (() => {
+  const r = a.auditBundle(mainBundle({ claim: { ...claimMain, claimId: claimMain.claimId.toUpperCase() } }));
+  return r.verdict === 'audited' && r.auditId === AUDIT_MAIN_ID;
+})());
 
 console.log('ALL ' + pass + ' AUDIT TESTS PASS');
 assert.ok(pass >= 28);

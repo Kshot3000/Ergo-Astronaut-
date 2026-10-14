@@ -27,7 +27,8 @@
  * first; this closes the same unbounded-scan hole at the layer they
  * all call into.) Scalar fields are bounded the same way:
  * verifyAttestation judges a record's id from its length before
- * lowercasing it for the comparison.
+ * lowercasing it for the comparison, and buildAttestation judges
+ * the box id the same way before lowercasing it for the record.
  *
  * HONEST SCOPE. An attestation here is an UNSIGNED record: it proves what
  * its fields claim only in the sense that the id recomputes from them, so
@@ -137,6 +138,20 @@ function validateWatcherId(watcherId) {
  * Throws with the failed check names otherwise — a watcher must never be
  * able to attest a box it could not verify.
  */
+/*
+ * Lowercase a box id for the canonical record — but only a
+ * 64-character string can be an id, so only those are lowercased;
+ * any other value passes through untouched for attestationPreimage's
+ * isHex32 check to refuse by name, instead of being copied in full
+ * first (a 20 MB "box id" was fully lowercased before that check
+ * could refuse it; the observation itself never judges the box id).
+ * Same idiom as claim-ledger.js's lowerId.
+ */
+function lowerId(value) {
+  const s = String(value);
+  return s.length === 64 ? s.toLowerCase() : s;
+}
+
 function buildAttestation({ watcherId, box, plan, currentHeight, minConfirmations = DEFAULT_MIN_CONFIRMATIONS } = {}) {
   validateWatcherId(watcherId);
   const obs = evaluateObservation({ box, plan, currentHeight, minConfirmations });
@@ -146,7 +161,7 @@ function buildAttestation({ watcherId, box, plan, currentHeight, minConfirmation
   }
   const fields = {
     commitment: plan.commitment,
-    boxId: String(box.boxId).toLowerCase(),
+    boxId: lowerId(box.boxId),
     observedHeight: currentHeight,
     confirmations: obs.confirmations,
   };

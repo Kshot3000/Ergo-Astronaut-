@@ -60,7 +60,9 @@
  *
  * BOUNDS: the bundle is untrusted input, so the attestation list is
  * capped at MAX_ATTESTATIONS and refused beyond it (never scanned
- * without limit); the ledger carries step 5's own bound.
+ * without limit); the ledger carries step 5's own bound; and the
+ * claim/record ids the ledger scan compares are length-judged and
+ * lowercased once, before the scan, never once per ledger entry.
  *
  * HONEST SCOPE. Like every record beneath it, an audit is UNSIGNED
  * in Phase 1 — the audit id binds the history audited, not an
@@ -93,6 +95,17 @@ function hexToBytes(hex) {
 }
 function isHex32(s) {
   return typeof s === 'string' && s.length === 64 && /^[0-9a-fA-F]{64}$/.test(s); // length first, O(1) refusal for oversize
+}
+/*
+ * An id in the shape the ledger scan compares: coerced once, and
+ * lowercased only when it is exactly 64 characters — the length of
+ * every verified ledger entry id, so any other length can never
+ * match one and is a plain miss (null), judged from its length
+ * instead of being copied in full by toLowerCase().
+ */
+function idForCompare(v) {
+  const s = String(v || '');
+  return s.length === 64 ? s.toLowerCase() : null;
 }
 function sameIdSet(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
@@ -272,9 +285,20 @@ function auditBundle(bundle = {}) {
   let ledgerHead = null;
   if (lv.valid) {
     ledgerHead = lv.head;
-    checks.claimInLedger = (ledger || []).some((e) =>
-      String(e.claimId).toLowerCase() === String(claim.claimId || '').toLowerCase() &&
-      String(e.settlementRecordId).toLowerCase() === String(settlementRecord.recordId || '').toLowerCase());
+    // The claim and record ids are judged ONCE, from their length,
+    // before the scan — not lowercased inside it: the scan's
+    // predicate runs per ledger entry, so an oversize id was copied
+    // in full once for every entry (a 20 MB "claim id" against a
+    // 50-entry ledger burned ~0.6 s of lowercasing, and the ledger
+    // bound is 10,000 entries). Every verdict is unchanged: a
+    // verified entry's ids are exactly 64 characters, so an id of
+    // any other length could never have matched one.
+    const wantClaimId = idForCompare(claim.claimId);
+    const wantRecordId = idForCompare(settlementRecord.recordId);
+    checks.claimInLedger = wantClaimId !== null && wantRecordId !== null &&
+      (ledger || []).some((e) =>
+        String(e.claimId).toLowerCase() === wantClaimId &&
+        String(e.settlementRecordId).toLowerCase() === wantRecordId);
     if (!checks.claimInLedger) fail('claim-not-in-ledger');
   }
 

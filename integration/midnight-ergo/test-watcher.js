@@ -96,6 +96,16 @@ ok('attestation names plan commitment and box', att1.commitment === plan.commitm
 throws('attestation refuses a shallow box', () => w.buildAttestation({ watcherId: 'watcher-1', box: goodBox(), plan, currentHeight: 1002 }), 'depthReached');
 throws('attestation refuses a spent box', () => w.buildAttestation({ watcherId: 'watcher-1', box: goodBox({ spentTransactionId: 'bb'.repeat(32) }), plan, currentHeight: 1500 }), 'unspent');
 throws('attestation refuses an empty watcher id', () => w.buildAttestation({ watcherId: '', box: goodBox(), plan, currentHeight: 1500 }), 'watcherId');
+/* The box id is judged from its length before it is lowercased for
+ * the record: an oversize id reaches the preimage's named refusal
+ * untouched (it was fully lowercased in full first), and a genuine
+ * uppercase id still mints the pinned record, lowercased. */
+throws('attestation refuses an oversize box id by name', () =>
+  w.buildAttestation({ watcherId: 'watcher-1', box: goodBox({ boxId: 'ab'.repeat(100000) }), plan, currentHeight: 1500 }), 'boxId must be 32 bytes of hex');
+ok('attestation from an uppercase box id mints the pinned record', (() => {
+  const up = w.buildAttestation({ watcherId: 'watcher-1', box: goodBox({ boxId: BOX_A.toUpperCase() }), plan, currentHeight: 1500 });
+  return up.boxId === BOX_A && up.attestationId === att1.attestationId;
+})());
 
 /* Verification detects tampering with any field */
 ok('verify accepts a genuine attestation', w.verifyAttestation(att1) === true);

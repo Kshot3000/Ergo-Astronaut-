@@ -116,6 +116,12 @@ throws('oversize branch element refused by length', () =>
   spv.verifyInclusion(leaf(3), 2, ['ab'.repeat(1000)], ROOT5), '32 bytes');
 throws('non-string expected root refused', () => spv.verifyInclusion(leaf(3), 2, BRANCH_IDX2, 123), 'string');
 ok('short expected root simply fails', spv.verifyInclusion(leaf(3), 2, BRANCH_IDX2, 'abcd') === false);
+/* The expected root is length-judged before the comparison: the
+ * computed root is exactly 64 hex chars, so an oversize "root" fails
+ * from its length, never lowercased in full first, and an uppercase
+ * 64-char root still verifies. */
+ok('oversize expected root simply fails, judged from its length', spv.verifyInclusion(leaf(3), 2, BRANCH_IDX2, 'ab'.repeat(100000)) === false);
+ok('uppercase expected root still verifies', spv.verifyInclusion(leaf(3), 2, BRANCH_IDX2, ROOT5.toUpperCase()) === true);
 
 /* --- address format checks --- */
 ok('btc legacy address format', spv.looksLikeBtcAddress(SATOSHI_ADDR) === true);

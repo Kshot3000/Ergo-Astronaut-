@@ -25,6 +25,9 @@
  * and a hash exactly 64, so an oversize element refuses in O(1) instead
  * of being scanned and decoded in full first (decode-before-check was
  * reproduced locally: a 20 MB "header" burned ~77 ms before refusing).
+ * The same length-first rule covers the expected root verifyInclusion
+ * compares against: a non-64-char root fails from its length, never
+ * lowercased in full first.
  *
  * Read-only math only. Nothing here signs, broadcasts, or custodies anything.
  * Built by Kyle Cox (@kshot9000), independent builder.
@@ -134,6 +137,11 @@ function verifyInclusion(txidDisplay, index, branchInternalHex, expectedRootDisp
   if (typeof expectedRootDisplay !== 'string') {
     throw new Error('expected root must be a string (display-order hex)');
   }
+  // The computed root is exactly 64 hex characters, so an expected
+  // root of any other length can never equal it: judge it from its
+  // length and fail plainly, never lowercase it in full first (a
+  // 20 MB "root" was copied in full before the comparison failed).
+  if (expectedRootDisplay.length !== 64) return false;
   let cur = hashBufFromDisplay(txidDisplay, 'txid');
   let idx = index;
   for (const sibHex of branch) {

@@ -233,6 +233,19 @@ throws('entry preimage refuses a seq beyond the u32 it carries',
   () => l.ledgerEntryPreimage({ ...baseEntry, seq: 0x100000000 }), 'u32');
 throws('entry preimage refuses a short prev head',
   () => l.ledgerEntryPreimage({ ...baseEntry, prevHead: 'abcd' }), '32 bytes of hex');
+ok('isClaimedInLedger judges an oversize query id from its length: a plain miss, genuine ids still found', (() =>
+  l.isClaimedInLedger(ledger3, { claimId: 'e'.repeat(1000000) }) === false &&
+  l.isClaimedInLedger(ledger3, { settlementRecordId: 'e'.repeat(1000000) }) === false &&
+  l.isClaimedInLedger(ledger3, { claimId: CLAIM_MAIN_ID }) === true)());
+throws('buildLedgerEntry refuses an oversize prev head by name, without lowercasing it in full',
+  () => l.buildLedgerEntry({ prevHead: 'a'.repeat(1000000), seq: 0, claim: claimMain }), '32 bytes of hex');
+ok('buildLedgerEntry still canonicalizes uppercase 64-char ids to the same entry', (() => {
+  const upper = l.buildLedgerEntry({
+    prevHead: l.GENESIS_HEAD, seq: 0,
+    claim: { claimId: CLAIM_MAIN_ID.toUpperCase(), settlementRecordId: claimMain.settlementRecordId.toUpperCase() },
+  });
+  return upper.entryId === ENTRY0_ID && upper.claimId === CLAIM_MAIN_ID;
+})());
 
 console.log('ALL ' + pass + ' CLAIM-LEDGER TESTS PASS');
 assert.ok(pass >= 30);

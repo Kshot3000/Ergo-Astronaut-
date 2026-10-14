@@ -55,8 +55,14 @@ async function getErgoBox(boxId, { explorerBase = ERGO_EXPLORER_DEFAULT, fetchIm
   return getJson(explorerBase + '/boxes/' + boxId, fetchImpl);
 }
 
+const MAX_ADDRESS_LENGTH = 128; // generous: this file's own Ergo format check caps at 60
+
 async function getErgoAddressBalance(address, { explorerBase = ERGO_EXPLORER_DEFAULT, fetchImpl } = {}) {
   if (typeof address !== 'string' || address.length === 0) throw new Error('address required');
+  // Judged from length before the address is URL-encoded into a
+  // request: no Ergo address approaches this bound, and an oversize
+  // string must not be encoded (and sent) in full first.
+  if (address.length > MAX_ADDRESS_LENGTH) throw new Error('address exceeds the ' + MAX_ADDRESS_LENGTH + '-character bound');
   const bal = await getJson(
     explorerBase + '/addresses/' + encodeURIComponent(address) + '/balance/confirmed',
     fetchImpl
@@ -98,8 +104,13 @@ async function getMidnightHeight(opts = {}) {
 const MIDNIGHT_CONTRACT_ACTION_QUERY =
   'query($address: HexEncoded!) { contractAction(address: $address) { address state zswapState } }';
 
+const MAX_CONTRACT_ADDRESS_HEX = 128; // generous: a contract address is 32 bytes = 64 hex chars
+
 async function getMidnightContractAction(address, opts = {}) {
-  if (typeof address !== 'string' || !/^[0-9a-fA-F]+$/.test(address)) {
+  // Length judged before the regex scan: an oversize "address" is
+  // refused from its length in O(1), never scanned in full first (a
+  // 20 MB string burned ~58 ms of scanning before refusing).
+  if (typeof address !== 'string' || address.length > MAX_CONTRACT_ADDRESS_HEX || !/^[0-9a-fA-F]+$/.test(address)) {
     throw new Error('Midnight contract address must be hex (HexEncoded)');
   }
   const data = await midnightGraphQL(MIDNIGHT_CONTRACT_ACTION_QUERY, { address }, opts);
@@ -252,6 +263,8 @@ function planBridgeIntent({ nanoErg, ergoSender, midnightRecipient, nonce } = {}
 module.exports = {
   ERGO_EXPLORER_DEFAULT,
   MIDNIGHT_INDEXER_DEFAULTS,
+  MAX_ADDRESS_LENGTH,
+  MAX_CONTRACT_ADDRESS_HEX,
   getErgoHeight,
   getErgoBox,
   getErgoAddressBalance,

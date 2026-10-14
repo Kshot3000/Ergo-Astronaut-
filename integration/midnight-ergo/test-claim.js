@@ -231,6 +231,14 @@ ok('an oversize claimed-set entry is skipped by length and does not block a clai
   });
   return r.verdict === 'claimable';
 })());
+ok('verifyClaimPayload refuses an oversize recipient from its length, before encoding it', (() => {
+  const p = c.buildClaimPayload({ record: settleMain.record, reveal: REVEAL });
+  return c.verifyClaimPayload({ ...p, midnightRecipient: 'x'.repeat(1000000) }) === false;
+})());
+throws('claim preimage refuses a recipient beyond the length bound by name',
+  () => c.claimPreimage({ ...baseClaim, midnightRecipient: 'x'.repeat(201) }), '200-byte');
+throws('claim preimage still refuses a short string whose UTF-8 bytes exceed the bound (the byte check is not the length gate)',
+  () => c.claimPreimage({ ...baseClaim, midnightRecipient: '€'.repeat(67) }), '200-byte');
 
 /* End-to-end precision: an amount beyond float53 survives plan -> settle -> claim exactly */
 ok('beyond-float53 amount survives the full plan/settle/claim chain exactly', (() => {

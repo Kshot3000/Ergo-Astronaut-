@@ -38,7 +38,10 @@
  * scanned): appendClaim refuses to extend a ledger that does not
  * itself verify, refuses any payload verifyClaimPayload rejects, and
  * refuses duplicates; the ledger is capped at MAX_LEDGER_ENTRIES —
- * an over-bound ledger is refused, never scanned or extended.
+ * an over-bound ledger is refused, never scanned or extended. Ids a
+ * caller hands the mint or a read query are judged from their length
+ * before they are lowercased: only a 64-character string can be an
+ * id, so an oversize one is never copied in full first.
  *
  * HONEST SCOPE. Like every record beneath it, a ledger entry is
  * UNSIGNED in Phase 1 — the id binds the entry's position and inputs,
@@ -98,12 +101,24 @@ function computeLedgerEntryId(fields) {
  * payload or the chain (appendClaim and verifyLedger are the gates);
  * it exists so a verifier can recompute exactly what a minter made.
  */
+/*
+ * Lowercase an id for the canonical entry — but only a 64-character
+ * string can be an id, so only those are lowercased; any other value
+ * passes through untouched for ledgerEntryPreimage's isHex32 check to
+ * refuse by name, instead of being copied in full first (a 20 MB
+ * "prevHead" was fully lowercased before that check could refuse it).
+ */
+function lowerId(value) {
+  const s = String(value);
+  return s.length === 64 ? s.toLowerCase() : s;
+}
+
 function buildLedgerEntry({ prevHead, seq, claim } = {}) {
   if (!claim || typeof claim !== 'object') throw new Error('claim payload is required');
   const fields = {
-    prevHead: String(prevHead).toLowerCase(),
-    claimId: String(claim.claimId || '').toLowerCase(),
-    settlementRecordId: String(claim.settlementRecordId || '').toLowerCase(),
+    prevHead: lowerId(prevHead),
+    claimId: lowerId(claim.claimId || ''),
+    settlementRecordId: lowerId(claim.settlementRecordId || ''),
     seq,
   };
   return {
@@ -221,9 +236,17 @@ function appendClaim(entries, claim) {
 function isClaimedInLedger(entries, query = {}) {
   const head = ledgerHead(entries); // throws when the ledger does not verify
   void head;
-  const cid = query.claimId ? String(query.claimId).toLowerCase() : null;
-  const sid = query.settlementRecordId ? String(query.settlementRecordId).toLowerCase() : null;
-  if (!cid && !sid) throw new Error('query must name a claimId or a settlementRecordId');
+  if (!query.claimId && !query.settlementRecordId) {
+    throw new Error('query must name a claimId or a settlementRecordId');
+  }
+  // Each query id is judged from its length before it is lowercased:
+  // only a 64-character string can equal an entry id (every entry was
+  // isHex32-verified above), so an oversize query id is a plain miss,
+  // never lowercased in full first.
+  const cid = typeof query.claimId === 'string' && query.claimId.length === 64
+    ? query.claimId.toLowerCase() : null;
+  const sid = typeof query.settlementRecordId === 'string' && query.settlementRecordId.length === 64
+    ? query.settlementRecordId.toLowerCase() : null;
   return entries.some((e) =>
     (cid && String(e.claimId).toLowerCase() === cid) ||
     (sid && String(e.settlementRecordId).toLowerCase() === sid));

@@ -73,6 +73,12 @@ const CONTRACT = '1fca6b4cec100a425db72d769d1ef19f673de7552b4c9196611797f6b565e7
     dc.getMidnightHeight({ fetchImpl: async () => jsonRes({ errors: [{ message: 'boom' }] }) }), 'boom');
   await throws('midnight contract address must be hex', () =>
     dc.getMidnightContractAction('not-hex!', { fetchImpl: mnFetch }), 'hex');
+  await throws('midnight contract address refused from its length when oversize', () =>
+    dc.getMidnightContractAction('a'.repeat(1000000), { fetchImpl: mnFetch }), 'hex');
+  ok('midnight contract address at the generous bound still fetched',
+    (await dc.getMidnightContractAction('a'.repeat(dc.MAX_CONTRACT_ADDRESS_HEX), { fetchImpl: mnFetch })).address === CONTRACT);
+  await throws('ergo balance address refused from its length when oversize', () =>
+    dc.getErgoAddressBalance('9'.repeat(1000000), { fetchImpl: boxFetch }), 'bound');
 
   /* Address format checks */
   ok('ergo address format: kyle mainnet p2pk', dc.looksLikeErgoAddress(KYLE_ERG) === true);

@@ -55,7 +55,8 @@
  * verifyClaimPayload judges a payload's amount string and claim id
  * by size before parsing or lowercasing either, and evaluateClaim
  * judges each claimed-set entry's ids from their length before
- * comparing them.
+ * comparing them, and the recipient's byte bound is judged from its
+ * string length before it is ever UTF-8 encoded in full.
  *
  * HONEST SCOPE. Like the records beneath it, a claim payload is
  * UNSIGNED in Phase 1 — the id binds the claim's inputs, not a
@@ -97,7 +98,16 @@ function validateReveal(reveal) {
   if (typeof midnightRecipient !== 'string' || midnightRecipient.length === 0) {
     throw new Error('midnightRecipient must be a non-empty string');
   }
-  if (new TextEncoder().encode(midnightRecipient).length > MAX_RECIPIENT_BYTES) {
+  // The byte bound is judged from the string's length BEFORE encoding:
+  // a string's UTF-8 byte length is never less than its code-unit
+  // length, so a string longer than the bound can never fit it — refuse
+  // it from its length, never encode it in full first (a 20 MB
+  // "recipient" was fully encoded, allocating a copy, before refusing).
+  // Strings within the length bound are then encoded exactly as before
+  // (at most 200 code units), so the byte check decides precisely the
+  // same cases it always did.
+  if (midnightRecipient.length > MAX_RECIPIENT_BYTES ||
+      new TextEncoder().encode(midnightRecipient).length > MAX_RECIPIENT_BYTES) {
     throw new Error('midnightRecipient exceeds the 200-byte Bech32m bound');
   }
   if (typeof amountNanoErg !== 'bigint' && !(typeof amountNanoErg === 'number' && Number.isSafeInteger(amountNanoErg))) {

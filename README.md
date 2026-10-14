@@ -1254,7 +1254,8 @@ headers) — with 129 tools on one page it beats scrolling.
   a whole non-negative number to its VLQ hex, or VLQ hex back
   to the number — unsigned LEB128 exactly as fleet-sdk writes
   it, 7 bits per byte, least-significant group first, exact
-  BigInt at any size. Decode is strict: exactly one VLQ, no
+  BigInt at any size up to a 100-digit input bound. Decode is
+  strict: exactly one VLQ, no
   truncation, no trailing bytes, and the canonical spelling
   only — an overlong form like `8000` for zero is rejected.
   Verified against fleet-sdk's published VLQ vectors and an

@@ -83,8 +83,20 @@ function blake2b256(bytes) {
 
 /* ---------- Base58 ---------- */
 var B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+/* Base58 decode accumulates into a BigInt one character at a time, so its
+   cost grows quadratically with the input length: 10,000 characters take
+   ~24 ms, 64,000 take over a second, and an unbounded paste (a whole file
+   dropped into the address checker or the codec tool) would freeze the
+   tab. The length is therefore judged before any character is processed.
+   The bound is generous: an Ergo address is at most ~52 characters, and
+   10,000 characters still decode a ~7.3 KB payload. MAX_BASE58_BYTES is
+   the matching encode-side bound — 7,300 bytes encode to at most 9,970
+   characters, so anything the codec tool encodes stays decodable. */
+var MAX_BASE58_LENGTH = 10000;
+var MAX_BASE58_BYTES = 7300;
 function base58Decode(str) {
   if (typeof str !== "string" || str.length === 0) return null;
+  if (str.length > MAX_BASE58_LENGTH) return null;
   var n = 0n;
   for (var i = 0; i < str.length; i++) {
     var idx = B58_ALPHABET.indexOf(str[i]);
@@ -221,6 +233,7 @@ function buildP2PKTree(pubkeyHex, networkStr) {
 var NANO_PER_ERG = 1000000000n;
 function ergToNano(ergStr) {
   var s = (ergStr == null ? "" : String(ergStr)).trim();
+  if (s.length > 50) return null; /* judged from length before the BigInt parse below: decimal parsing is superlinear, and no ERG amount needs 50 characters (the whole supply is 8 integer digits) */
   if (!/^\d+(\.\d{1,9})?$/.test(s)) return null;
   var parts = s.split(".");
   var nano = BigInt(parts[0]) * NANO_PER_ERG + BigInt(((parts[1] || "") + "000000000").slice(0, 9));
@@ -228,6 +241,7 @@ function ergToNano(ergStr) {
 }
 function nanoToErg(nanoStr) {
   var s = (nanoStr == null ? "" : String(nanoStr)).trim();
+  if (s.length > 50) return null; /* same length-first bound as ergToNano — the whole supply in nanoERG is 17 digits */
   if (!/^\d+$/.test(s)) return null;
   var nano = BigInt(s);
   var whole = nano / NANO_PER_ERG;
@@ -247,6 +261,7 @@ var STORAGE_FEE_FACTOR_NANO_PER_BYTE = 1250000n;
 var STORAGE_PERIOD_BLOCKS = 1051200;
 function storageRentNano(sizeStr) {
   var s = (sizeStr == null ? "" : String(sizeStr)).trim();
+  if (s.length > 20) return null; /* a byte size is a u64 at most — judged from length before the BigInt parse */
   if (!/^\d+$/.test(s)) return null;
   var bytes = BigInt(s);
   if (bytes <= 0n) return null;
@@ -360,6 +375,7 @@ function parseTokenDecimals(decStr) {
 function tokenRawToDisplay(rawStr, decStr) {
   var d = parseTokenDecimals(decStr);
   var s = (rawStr == null ? "" : String(rawStr)).trim();
+  if (s.length > 100) return null; /* judged from length before the BigInt parse: on-chain token amounts are u64 (20 digits at most) */
   if (d === null || !/^\d+$/.test(s)) return null;
   var raw = BigInt(s);
   if (d === 0) return raw.toString();
@@ -371,6 +387,7 @@ function tokenRawToDisplay(rawStr, decStr) {
 function tokenDisplayToRaw(displayStr, decStr) {
   var d = parseTokenDecimals(decStr);
   var s = (displayStr == null ? "" : String(displayStr)).trim();
+  if (s.length > 100) return null; /* same length-first bound as tokenRawToDisplay */
   if (d === null || !/^\d+(\.\d+)?$/.test(s)) return null;
   var parts = s.split(".");
   var fracPart = parts[1] || "";
@@ -391,6 +408,7 @@ function tokenDisplayToRaw(displayStr, decStr) {
    from the block target, because real block intervals vary. */
 function parseChainHeight(heightStr) {
   var s = (heightStr == null ? "" : String(heightStr)).trim();
+  if (s.length > 20) return null; /* a chain height is a u32-scale count — judged from length before callers BigInt it */
   if (!/^\d+$/.test(s)) return null;
   return s;
 }
@@ -2554,6 +2572,7 @@ function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
 var ESCROW_MAX_LABEL_CHARS = 60;
 function parseEscrowSplitBps(splitStr) {
   var s = (splitStr == null ? "" : String(splitStr)).trim();
+  if (s.length > 100) return null; /* judged from length before the BigInt parse — a percent needs 6 characters at most */
   if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
   var dot = s.indexOf(".");
   var whole = dot === -1 ? s : s.slice(0, dot);
@@ -3236,6 +3255,7 @@ var PRIZESPLIT_MAX_NAME_CHARS = 40;
 var PRIZESPLIT_MAX_LABEL_CHARS = 60;
 function parsePrizePercentBps(raw) {
   var s = (raw == null ? "" : String(raw)).trim();
+  if (s.length > 100) return null; /* judged from length before the BigInt parse — a percent needs 6 characters at most */
   var m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(s);
   if (!m) return null;
   var bps = BigInt(m[1]) * 100n + (m[2] ? BigInt(m[2].padEnd(2, "0")) : 0n);
@@ -5176,6 +5196,7 @@ var MATCH_MAX_LABEL_CHARS = 60;
 var MATCH_MAX_BPS = 100000n; /* 1000% — a 10:1 match is the ceiling */
 function parseMatchBps(percentStr) {
   var s = (percentStr == null ? "" : String(percentStr)).trim();
+  if (s.length > 100) return null; /* judged from length before the BigInt parse — a percent needs 6 characters at most */
   if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
   var dot = s.indexOf(".");
   var whole = dot === -1 ? s : s.slice(0, dot);
@@ -5400,6 +5421,7 @@ var GROUPBUY_MAX_THRESHOLD = 1000000000n;
 var GROUPBUY_MAX_BPS = 9999n; /* a discount stays below 100% — 100% off is free, not a sale */
 function parseGroupBuyBps(percentStr) {
   var s = (percentStr == null ? "" : String(percentStr)).trim();
+  if (s.length > 100) return null; /* judged from length before the BigInt parse — a percent needs 6 characters at most */
   if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
   var dot = s.indexOf(".");
   var whole = dot === -1 ? s : s.slice(0, dot);
@@ -5410,6 +5432,7 @@ function parseGroupBuyBps(percentStr) {
 }
 function parseGroupBuyCount(countStr, max) {
   var s = (countStr == null ? "" : String(countStr)).trim();
+  if (s.length > 100) return null; /* judged from length before the BigInt parse — every plan cap is 7 digits at most */
   if (!/^\d+$/.test(s)) return null;
   var v = BigInt(s);
   if (v < 1n || v > max) return null;
@@ -7574,6 +7597,7 @@ function convertAddressListNetwork(addressesText, targetStr) {
    maths throughout. */
 function parseBabelPrice(priceStr) {
   var s = (priceStr == null ? "" : String(priceStr)).trim();
+  if (s.length > 100) return null; /* judged from length before the BigInt parse — a nanoERG price is 17 digits at most */
   if (!/^\d+$/.test(s)) return null;
   return BigInt(s) > 0n ? s : null;
 }
@@ -7706,6 +7730,7 @@ function analyzeBase58(inputStr, directionStr) {
     }
     var bytes = hexToBytes(cleaned);
     if (!bytes) return null;
+    if (bytes.length > MAX_BASE58_BYTES) return null;
     return { direction: direction, byteLength: bytes.length, encoded: base58Encode(bytes), hex: bytesToHex(bytes) };
   }
   var trimmed = input.trim();
@@ -7725,7 +7750,8 @@ function analyzeBase58(inputStr, directionStr) {
    7 bits per byte, least-significant group first, high bit set on
    every byte except the last; negatives are not encodable. This
    tool exposes that codec on its own, in both directions, with
-   exact BigInt maths at any size. Decode is strict in the way a
+   exact BigInt maths at any size up to the 100-digit input bound
+   noted in analyzeVlq. Decode is strict in the way a
    box parser must be: the bytes must be exactly one VLQ (a
    truncated encoding and trailing bytes are rejected), and the
    encoding must be canonical — re-encoding the decoded value must
@@ -7740,6 +7766,7 @@ function analyzeVlq(inputStr, directionStr) {
   var input = inputStr == null ? "" : String(inputStr).trim();
   if (direction === "encode") {
     if (!/^[0-9]+$/.test(input)) return null;
+    if (input.length > 100) return null; /* judged from length before the BigInt parse: decimal parsing is superlinear (400k digits took ~5.4 s), and no VLQ in Ergo exceeds a u64's 20 digits */
     var value = BigInt(input);
     var encBytes = writeVlqBig(value);
     return { direction: direction, value: value.toString(), hex: bytesToHex(Uint8Array.from(encBytes)), byteLength: encBytes.length };
@@ -7786,6 +7813,7 @@ function analyzeZigZag(inputStr, directionStr, widthStr) {
   var max = width === "64" ? 9223372036854775807n : 2147483647n;
   if (direction === "encode") {
     if (!/^-?[0-9]+$/.test(input)) return null;
+    if (input.length > 100) return null; /* judged from length before the BigInt parse — the widest value here is an i64's 20 characters */
     var value = BigInt(input);
     if (value < min || value > max) return null;
     var unsigned = width === "64" ? zigzagEncode(value) : sigmaIntZigzag(Number(value));
@@ -14959,6 +14987,7 @@ function analyzeCompactBits(inputStr, directionStr) {
   var direction = (directionStr == null ? "" : String(directionStr)).trim().toLowerCase();
   if (direction !== "encode" && direction !== "decode") return null;
   var input = inputStr == null ? "" : String(inputStr).trim();
+  if (input.length > 100) return null; /* judged from length before the BigInt parses below — a difficulty has 78 digits at most, an nBits value 10 */
   if (direction === "decode") {
     var n = null;
     if (/^0[xX][0-9a-fA-F]{1,8}$/.test(input)) {
@@ -17172,7 +17201,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {

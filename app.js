@@ -7916,8 +7916,25 @@ function sigmaTypeName(node) {
   for (var i = 0; i < node.elems.length; i++) names.push(sigmaTypeName(node.elems[i]));
   return "(" + names.join(", ") + ")";
 }
-function parseSigmaType(bytes, offset) {
+/* Sigma types nest through the Coll and tuple constructors, and this
+   parser recurses once per nesting level — as do parseSigmaData and
+   sigmaTypeName on the node it returns. Unbounded nesting in a pasted
+   constant, box register or transaction field therefore did not meet
+   a refusal at all: about 5,000 nested Coll bytes (0c repeated) threw
+   an uncaught RangeError (maximum call stack) out of
+   decodeSigmaConstant and every other caller instead of returning the
+   caller's named not-decoded verdict. The depth is now bounded at 32:
+   no real register, register set or explorer-shown constant nests a
+   type anywhere near that deep (tool 91's proposition parser refuses
+   conjecture nesting past 16 on the same rationale), and past the
+   bound the type simply does not parse, so each caller refuses it
+   with exactly the wording it already uses for a type outside its
+   set. */
+var SIGMA_TYPE_MAX_DEPTH = 32;
+function parseSigmaType(bytes, offset, depth) {
   if (offset >= bytes.length) return null;
+  depth = depth || 0;
+  if (depth > SIGMA_TYPE_MAX_DEPTH) return null;
   var b = bytes[offset];
   if (b === 0) return null;
   var prim = function (code, len) {
@@ -7931,7 +7948,7 @@ function parseSigmaType(bytes, offset) {
     if (ctor === 0) return prim(embd, 1);
     if (ctor === 1) {
       if (embd !== 0) { var p1 = prim(embd, 1); return p1 ? { node: { kind: "coll", elem: p1.node }, length: 1 } : null; }
-      sub = parseSigmaType(bytes, offset + 1);
+      sub = parseSigmaType(bytes, offset + 1, depth + 1);
       return sub ? { node: { kind: "coll", elem: sub.node }, length: 1 + sub.length } : null;
     }
     if (ctor === 2) {
@@ -7943,23 +7960,23 @@ function parseSigmaType(bytes, offset) {
       if (embd !== 0) {
         var p5 = prim(embd, 0);
         if (!p5) return null;
-        sub = parseSigmaType(bytes, offset + 1);
+        sub = parseSigmaType(bytes, offset + 1, depth + 1);
         return sub ? { node: { kind: "tuple", elems: [p5.node, sub.node] }, length: 1 + sub.length } : null;
       }
-      var l5 = parseSigmaType(bytes, offset + 1);
+      var l5 = parseSigmaType(bytes, offset + 1, depth + 1);
       if (!l5) return null;
-      var r5 = parseSigmaType(bytes, offset + 1 + l5.length);
+      var r5 = parseSigmaType(bytes, offset + 1 + l5.length, depth + 1);
       return r5 ? { node: { kind: "tuple", elems: [l5.node, r5.node] }, length: 1 + l5.length + r5.length } : null;
     }
     if (ctor === 6) {
       if (embd !== 0) {
         var p6 = prim(embd, 0);
         if (!p6) return null;
-        sub = parseSigmaType(bytes, offset + 1);
+        sub = parseSigmaType(bytes, offset + 1, depth + 1);
         return sub ? { node: { kind: "tuple", elems: [sub.node, p6.node] }, length: 1 + sub.length } : null;
       }
       var elems6 = [], used6 = 1;
-      for (i = 0; i < 3; i++) { sub = parseSigmaType(bytes, offset + used6); if (!sub) return null; elems6.push(sub.node); used6 += sub.length; }
+      for (i = 0; i < 3; i++) { sub = parseSigmaType(bytes, offset + used6, depth + 1); if (!sub) return null; elems6.push(sub.node); used6 += sub.length; }
       return { node: { kind: "tuple", elems: elems6 }, length: used6 };
     }
     if (ctor === 7) {
@@ -7968,7 +7985,7 @@ function parseSigmaType(bytes, offset) {
         return p7 ? { node: { kind: "tuple", elems: [p7.node, p7.node] }, length: 1 } : null;
       }
       var elems7 = [], used7 = 1;
-      for (i = 0; i < 4; i++) { sub = parseSigmaType(bytes, offset + used7); if (!sub) return null; elems7.push(sub.node); used7 += sub.length; }
+      for (i = 0; i < 4; i++) { sub = parseSigmaType(bytes, offset + used7, depth + 1); if (!sub) return null; elems7.push(sub.node); used7 += sub.length; }
       return { node: { kind: "tuple", elems: elems7 }, length: used7 };
     }
     return null;
@@ -7978,7 +7995,7 @@ function parseSigmaType(bytes, offset) {
     if (!lenVlq || lenVlq.value < 2 || lenVlq.value > 255) return null;
     var elems = [], used = 1 + lenVlq.length;
     for (var k = 0; k < lenVlq.value; k++) {
-      var st = parseSigmaType(bytes, offset + used);
+      var st = parseSigmaType(bytes, offset + used, depth + 1);
       if (!st) return null;
       elems.push(st.node); used += st.length;
     }
@@ -17209,7 +17226,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, SIGMA_TYPE_MAX_DEPTH, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {

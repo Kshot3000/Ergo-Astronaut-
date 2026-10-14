@@ -183,6 +183,7 @@ function collectAttestations(attestations, { quorum, commitment, boxId } = {}) {
   const wantCommitment = commitment ? commitment.toLowerCase() : null;
   const wantBoxId = boxId ? boxId.toLowerCase() : null;
   const seen = new Set();
+  const countedIds = [];
   const duplicates = [];
   const invalid = [];
   let targetCommitment = wantCommitment;
@@ -205,10 +206,12 @@ function collectAttestations(attestations, { quorum, commitment, boxId } = {}) {
       return;
     }
     seen.add(att.watcherId);
+    countedIds.push(String(att.attestationId).toLowerCase());
   });
   return {
     quorumReached: seen.size >= quorum,
     distinctWatchers: seen.size,
+    countedAttestationIds: countedIds.sort(),
     quorum,
     commitment: targetCommitment,
     boxId: targetBoxId,

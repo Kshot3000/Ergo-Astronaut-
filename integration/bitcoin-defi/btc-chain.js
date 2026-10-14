@@ -28,6 +28,9 @@
 
 const { parseHeader, powTarget } = require('./btc-spv');
 
+const MAX_HEADERS = 10000; // segment bound: ~5 retarget periods; longer
+// chains verify as consecutive segments (each verdict's tip hash and
+// cumulative work carry into the next segment's judgement by the caller)
 const RETARGET_INTERVAL = 2016;
 const TARGET_TIMESPAN = 14 * 24 * 60 * 60; // 1209600 seconds, two weeks
 const POW_LIMIT_BITS = 0x1d00ffff;
@@ -100,6 +103,9 @@ function expectedRetargetBits(prevBits, periodFirstTimestamp, periodLastTimestam
 function verifyHeaderChain(headersHex, options = {}) {
   const { startHeight = 0, periodStartTimestamp = null } = options;
   if (!Array.isArray(headersHex) || headersHex.length === 0) throw new Error('at least one header is required');
+  if (headersHex.length > MAX_HEADERS) {
+    throw new Error('header list exceeds the ' + MAX_HEADERS + '-entry bound; refusing to verify an unbounded segment');
+  }
   if (!Number.isSafeInteger(startHeight) || startHeight < 0) throw new Error('startHeight must be a non-negative integer');
   if (periodStartTimestamp !== null && !Number.isSafeInteger(periodStartTimestamp)) {
     throw new Error('periodStartTimestamp must be integer seconds or null');
@@ -201,6 +207,7 @@ const SPV_GUARD_ERGOSCRIPT_DRAFT = `{
 }`;
 
 module.exports = {
+  MAX_HEADERS,
   RETARGET_INTERVAL,
   TARGET_TIMESPAN,
   POW_LIMIT_BITS,

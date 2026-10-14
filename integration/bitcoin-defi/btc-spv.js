@@ -11,11 +11,24 @@
  * These functions are that check, dependency-free, and pinned by tests
  * against the real Bitcoin genesis block and an independent Python oracle.
  *
+ * BOUNDS: the lists here are untrusted input, so they are capped before
+ * any hashing or allocation. merkleRoot accepts at most MAX_MERKLE_TXIDS
+ * txids — set far above the tx count of any real block (real blocks
+ * carry at most tens of thousands) — because the root loop allocates a
+ * buffer per leaf and hashes level after level. verifyInclusion accepts
+ * a branch of at most MAX_INCLUSION_BRANCH siblings: branch depth is
+ * ceil(log2(tx count)), so 32 levels already cover 2^32 transactions,
+ * more than any block can contain — no valid proof is ever refused,
+ * and a longer "branch" is not a proof, it is unbounded hashing work.
+ *
  * Read-only math only. Nothing here signs, broadcasts, or custodies anything.
  * Built by Kyle Cox (@kshot9000), independent builder.
  */
 
 const crypto = require('node:crypto');
+
+const MAX_MERKLE_TXIDS = 100000;
+const MAX_INCLUSION_BRANCH = 32;
 
 function sha256d(buf) {
   const once = crypto.createHash('sha256').update(buf).digest();
@@ -72,6 +85,9 @@ function merkleRoot(txidsDisplay) {
   if (!Array.isArray(txidsDisplay) || txidsDisplay.length === 0) {
     throw new Error('at least one txid is required');
   }
+  if (txidsDisplay.length > MAX_MERKLE_TXIDS) {
+    throw new Error('txid list exceeds the ' + MAX_MERKLE_TXIDS + '-entry bound; refusing to hash an unbounded list');
+  }
   let level = txidsDisplay.map((t) => hexToBuf(reverseHex(t), 'txid'));
   for (const leaf of level) {
     if (leaf.length !== 32) throw new Error('txids must be 32 bytes');
@@ -91,10 +107,17 @@ function merkleRoot(txidsDisplay) {
 // shape Bitcoin SPV proofs (e.g. BIP-37 partial Merkle trees) are built from.
 function verifyInclusion(txidDisplay, index, branchInternalHex, expectedRootDisplay) {
   if (!Number.isSafeInteger(index) || index < 0) throw new Error('index must be a non-negative integer');
+  if (branchInternalHex !== undefined && branchInternalHex !== null && !Array.isArray(branchInternalHex)) {
+    throw new Error('branch must be an array');
+  }
+  const branch = branchInternalHex || [];
+  if (branch.length > MAX_INCLUSION_BRANCH) {
+    throw new Error('branch exceeds the ' + MAX_INCLUSION_BRANCH + '-element bound; no valid inclusion proof is deeper');
+  }
   let cur = hexToBuf(reverseHex(txidDisplay), 'txid');
   if (cur.length !== 32) throw new Error('txid must be 32 bytes');
   let idx = index;
-  for (const sibHex of branchInternalHex || []) {
+  for (const sibHex of branch) {
     const sib = hexToBuf(sibHex, 'branch element');
     if (sib.length !== 32) throw new Error('branch elements must be 32 bytes');
     cur = idx % 2 === 0 ? sha256d(Buffer.concat([cur, sib])) : sha256d(Buffer.concat([sib, cur]));
@@ -167,6 +190,8 @@ function planBtcDefiRoute({ satoshis, btcAddress, ergoAddress } = {}) {
 }
 
 module.exports = {
+  MAX_MERKLE_TXIDS,
+  MAX_INCLUSION_BRANCH,
   parseHeader,
   powTarget,
   checkPow,

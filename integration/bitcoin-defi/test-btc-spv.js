@@ -69,6 +69,11 @@ const ROOT5 = 'd3e522600f2e93120ad9331f4e199c5dd98262a23ff8ae8b3f8b36720f87e226'
 ok('oracle merkle n=5', spv.merkleRoot(five) === ROOT5);
 throws('empty merkle refused', () => spv.merkleRoot([]), 'at least one');
 throws('short txid refused', () => spv.merkleRoot(['abcd']), '32 bytes');
+/* Bounds: a caller-supplied txid list is refused BEFORE the leaf buffers
+ * are allocated and hashed — 200,001 identical txids took ~1.5 s of
+ * hashing pre-fix. The bound sits far above any real block's tx count. */
+throws('oversize merkle list refused', () => spv.merkleRoot(new Array(spv.MAX_MERKLE_TXIDS + 1).fill(leaf(1))), 'bound');
+ok('merkle bound is finite and generous', spv.MAX_MERKLE_TXIDS === 100000);
 
 /* --- inclusion proofs (branch elements are internal-order, oracle-pinned) --- */
 const BRANCH_IDX2 = [
@@ -83,6 +88,14 @@ const tamperedBranch = BRANCH_IDX2.slice();
 tamperedBranch[1] = '00' + tamperedBranch[1].slice(2);
 ok('tampered branch fails', spv.verifyInclusion(leaf(3), 2, tamperedBranch, ROOT5) === false);
 ok('single-leaf inclusion is identity', spv.verifyInclusion(GENESIS_COINBASE_TXID, 0, [], GENESIS_COINBASE_TXID) === true);
+/* Bounds: branch depth is ceil(log2(tx count)) — 32 levels cover 2^32
+ * txs, so a deeper branch is not a proof, it is unbounded hashing work,
+ * and it refuses up front. A branch at the bound still runs. */
+ok('inclusion branch bound covers 2^32 txs', spv.MAX_INCLUSION_BRANCH === 32);
+throws('oversize inclusion branch refused', () =>
+  spv.verifyInclusion(leaf(3), 2, new Array(spv.MAX_INCLUSION_BRANCH + 1).fill(leaf(1)), ROOT5), 'bound');
+ok('inclusion branch at the bound still runs', typeof spv.verifyInclusion(leaf(3), 2, new Array(spv.MAX_INCLUSION_BRANCH).fill(leaf(1)), ROOT5) === 'boolean');
+throws('non-array inclusion branch refused', () => spv.verifyInclusion(leaf(3), 2, 'not-an-array', ROOT5), 'array');
 
 /* --- address format checks --- */
 ok('btc legacy address format', spv.looksLikeBtcAddress(SATOSHI_ADDR) === true);

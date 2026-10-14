@@ -135,4 +135,16 @@ ok('expected commitment mismatch excludes everything', (() => {
 ok('quorum of three reached by three watchers', q([att1, att2, att3], { quorum: 3 }).quorumReached === true);
 throws('quorum refuses a zero quorum', () => w.collectAttestations([], { quorum: 0 }), 'positive integer');
 
+/* Bounds: the attestation list is untrusted input — the same 10,000-entry
+ * bound audit.js imposes on it applies here, at the layer every caller
+ * (settlement, audit, direct) funnels through. Over the bound refuses
+ * before a single record is hashed; at the bound the scan still runs. */
+ok('attestation bound is the audit bound', w.MAX_ATTESTATIONS === 10000);
+throws('quorum collection refuses an oversize attestation list', () =>
+  w.collectAttestations(new Array(w.MAX_ATTESTATIONS + 1).fill(null), { quorum: 2 }), 'bound');
+ok('quorum collection still scans a list at the bound', (() => {
+  const r = w.collectAttestations(new Array(w.MAX_ATTESTATIONS).fill(null), { quorum: 2 });
+  return r.distinctWatchers === 0 && r.invalid.length === w.MAX_ATTESTATIONS && r.quorumReached === false;
+})());
+
 console.log('ALL PASS (' + pass + ' checks)');

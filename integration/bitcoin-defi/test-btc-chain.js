@@ -101,6 +101,16 @@ ok('the ignored retarget is named as a retarget failure', wrongRetarget.errors.s
 const overLimit = chain.verifyHeaderChain(['01000000' + '00'.repeat(64) + '00000000' + 'ffff0020' + '00000000']);
 ok('over-limit target named as a bits failure', overLimit.valid === false && overLimit.errors.some((e) => e.check === 'bits'));
 throws('empty chain refused', () => chain.verifyHeaderChain([]), 'at least one header');
+/* Bounds: the header list is untrusted input — oversize segments refuse
+ * before a single header is parsed or hashed; at the bound the scan
+ * still runs (10,000 copies of the genesis header fail linkage, but
+ * they return a verdict rather than a bound error). */
+ok('header segment bound is five retarget periods, rounded', chain.MAX_HEADERS === 10000);
+throws('oversize header segment refused', () => chain.verifyHeaderChain(new Array(chain.MAX_HEADERS + 1).fill(H0)), 'bound');
+ok('header segment at the bound still returns a verdict', (() => {
+  const r = chain.verifyHeaderChain(new Array(chain.MAX_HEADERS).fill(H0));
+  return r.valid === false && r.errors.length > 0;
+})());
 throws('negative start height refused', () => chain.verifyHeaderChain([H0], { startHeight: -1 }), 'startHeight');
 
 /* --- guard draft: exported, labelled, not compiled --- */

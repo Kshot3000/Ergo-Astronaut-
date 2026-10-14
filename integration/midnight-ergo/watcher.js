@@ -20,6 +20,13 @@
  *   || u32be(confirmations = observedHeight - box.creationHeight + 1)
  * attestationId = Blake2b-256(preimage), hex.
  *
+ * BOUNDS: the attestation list a quorum collection scans is untrusted
+ * input, so collectAttestations caps it at MAX_ATTESTATIONS — the same
+ * 10,000-entry bound audit.js imposes on the same list — and refuses
+ * beyond it before hashing anything. (The later layers were hardened
+ * first; this closes the same unbounded-scan hole at the layer they
+ * all call into.)
+ *
  * HONEST SCOPE. An attestation here is an UNSIGNED record: it proves what
  * its fields claim only in the sense that the id recomputes from them, so
  * tampering with any field is detectable. It does not prove WHO made it —
@@ -35,6 +42,7 @@ const { blake2b256, inspectIntentBox, settlementWindowOpen } = require('./intent
 
 const ATTESTATION_DOMAIN = 'EMA1'; // Ergo-Midnight Attestation, encoding v1
 const DEFAULT_MIN_CONFIRMATIONS = 6;
+const MAX_ATTESTATIONS = 10000; // same bound audit.js sets on this list
 
 function bytesToHex(bytes) {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -178,6 +186,9 @@ function verifyAttestation(att) {
 function collectAttestations(attestations, { quorum, commitment, boxId } = {}) {
   if (!Number.isSafeInteger(quorum) || quorum < 1) throw new Error('quorum must be a positive integer');
   if (!Array.isArray(attestations)) throw new Error('attestations must be an array');
+  if (attestations.length > MAX_ATTESTATIONS) {
+    throw new Error('attestations exceed the ' + MAX_ATTESTATIONS + '-entry bound; refusing to scan an unbounded set');
+  }
   if (commitment !== undefined && !isHex32(commitment)) throw new Error('expected commitment must be 32 bytes of hex');
   if (boxId !== undefined && !isHex32(boxId)) throw new Error('expected boxId must be 32 bytes of hex');
   const wantCommitment = commitment ? commitment.toLowerCase() : null;
@@ -223,6 +234,7 @@ function collectAttestations(attestations, { quorum, commitment, boxId } = {}) {
 module.exports = {
   ATTESTATION_DOMAIN,
   DEFAULT_MIN_CONFIRMATIONS,
+  MAX_ATTESTATIONS,
   confirmationsFor,
   evaluateObservation,
   attestationPreimage,

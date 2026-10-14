@@ -23,6 +23,10 @@
  * Every refusal is named by the check that failed. Malformed input
  * shapes throw (programmer error); evidence that is well-formed but
  * does not verify returns { accept: false, refusals: [...] }.
+ * The evidence's lists are bounded by the layers below before any
+ * hashing: the header segment by btc-chain.js's MAX_HEADERS and the
+ * inclusion branch by btc-spv.js's MAX_INCLUSION_BRANCH — oversize
+ * evidence throws as a shape error, exactly like a malformed one.
  *
  * buildDepositRecord folds an ACCEPTED verdict into a content-addressed
  * record: sha256d over the canonical v1 preimage

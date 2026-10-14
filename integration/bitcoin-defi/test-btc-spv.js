@@ -127,6 +127,15 @@ ok('uppercase expected root still verifies', spv.verifyInclusion(leaf(3), 2, BRA
 ok('btc legacy address format', spv.looksLikeBtcAddress(SATOSHI_ADDR) === true);
 ok('btc bech32 address format', spv.looksLikeBtcAddress('bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh') === true);
 ok('ergo address is not a btc address', spv.looksLikeBtcAddress(KYLE_ERG) === false);
+/* The address length is judged BEFORE the regexes scan: the longest
+ * string either pattern can match is 67 chars ('bc1' + 64), so an
+ * oversize "address" is refused from its length, never scanned in
+ * full first (a 20 MB one burned ~30-55 ms of anchored scanning) —
+ * and an at-bound 67-char bech32 string still matches. */
+ok('at-bound 67-char bech32 address still matches', spv.looksLikeBtcAddress('bc1' + 'q'.repeat(64)) === true);
+ok('oversize bech32 address refused from its length', spv.looksLikeBtcAddress('bc1' + 'q'.repeat(65)) === false);
+ok('oversize legacy-shaped address refused from its length', spv.looksLikeBtcAddress('1' + 'a'.repeat(100000)) === false);
+ok('address bound is the bech32 maximum', spv.MAX_BTC_ADDRESS_LENGTH === 67);
 ok('ergo address format', spv.looksLikeErgoAddress(KYLE_ERG) === true);
 
 /* --- route planner --- */
@@ -140,6 +149,7 @@ ok('plan leg 3 (spv) honestly design', plan.legs[2].status === 'design');
 throws('plan refuses zero', () => spv.planBtcDefiRoute({ satoshis: 0n, btcAddress: SATOSHI_ADDR, ergoAddress: KYLE_ERG }), 'positive');
 throws('plan refuses float', () => spv.planBtcDefiRoute({ satoshis: 1.5, btcAddress: SATOSHI_ADDR, ergoAddress: KYLE_ERG }), 'BigInt or a safe integer');
 throws('plan refuses bad btc address', () => spv.planBtcDefiRoute({ satoshis: 1n, btcAddress: KYLE_ERG, ergoAddress: KYLE_ERG }), 'btcAddress');
+throws('plan refuses oversize btc address', () => spv.planBtcDefiRoute({ satoshis: 1n, btcAddress: '1' + 'a'.repeat(100000), ergoAddress: KYLE_ERG }), 'btcAddress');
 throws('plan refuses bad ergo address', () => spv.planBtcDefiRoute({ satoshis: 1n, btcAddress: SATOSHI_ADDR, ergoAddress: 'nope' }), 'ergoAddress');
 
 console.log('ALL PASS (' + pass + ' checks)');

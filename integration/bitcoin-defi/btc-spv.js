@@ -162,9 +162,19 @@ function verifyInclusion(txidDisplay, index, branchInternalHex, expectedRootDisp
 // Format checks only — they catch typos, they do not prove an address is
 // yours or funded. Ergo's real checksum validation lives in hub tool 2;
 // Bitcoin bech32 checksums are validated by the wallet used at bridge time.
+// The longest string either pattern below can match is 67 characters
+// ('bc1' + 64), so a longer string is judged from its length and refused
+// before the regexes ever scan it — an anchored scan is still linear in
+// the input, and a 20 MB "address" burned ~30-55 ms of scanning before
+// failing both patterns. Every other format check in the integration
+// layer already bounds length first (the Ergo check just below caps at
+// 60); this one was the last without a bound. No matchable address is
+// refused: both alternatives' maxima are inside the bound.
+const MAX_BTC_ADDRESS_LENGTH = 67; // 'bc1' + 64, the bech32 alternative's maximum
 function looksLikeBtcAddress(address) {
   return (
     typeof address === 'string' &&
+    address.length <= MAX_BTC_ADDRESS_LENGTH &&
     (/^[13][1-9A-HJ-NP-Za-km-z]{25,39}$/.test(address) || /^bc1[0-9a-z]{25,64}$/.test(address))
   );
 }
@@ -223,6 +233,7 @@ function planBtcDefiRoute({ satoshis, btcAddress, ergoAddress } = {}) {
 module.exports = {
   MAX_MERKLE_TXIDS,
   MAX_INCLUSION_BRANCH,
+  MAX_BTC_ADDRESS_LENGTH,
   parseHeader,
   powTarget,
   checkPow,

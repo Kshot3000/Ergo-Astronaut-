@@ -3218,7 +3218,10 @@ headers) — with 129 tools on one page it beats scrolling.
   back to the root before it is shown;
   verify mode folds a pasted leaf + proof
   against a root exactly as the reference
-  MerkleProof.valid does. Verified against
+  MerkleProof.valid does (verify mode
+  refuses a proof past 64 levels — one
+  level per doubling, so that bound already
+  spans 2^64 leaves). Verified against
   an independent Python oracle mirroring the
   crate: its one-element and five-element
   unit tests, and its real mainnet proof

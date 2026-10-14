@@ -179,6 +179,14 @@ ok('a hostile record with an over-bound id list fails verification, it does not 
   const hostile = { ...d.record, attestationIds: Array.from({ length: s.MAX_ATTESTATION_IDS + 1 }, (_, i) => hexId(i)) };
   return s.verifySettlementRecord(hostile) === false;
 })());
+ok('record verification refuses an oversize record id from its length, without throwing', (() => {
+  const d = decide();
+  return s.verifySettlementRecord({ ...d.record, recordId: 'a'.repeat(1000000) }) === false;
+})());
+ok('record verification refuses a non-string record id', (() => {
+  const d = decide();
+  return s.verifySettlementRecord({ ...d.record, recordId: 42 }) === false;
+})());
 
 /* Input discipline */
 throws('decision refuses a zero quorum', () => decide({ quorum: 0 }), 'positive integer');

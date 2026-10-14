@@ -233,6 +233,71 @@ function settlementWindowOpen(plan, currentHeight) {
  * what it reads: R4's serialized value must equal the plan's exactly and
  * the value must cover the planned amount.
  */
+/*
+ * boxValueCovers(boxValue, planValue): the value comparison, judged
+ * WITHOUT ever feeding an unbounded string to BigInt(). BigInt()
+ * parses a decimal string superlinearly in its digit count, so a
+ * hostile box (or plan) carrying a two-million-digit "value" made
+ * every watcher, settler and auditor pay ~0.4 s of parsing before
+ * the comparison could even run — reproduced locally before this
+ * fix, alongside the id-length gates in watcher/settlement/claim.
+ *
+ * Short operands keep the exact native comparison (a real box value
+ * is an i64 and a real plan value a u64 decimal string — at most 20
+ * digits — so every native form, '0x…', signs, padding, behaves
+ * exactly as it did). A longer operand is judged as a plain decimal
+ * by its significant digits: leading zeros are skipped within a
+ * bounded scan, the count stops at 21 (already beyond every u64
+ * plan), and only the significant digits — never the whole string —
+ * are parsed. A long plan string is not a plan buildIntentBoxPlan
+ * can mint, and a long box string whose significant digits cannot
+ * be settled inside the scan bound is not a value any explorer
+ * returns: both decline (false), the watcher's safe answer, rather
+ * than being parsed in full.
+ */
+const MAX_VALUE_STRING = 40; // short-path bound: any real i64/u64 decimal fits
+const MAX_VALUE_SCAN = 10000; // leading-zero scan bound for long strings
+
+function boxValueCovers(boxValue, planValue) {
+  const short = (v) => typeof v !== 'string' || v.length <= MAX_VALUE_STRING;
+  if (short(boxValue) && short(planValue)) {
+    try {
+      return BigInt(boxValue) >= BigInt(planValue);
+    } catch {
+      return false;
+    }
+  }
+  if (!short(planValue)) return false; // not a plan this module mints
+  let planBig;
+  try {
+    planBig = BigInt(planValue);
+  } catch {
+    return false;
+  }
+  if (typeof boxValue !== 'string') {
+    try {
+      return BigInt(boxValue) >= planBig;
+    } catch {
+      return false;
+    }
+  }
+  // Long box string vs a u64 plan: judge by significant digits.
+  let i = 0;
+  const limit = Math.min(boxValue.length, MAX_VALUE_SCAN);
+  while (i < limit && boxValue[i] === '0') i += 1;
+  if (i === boxValue.length) return 0n >= planBig; // zeros all the way (fully scanned)
+  if (i === limit) return false; // zeros past the scan bound: not a real box value
+  let digits = '';
+  while (i < boxValue.length && digits.length <= 20) {
+    const ch = boxValue[i];
+    if (ch < '0' || ch > '9') return false; // not a plain decimal string
+    digits += ch;
+    i += 1;
+  }
+  if (digits.length > 20) return true; // >= 10^20, beyond the u64 max any plan can name
+  return BigInt(digits) >= planBig;
+}
+
 function inspectIntentBox(box, plan) {
   const checks = { shape: false, commitmentRegister: false, valueCovers: false };
   if (box && typeof box === 'object' && box.additionalRegisters && typeof box.additionalRegisters === 'object') {
@@ -240,11 +305,7 @@ function inspectIntentBox(box, plan) {
     const r4 = box.additionalRegisters.R4;
     const serialized = r4 && (r4.serializedValue || r4.serialized_value);
     checks.commitmentRegister = serialized === plan.registers.R4.serializedValue;
-    try {
-      checks.valueCovers = BigInt(box.value) >= BigInt(plan.valueNanoErg);
-    } catch {
-      checks.valueCovers = false;
-    }
+    checks.valueCovers = boxValueCovers(box.value, plan.valueNanoErg);
   }
   return { matches: checks.shape && checks.commitmentRegister && checks.valueCovers, checks };
 }
@@ -252,6 +313,8 @@ function inspectIntentBox(box, plan) {
 module.exports = {
   COMMITMENT_DOMAIN,
   INTENT_GUARD_ERGOSCRIPT_DRAFT,
+  MAX_VALUE_STRING,
+  MAX_VALUE_SCAN,
   blake2b256,
   commitmentPreimage,
   computeCommitment,
@@ -259,5 +322,6 @@ module.exports = {
   buildIntentBoxPlan,
   refundEligible,
   settlementWindowOpen,
+  boxValueCovers,
   inspectIntentBox,
 };

@@ -147,4 +147,14 @@ ok('quorum collection still scans a list at the bound', (() => {
   return r.distinctWatchers === 0 && r.invalid.length === w.MAX_ATTESTATIONS && r.quorumReached === false;
 })());
 
+/* Bounds: a record's id is judged from its length before it is
+ * lowercased for the comparison — an oversize or non-string id can
+ * never match the recomputed 64-char id and is never copied in full. */
+ok('verifyAttestation refuses an oversize attestation id from its length',
+  w.verifyAttestation({ ...att1, attestationId: 'a'.repeat(1000000) }) === false);
+ok('verifyAttestation refuses a non-string attestation id',
+  w.verifyAttestation({ ...att1, attestationId: 42 }) === false);
+ok('verifyAttestation still accepts the genuine record',
+  w.verifyAttestation(att1) === true);
+
 console.log('ALL PASS (' + pass + ' checks)');

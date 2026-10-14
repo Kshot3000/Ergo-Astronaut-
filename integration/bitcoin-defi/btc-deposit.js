@@ -29,7 +29,9 @@
  * evidence throws as a shape error, exactly like a malformed one.
  * Element sizes are bounded the same way: headers and hashes are
  * length-checked before they are scanned or decoded, here and in
- * btc-spv.js, so no single oversize element is decoded in full first.
+ * btc-spv.js, so no single oversize element is decoded in full first,
+ * and a decimal work string is length-checked before it is scanned
+ * or parsed (parseWork's MAX_WORK_STRING).
  *
  * buildDepositRecord folds an ACCEPTED verdict into a content-addressed
  * record: sha256d over the canonical v1 preimage
@@ -81,6 +83,15 @@ function u32be(n) {
   return b;
 }
 
+// A decimal work string is judged from its length BEFORE it is
+// scanned or parsed: BigInt() parses a decimal string superlinearly
+// in its digit count (a two-million-digit string burned ~416 ms
+// before the 256-bit check below could refuse it). A real cumulative
+// work fits in 256 bits — 78 digits — so this bound, far above that
+// and generous to leading zeros, refuses only strings no segment
+// verdict or evidence record can ever carry.
+const MAX_WORK_STRING = 1000;
+
 function parseWork(value, what) {
   if (typeof value === 'bigint') {
     if (value < 0n) throw new Error(what + ' must be non-negative');
@@ -90,7 +101,12 @@ function parseWork(value, what) {
     if (value < 0) throw new Error(what + ' must be non-negative');
     return BigInt(value);
   }
-  if (typeof value === 'string' && /^[0-9]+$/.test(value)) return BigInt(value);
+  if (typeof value === 'string') {
+    if (value.length > MAX_WORK_STRING) {
+      throw new Error(what + ' exceeds the ' + MAX_WORK_STRING + '-character bound; refusing to parse an unbounded decimal');
+    }
+    if (/^[0-9]+$/.test(value)) return BigInt(value);
+  }
   throw new Error(what + ' must be a BigInt, a safe integer, or a decimal string');
 }
 
@@ -230,6 +246,7 @@ function buildDepositRecord(evidence, policy = {}) {
 }
 
 module.exports = {
+  MAX_WORK_STRING,
   verifyDepositEvidence,
   buildDepositRecord,
   computeEvidenceId,

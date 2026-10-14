@@ -51,7 +51,11 @@
  * 200 bytes (decodeBech32m's own bound); amounts are confined to the
  * u64 the encoding carries; the claimed set a verdict scans is capped
  * at MAX_CLAIMED_ENTRIES — an unbounded caller-supplied list is
- * refused, never scanned.
+ * refused, never scanned. Scalar fields are bounded the same way:
+ * verifyClaimPayload judges a payload's amount string and claim id
+ * by size before parsing or lowercasing either, and evaluateClaim
+ * judges each claimed-set entry's ids from their length before
+ * comparing them.
  *
  * HONEST SCOPE. Like the records beneath it, a claim payload is
  * UNSIGNED in Phase 1 — the id binds the claim's inputs, not a
@@ -176,13 +180,27 @@ function buildClaimPayload({ record, reveal } = {}) {
 function verifyClaimPayload(payload) {
   try {
     if (!payload || typeof payload !== 'object' || payload.version !== 1) return false;
+    // Amount and id are judged by SIZE before either is processed.
+    // A payload amount is the canonical decimal form of a u64 — at
+    // most 20 characters, no leading zeros or sign (buildClaimPayload
+    // mints amount.toString(), and the equality check below refuses
+    // every non-canonical form) — so a longer string can never
+    // verify, and BigInt() must never parse it first: decimal
+    // parsing is superlinear in the digit count, and a
+    // two-million-digit "amount" burned ~436 ms of parsing before
+    // the u64 bound in validateReveal could refuse it. A claim id
+    // is exactly 64 hex characters, so any other length can never
+    // match the recomputed id and is refused from its length,
+    // never lowercased in full first.
+    if (typeof payload.amountNanoErg === 'string' && payload.amountNanoErg.length > 20) return false;
+    if (typeof payload.claimId !== 'string' || payload.claimId.length !== 64) return false;
     const amount = validateReveal({
       midnightRecipient: payload.midnightRecipient,
       amountNanoErg: BigInt(payload.amountNanoErg),
       nonceHex: payload.nonceHex,
     });
     if (amount.toString() !== String(payload.amountNanoErg)) return false;
-    const idOk = computeClaimId({ ...payload, amountNanoErg: amount }) === String(payload.claimId).toLowerCase();
+    const idOk = computeClaimId({ ...payload, amountNanoErg: amount }) === payload.claimId.toLowerCase();
     const commitmentOk = verifyCommitment(payload.commitment, {
       midnightRecipient: payload.midnightRecipient,
       amountNanoErg: amount,
@@ -221,11 +239,15 @@ function evaluateClaim({ record, reveal, claimed = [] } = {}) {
   if (claim) {
     for (const entry of claimed) {
       if (!entry) continue;
+      // Each compared id is judged from its length first: only a
+      // 64-character string can equal a claim or settlement id, so an
+      // oversize entry is skipped from its length, never lowercased
+      // in full before the comparison.
       if (typeof entry === 'string') {
-        if (entry.toLowerCase() === claim.claimId) { alreadyClaimed = true; break; }
+        if (entry.length === 64 && entry.toLowerCase() === claim.claimId) { alreadyClaimed = true; break; }
       } else if (typeof entry === 'object') {
-        if (String(entry.claimId || '').toLowerCase() === claim.claimId) { alreadyClaimed = true; break; }
-        if (String(entry.settlementRecordId || '').toLowerCase() === claim.settlementRecordId) { alreadyClaimed = true; break; }
+        if (typeof entry.claimId === 'string' && entry.claimId.length === 64 && entry.claimId.toLowerCase() === claim.claimId) { alreadyClaimed = true; break; }
+        if (typeof entry.settlementRecordId === 'string' && entry.settlementRecordId.length === 64 && entry.settlementRecordId.toLowerCase() === claim.settlementRecordId) { alreadyClaimed = true; break; }
       }
     }
   }

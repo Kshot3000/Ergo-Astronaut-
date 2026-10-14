@@ -159,4 +159,20 @@ throws('non-string evidence-id tip hash refused', () => deposit.computeEvidenceI
   blockHeight: 100000, confirmations: 6, cumulativeWork: WORK,
 }), '32 bytes');
 
+/* A decimal work string is judged from its length before it is scanned
+ * or parsed (BigInt decimal parsing is superlinear in the digit count;
+ * a real cumulative work fits in 256 bits — 78 digits). */
+throws('oversize work string refused by length, before it is parsed', () => deposit.computeEvidenceId({
+  txid: PAY_TXID, paymentBlockHash: PAY_BLOCK_HASH, tipHash: TIP_HASH,
+  blockHeight: 100000, confirmations: 6, cumulativeWork: '9'.repeat(deposit.MAX_WORK_STRING + 1),
+}), 'bound');
+throws('oversize work floor refused by length', () => deposit.verifyDepositEvidence(evidence(), {
+  minCumulativeWork: '9'.repeat(deposit.MAX_WORK_STRING + 1),
+}), 'bound');
+ok('a work string with leading zeros within the bound still parses to the same value', (() => {
+  const fields = { txid: PAY_TXID, paymentBlockHash: PAY_BLOCK_HASH, tipHash: TIP_HASH, blockHeight: 100000, confirmations: 6 };
+  return deposit.computeEvidenceId({ ...fields, cumulativeWork: WORK }) ===
+    deposit.computeEvidenceId({ ...fields, cumulativeWork: '0'.repeat(100) + WORK });
+})());
+
 console.log('ALL PASS (' + pass + ' checks)');

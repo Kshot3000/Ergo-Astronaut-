@@ -25,7 +25,9 @@
  * 10,000-entry bound audit.js imposes on the same list — and refuses
  * beyond it before hashing anything. (The later layers were hardened
  * first; this closes the same unbounded-scan hole at the layer they
- * all call into.)
+ * all call into.) Scalar fields are bounded the same way:
+ * verifyAttestation judges a record's id from its length before
+ * lowercasing it for the comparison.
  *
  * HONEST SCOPE. An attestation here is an UNSIGNED record: it proves what
  * its fields claim only in the sense that the id recomputes from them, so
@@ -166,7 +168,13 @@ function verifyAttestation(att) {
   try {
     if (!att || typeof att !== 'object' || att.version !== 1) return false;
     validateWatcherId(att.watcherId);
-    return computeAttestationId(att) === String(att.attestationId).toLowerCase();
+    // The id is judged from its length BEFORE it is lowercased for the
+    // comparison: a valid id is exactly 64 hex characters, so any other
+    // length can never match the recomputed id — a hostile oversize
+    // "id" is refused from its length, never copied in full first
+    // (a 20 MB id burned ~25 ms of lowercasing before refusing).
+    if (typeof att.attestationId !== 'string' || att.attestationId.length !== 64) return false;
+    return computeAttestationId(att) === att.attestationId.toLowerCase();
   } catch {
     return false;
   }

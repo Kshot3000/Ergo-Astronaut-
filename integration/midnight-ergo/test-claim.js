@@ -202,6 +202,36 @@ ok('evaluateClaim scans a claimed set at exactly the bound', (() => {
   return r.verdict === 'claimable';
 })());
 
+/* Bounds: scalar fields are judged by size before they are processed —
+ * an oversize amount string is refused from its length (a canonical u64
+ * amount is at most 20 characters), never parsed by BigInt() first, and
+ * an oversize or non-string claim id is refused from its length, never
+ * lowercased in full. Claimed-set entries get the same length-first
+ * treatment in the replay scan. */
+ok('verifyClaimPayload refuses an oversize amount string from its length, before parsing it', (() => {
+  const p = c.buildClaimPayload({ record: settleMain.record, reveal: REVEAL });
+  return c.verifyClaimPayload({ ...p, amountNanoErg: '9'.repeat(100000) }) === false;
+})());
+ok('verifyClaimPayload refuses an oversize claim id from its length', (() => {
+  const p = c.buildClaimPayload({ record: settleMain.record, reveal: REVEAL });
+  return c.verifyClaimPayload({ ...p, claimId: 'a'.repeat(1000000) }) === false;
+})());
+ok('verifyClaimPayload refuses a non-string claim id', (() => {
+  const p = c.buildClaimPayload({ record: settleMain.record, reveal: REVEAL });
+  return c.verifyClaimPayload({ ...p, claimId: 42 }) === false;
+})());
+ok('verifyClaimPayload still refuses a 20-digit amount beyond the u64 (the length gate is not the range check)', (() => {
+  const p = c.buildClaimPayload({ record: settleMain.record, reveal: REVEAL });
+  return c.verifyClaimPayload({ ...p, amountNanoErg: '18446744073709551616' }) === false;
+})());
+ok('an oversize claimed-set entry is skipped by length and does not block a claim', (() => {
+  const r = c.evaluateClaim({
+    record: settleMain.record, reveal: REVEAL,
+    claimed: ['a'.repeat(1000000), { claimId: 'b'.repeat(1000000), settlementRecordId: 'c'.repeat(1000000) }],
+  });
+  return r.verdict === 'claimable';
+})());
+
 /* End-to-end precision: an amount beyond float53 survives plan -> settle -> claim exactly */
 ok('beyond-float53 amount survives the full plan/settle/claim chain exactly', (() => {
   const big = 9007199254740993n;

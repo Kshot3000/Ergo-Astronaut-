@@ -211,7 +211,12 @@ function decideSettlement({ box, plan, attestations, quorum, reveal, currentHeig
 function verifySettlementRecord(record) {
   try {
     if (!record || typeof record !== 'object' || record.version !== 1) return false;
-    return computeSettlementRecordId(record) === String(record.recordId).toLowerCase();
+    // The id is judged from its length BEFORE it is lowercased for the
+    // comparison: a valid id is exactly 64 hex characters, so any other
+    // length can never match the recomputed id — a hostile oversize
+    // "id" is refused from its length, never copied in full first.
+    if (typeof record.recordId !== 'string' || record.recordId.length !== 64) return false;
+    return computeSettlementRecordId(record) === record.recordId.toLowerCase();
   } catch {
     return false;
   }

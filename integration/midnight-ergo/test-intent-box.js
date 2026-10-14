@@ -113,4 +113,23 @@ ok('watcher rejects a shapeless box', ib.inspectIntentBox({ value: 2000000000 },
 ok('watcher tolerates string values from the explorer', ib.inspectIntentBox(
   { value: '2000000000', additionalRegisters: { R4: { serializedValue: '0e20' + base } } }, plan).matches === true);
 
+/* Bounds: the value comparison never parses an unbounded string.
+ * A hostile box (or plan) value is judged by its significant digits:
+ * 21 digits already exceed every u64 plan, leading zeros are skipped
+ * within the scan bound, and only the significant digits are parsed. */
+ok('watcher accepts a box whose huge digit-string value covers the plan, judged by magnitude', ib.inspectIntentBox(
+  { value: '9'.repeat(100000), additionalRegisters: { R4: { serializedValue: '0e20' + base } } }, plan).checks.valueCovers === true);
+ok('watcher rejects a huge leading-zero string whose significant value is small', ib.inspectIntentBox(
+  { value: '0'.repeat(1000) + '5', additionalRegisters: { R4: { serializedValue: '0e20' + base } } }, plan).checks.valueCovers === false);
+ok('watcher accepts a leading-zero string whose significant value covers exactly', ib.inspectIntentBox(
+  { value: '0'.repeat(1000) + '2000000000', additionalRegisters: { R4: { serializedValue: '0e20' + base } } }, plan).checks.valueCovers === true);
+ok('watcher declines a value string of zeros beyond the scan bound instead of parsing it', ib.inspectIntentBox(
+  { value: '0'.repeat(ib.MAX_VALUE_SCAN + 1) + '9'.repeat(25), additionalRegisters: { R4: { serializedValue: '0e20' + base } } }, plan).checks.valueCovers === false);
+ok('watcher declines a huge plan value instead of parsing it', ib.inspectIntentBox(
+  goodBox, { ...plan, valueNanoErg: '9'.repeat(100000) }).checks.valueCovers === false);
+ok('watcher declines a long non-decimal box value', ib.inspectIntentBox(
+  { value: 'x'.repeat(100), additionalRegisters: { R4: { serializedValue: '0e20' + base } } }, plan).checks.valueCovers === false);
+ok('short native value forms are unchanged (hex string, negative, exact)', ib.boxValueCovers('0x10', '10') === true &&
+  ib.boxValueCovers('-5', '10') === false && ib.boxValueCovers('2000000000', '2000000000') === true);
+
 console.log('ALL PASS (' + pass + ' checks)');

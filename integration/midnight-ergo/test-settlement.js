@@ -159,6 +159,27 @@ ok('verify rejects a tampered record height', (() => {
     s.verifySettlementRecord(null) === false;
 })());
 
+/* Bounds: the record's attestation-id list is refused before it is processed */
+const hexId = (i) => i.toString(16).padStart(64, '0');
+throws('record refuses an attestation-id list beyond the bound, before processing it',
+  () => s.computeSettlementRecordId({ ...baseFields, attestationIds: Array.from({ length: s.MAX_ATTESTATION_IDS + 1 }, (_, i) => hexId(i)) }),
+  'exceed the ' + s.MAX_ATTESTATION_IDS + '-entry bound');
+ok('record still processes an attestation-id list at the bound', (() => {
+  const atBound = Array.from({ length: s.MAX_ATTESTATION_IDS }, (_, i) => hexId(i));
+  return typeof s.computeSettlementRecordId({ ...baseFields, attestationIds: atBound }) === 'string';
+})());
+throws('record refuses an oversize attestation id from its length, before decoding it',
+  () => s.computeSettlementRecordId({ ...baseFields, attestationIds: ['a'.repeat(2000000)] }),
+  'attestation ids must be 32 bytes of hex');
+throws('record refuses a non-string attestation id instead of coercing it',
+  () => s.computeSettlementRecordId({ ...baseFields, attestationIds: [42] }),
+  'attestation ids must be 32 bytes of hex');
+ok('a hostile record with an over-bound id list fails verification, it does not verify or throw', (() => {
+  const d = decide();
+  const hostile = { ...d.record, attestationIds: Array.from({ length: s.MAX_ATTESTATION_IDS + 1 }, (_, i) => hexId(i)) };
+  return s.verifySettlementRecord(hostile) === false;
+})());
+
 /* Input discipline */
 throws('decision refuses a zero quorum', () => decide({ quorum: 0 }), 'positive integer');
 throws('decision refuses a negative height', () => decide({ currentHeight: -1 }), 'non-negative integer');

@@ -48,6 +48,18 @@
  * means a record minted in-window cannot be replayed as a fresh
  * decision at a later height.
  *
+ * BOUNDS: a settlement record is untrusted input wherever it is
+ * verified (claim.js and audit.js both call verifySettlementRecord on
+ * records a caller hands them), so settlementRecordPreimage refuses
+ * an attestation-id list beyond MAX_ATTESTATION_IDS — the same 10,000
+ * bound watcher.js and audit.js impose on the same list, and the most
+ * a quorum collection can ever count — BEFORE any element is copied,
+ * deduplicated or sorted, and judges each id's size from its string
+ * length before lowercasing it. The u16 encoding check below stays as
+ * the encoding's own guard. (Before this, the u16 bound was only
+ * checked after the whole list had been mapped, deduplicated and
+ * sorted, so a hostile record bypassed every caller's cap.)
+ *
  * HONEST SCOPE. Like the attestation records it rests on, a decision
  * record is UNSIGNED in Phase 1 — the id binds the decision's inputs,
  * not a decider. Nothing here builds a transaction, signs, or talks to
@@ -61,6 +73,7 @@ const { blake2b256, inspectIntentBox, verifyCommitment, settlementWindowOpen } =
 const { collectAttestations } = require('./watcher');
 
 const SETTLEMENT_DOMAIN = 'EMS1'; // Ergo-Midnight Settlement, encoding v1
+const MAX_ATTESTATION_IDS = 10000; // same bound watcher.js/audit.js set on this list
 
 function bytesToHex(bytes) {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -71,7 +84,9 @@ function hexToBytes(hex) {
   return out;
 }
 function isHex32(s) {
-  return typeof s === 'string' && /^[0-9a-fA-F]{64}$/.test(s);
+  // Length judged first, in O(1): an oversize string is refused from
+  // its length alone, never regex-scanned.
+  return typeof s === 'string' && s.length === 64 && /^[0-9a-fA-F]{64}$/.test(s);
 }
 
 /* ---------------- Decision record ---------------- */
@@ -85,7 +100,15 @@ function settlementRecordPreimage({ commitment, boxId, decisionHeight, attestati
   if (!Array.isArray(attestationIds) || attestationIds.length === 0) {
     throw new Error('attestationIds must be a non-empty array');
   }
-  const ids = [...new Set(attestationIds.map((id) => String(id).toLowerCase()))].sort();
+  if (attestationIds.length > MAX_ATTESTATION_IDS) {
+    throw new Error('attestationIds exceed the ' + MAX_ATTESTATION_IDS + '-entry bound; refusing to process an unbounded set');
+  }
+  for (const id of attestationIds) {
+    if (typeof id !== 'string' || id.length !== 64) {
+      throw new Error('attestation ids must be 32 bytes of hex');
+    }
+  }
+  const ids = [...new Set(attestationIds.map((id) => id.toLowerCase()))].sort();
   if (ids.length > 0xffff) throw new Error('too many attestations for the u16 count');
   for (const id of ids) {
     if (!isHex32(id)) throw new Error('attestation ids must be 32 bytes of hex');
@@ -196,6 +219,7 @@ function verifySettlementRecord(record) {
 
 module.exports = {
   SETTLEMENT_DOMAIN,
+  MAX_ATTESTATION_IDS,
   settlementRecordPreimage,
   computeSettlementRecordId,
   decideSettlement,

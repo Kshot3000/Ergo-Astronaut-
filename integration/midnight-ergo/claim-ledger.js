@@ -66,7 +66,7 @@ function hexToBytes(hex) {
   return out;
 }
 function isHex32(s) {
-  return typeof s === 'string' && /^[0-9a-fA-F]{64}$/.test(s);
+  return typeof s === 'string' && s.length === 64 && /^[0-9a-fA-F]{64}$/.test(s); // length first, O(1) refusal for oversize
 }
 
 /* ---------------- Ledger entry ---------------- */

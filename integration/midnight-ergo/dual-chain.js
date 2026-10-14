@@ -49,7 +49,7 @@ async function getErgoHeight({ explorerBase = ERGO_EXPLORER_DEFAULT, fetchImpl }
 }
 
 async function getErgoBox(boxId, { explorerBase = ERGO_EXPLORER_DEFAULT, fetchImpl } = {}) {
-  if (typeof boxId !== 'string' || !/^[0-9a-fA-F]{64}$/.test(boxId)) {
+  if (typeof boxId !== 'string' || boxId.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(boxId)) {
     throw new Error('boxId must be 64 hex characters');
   }
   return getJson(explorerBase + '/boxes/' + boxId, fetchImpl);

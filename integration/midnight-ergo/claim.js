@@ -83,7 +83,7 @@ function hexToBytes(hex) {
   return out;
 }
 function isHex32(s) {
-  return typeof s === 'string' && /^[0-9a-fA-F]{64}$/.test(s);
+  return typeof s === 'string' && s.length === 64 && /^[0-9a-fA-F]{64}$/.test(s); // length first, O(1) refusal for oversize
 }
 
 /* Validate the revealed fields once; returns the amount as BigInt. */
@@ -102,7 +102,7 @@ function validateReveal(reveal) {
   const amount = BigInt(amountNanoErg);
   if (amount <= 0n) throw new Error('amountNanoErg must be positive');
   if (amount > U64_MAX) throw new Error('amountNanoErg exceeds the u64 the claim encoding carries');
-  if (typeof nonceHex !== 'string' || !/^[0-9a-fA-F]{64}$/.test(nonceHex)) {
+  if (typeof nonceHex !== 'string' || nonceHex.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(nonceHex)) {
     throw new Error('nonceHex must be exactly 32 bytes of hex (64 characters)');
   }
   return amount;

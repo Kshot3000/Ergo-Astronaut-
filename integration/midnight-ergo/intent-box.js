@@ -131,7 +131,7 @@ function validateIntentFields({ midnightRecipient, amountNanoErg, nonceHex }) {
   const amount = BigInt(amountNanoErg);
   if (amount <= 0n) throw new Error('amountNanoErg must be positive');
   if (amount > U64_MAX) throw new Error('amountNanoErg exceeds the u64 the commitment encoding carries');
-  if (typeof nonceHex !== 'string' || !/^[0-9a-fA-F]{64}$/.test(nonceHex)) {
+  if (typeof nonceHex !== 'string' || nonceHex.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(nonceHex)) {
     throw new Error('nonceHex must be exactly 32 bytes of hex (64 characters)');
   }
   return amount;
@@ -155,7 +155,7 @@ function computeCommitment(fields) {
 }
 
 function verifyCommitment(commitmentHex, fields) {
-  if (typeof commitmentHex !== 'string' || !/^[0-9a-fA-F]{64}$/.test(commitmentHex)) return false;
+  if (typeof commitmentHex !== 'string' || commitmentHex.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(commitmentHex)) return false;
   try {
     return computeCommitment(fields) === commitmentHex.toLowerCase();
   } catch {

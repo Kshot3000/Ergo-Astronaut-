@@ -1152,7 +1152,10 @@ headers) — with 129 tools on one page it beats scrolling.
   trees exactly — the case the inspector's P2SH derivation honestly
   declines. The tree is parsed first and anything unparseable is
   refused, and the built address is round-tripped through the decoder
-  before it is shown. Verified against the fleet-sdk fee-contract P2S
+  before it is shown. A tree past 7,300 bytes is refused by name: its
+  address would run past the 10,000-character bound the decoder
+  accepts, so no address built from it could ever be read back.
+  Verified against the fleet-sdk fee-contract P2S
   address on both networks and the fleet #219 P2PK tree,
   cross-checked with an independent Python (hashlib) build.
 - **Serialized box builder** — the encode-side inverse of the

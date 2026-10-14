@@ -6905,6 +6905,18 @@ function buildP2SAddress(treeHex, networkStr) {
   var info = analyzeErgoTree(treeHex, networkStr);
   if (!info.valid) { out.reason = info.reason; return out; }
   var bytes = hexToBytes(treeHex);
+  /* A P2S address Base58-encodes the WHOLE tree, and that encode is
+     quadratic in the byte count (one growing BigInt), while the
+     decoder it must round-trip through (tool 11, via tool 2's
+     MAX_BASE58_LENGTH) accepts at most 10,000 characters — so past
+     MAX_BASE58_BYTES of tree the build could never succeed, only
+     churn (a valid 200 KB constant tree burned minutes, then failed
+     as a misleading "internal check"). Judged from length here,
+     before any encoding — the same bound analyzeBase58's encode
+     already carries, whose encodings stay under the decode bound so
+     the codec round-trips at the bound. Real scripts are a few
+     hundred bytes; nothing legitimate is this large. */
+  if (bytes.length > MAX_BASE58_BYTES) { out.reason = "That tree is " + bytes.length + " bytes — a P2S address Base58-encodes the whole script, and past " + MAX_BASE58_BYTES + " bytes the address would run past the " + MAX_BASE58_LENGTH + "-character bound this hub's own decoder (tool 11) accepts, so no address built from it could ever be read back. Real ErgoTrees are a few hundred bytes; a script this large travels as tree hex or a box, not as an address."; return out; }
   out.network = info.network;
   out.ergoTree = bytesToHex(bytes);
   out.byteLength = bytes.length;

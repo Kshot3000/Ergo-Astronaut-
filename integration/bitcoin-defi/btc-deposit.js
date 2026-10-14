@@ -27,6 +27,9 @@
  * hashing: the header segment by btc-chain.js's MAX_HEADERS and the
  * inclusion branch by btc-spv.js's MAX_INCLUSION_BRANCH — oversize
  * evidence throws as a shape error, exactly like a malformed one.
+ * Element sizes are bounded the same way: headers and hashes are
+ * length-checked before they are scanned or decoded, here and in
+ * btc-spv.js, so no single oversize element is decoded in full first.
  *
  * buildDepositRecord folds an ACCEPTED verdict into a content-addressed
  * record: sha256d over the canonical v1 preimage
@@ -60,11 +63,15 @@ function hexToBuf(hex, what) {
   return Buffer.from(hex, 'hex');
 }
 
-// Display-order hash hex -> internal (wire) bytes.
+// Display-order hash hex -> internal (wire) bytes. The 32-byte size is
+// judged from the string length BEFORE hexToBuf scans or decodes
+// anything — the same length-before-decode rule btc-spv.js applies —
+// so an oversize "hash" refuses without a proportional allocation.
 function internalBytes(displayHex, what) {
-  const buf = hexToBuf(displayHex, what);
-  if (buf.length !== 32) throw new Error((what || 'hash') + ' must be 32 bytes');
-  return Buffer.from(buf).reverse();
+  if (typeof displayHex !== 'string' || displayHex.length !== 64) {
+    throw new Error((what || 'hash') + ' must be 32 bytes');
+  }
+  return Buffer.from(hexToBuf(displayHex, what)).reverse();
 }
 
 function u32be(n) {

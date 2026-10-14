@@ -147,5 +147,16 @@ throws('negative index throws', () => deposit.verifyDepositEvidence(evidence({
 throws('zero minConfirmations throws', () => deposit.verifyDepositEvidence(evidence(), { minConfirmations: 0 }), 'minConfirmations');
 throws('non-numeric work floor throws', () => deposit.verifyDepositEvidence(evidence(), { minCumulativeWork: 'lots' }), 'minCumulativeWork');
 throws('empty header list throws', () => deposit.verifyDepositEvidence(evidence({ headersHex: [] })), 'at least one header');
+/* Evidence-id fields are length-checked before they are scanned or
+ * decoded (the length-before-decode rule, applied in internalBytes):
+ * an oversize or non-string hash refuses as a 32-byte shape error. */
+throws('oversize evidence-id txid refused by length', () => deposit.computeEvidenceId({
+  txid: 'ab'.repeat(1000), paymentBlockHash: PAY_BLOCK_HASH, tipHash: TIP_HASH,
+  blockHeight: 100000, confirmations: 6, cumulativeWork: WORK,
+}), '32 bytes');
+throws('non-string evidence-id tip hash refused', () => deposit.computeEvidenceId({
+  txid: PAY_TXID, paymentBlockHash: PAY_BLOCK_HASH, tipHash: 123,
+  blockHeight: 100000, confirmations: 6, cumulativeWork: WORK,
+}), '32 bytes');
 
 console.log('ALL PASS (' + pass + ' checks)');

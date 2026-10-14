@@ -20,6 +20,11 @@
  * ceil(log2(tx count)), so 32 levels already cover 2^32 transactions,
  * more than any block can contain — no valid proof is ever refused,
  * and a longer "branch" is not a proof, it is unbounded hashing work.
+ * Element SIZES are likewise checked from the string length BEFORE any
+ * regex scan or buffer decode: a header is exactly 160 hex characters
+ * and a hash exactly 64, so an oversize element refuses in O(1) instead
+ * of being scanned and decoded in full first (decode-before-check was
+ * reproduced locally: a 20 MB "header" burned ~77 ms before refusing).
  *
  * Read-only math only. Nothing here signs, broadcasts, or custodies anything.
  * Built by Kyle Cox (@kshot9000), independent builder.
@@ -47,11 +52,26 @@ function reverseHex(hex) {
   return Buffer.from(hexToBuf(hex, 'hash')).reverse().toString('hex');
 }
 
+// Display-order hash hex -> internal (wire) bytes. The 32-byte size is
+// judged from the string length BEFORE hexToBuf scans or decodes
+// anything, so a caller cannot make the verifier allocate a buffer
+// proportional to an arbitrarily long "hash" before being refused.
+function hashBufFromDisplay(hex, what) {
+  if (typeof hex !== 'string' || hex.length !== 64) {
+    throw new Error(what + ' must be 32 bytes');
+  }
+  return Buffer.from(hexToBuf(hex, what)).reverse();
+}
+
 /* ---------------- Headers and proof-of-work ---------------- */
 
 function parseHeader(headerHex) {
+  // Length first: exactly 80 bytes is exactly 160 hex characters, judged
+  // before the input is regex-scanned or decoded into a buffer.
+  if (typeof headerHex !== 'string' || headerHex.length !== 160) {
+    throw new Error('a Bitcoin block header is exactly 80 bytes');
+  }
   const raw = hexToBuf(headerHex, 'header');
-  if (raw.length !== 80) throw new Error('a Bitcoin block header is exactly 80 bytes');
   const hashInternal = sha256d(raw);
   return {
     version: raw.readUInt32LE(0),
@@ -88,10 +108,7 @@ function merkleRoot(txidsDisplay) {
   if (txidsDisplay.length > MAX_MERKLE_TXIDS) {
     throw new Error('txid list exceeds the ' + MAX_MERKLE_TXIDS + '-entry bound; refusing to hash an unbounded list');
   }
-  let level = txidsDisplay.map((t) => hexToBuf(reverseHex(t), 'txid'));
-  for (const leaf of level) {
-    if (leaf.length !== 32) throw new Error('txids must be 32 bytes');
-  }
+  let level = txidsDisplay.map((t) => hashBufFromDisplay(t, 'txid'));
   while (level.length > 1) {
     if (level.length % 2 === 1) level.push(level[level.length - 1]);
     const next = [];
@@ -114,12 +131,18 @@ function verifyInclusion(txidDisplay, index, branchInternalHex, expectedRootDisp
   if (branch.length > MAX_INCLUSION_BRANCH) {
     throw new Error('branch exceeds the ' + MAX_INCLUSION_BRANCH + '-element bound; no valid inclusion proof is deeper');
   }
-  let cur = hexToBuf(reverseHex(txidDisplay), 'txid');
-  if (cur.length !== 32) throw new Error('txid must be 32 bytes');
+  if (typeof expectedRootDisplay !== 'string') {
+    throw new Error('expected root must be a string (display-order hex)');
+  }
+  let cur = hashBufFromDisplay(txidDisplay, 'txid');
   let idx = index;
   for (const sibHex of branch) {
+    // Branch elements are internal-order hex, also exactly 64 chars:
+    // the same length-before-decode rule, checked on the raw string.
+    if (typeof sibHex !== 'string' || sibHex.length !== 64) {
+      throw new Error('branch elements must be 32 bytes');
+    }
     const sib = hexToBuf(sibHex, 'branch element');
-    if (sib.length !== 32) throw new Error('branch elements must be 32 bytes');
     cur = idx % 2 === 0 ? sha256d(Buffer.concat([cur, sib])) : sha256d(Buffer.concat([sib, cur]));
     idx = Math.floor(idx / 2);
   }

@@ -55,6 +55,12 @@ const tamperedNonce = GENESIS_HEADER.slice(0, 152) + '00000000';
 ok('tampered nonce changes the hash', spv.parseHeader(tamperedNonce).hash !== GENESIS_HASH);
 throws('short header refused', () => spv.parseHeader(GENESIS_HEADER.slice(0, 158)), '80 bytes');
 throws('non-hex header refused', () => spv.parseHeader('zz' + GENESIS_HEADER.slice(2)), 'hex');
+/* Element size is judged from the string length BEFORE any scan or
+ * decode: a 200,000-char "header" refused in ~77 ms of regex+Buffer
+ * work pre-fix; the length check refuses it (and non-strings) in O(1)
+ * with the same 80-byte error. */
+throws('oversize header refused by length', () => spv.parseHeader('00'.repeat(100000)), '80 bytes');
+throws('non-string header refused', () => spv.parseHeader(123), '80 bytes');
 
 /* --- merkle roots --- */
 ok('single-tx merkle root is the txid', spv.merkleRoot([GENESIS_COINBASE_TXID]) === GENESIS_COINBASE_TXID);
@@ -74,6 +80,11 @@ throws('short txid refused', () => spv.merkleRoot(['abcd']), '32 bytes');
  * hashing pre-fix. The bound sits far above any real block's tx count. */
 throws('oversize merkle list refused', () => spv.merkleRoot(new Array(spv.MAX_MERKLE_TXIDS + 1).fill(leaf(1))), 'bound');
 ok('merkle bound is finite and generous', spv.MAX_MERKLE_TXIDS === 100000);
+/* The list bound caps the COUNT; the per-element length check caps the
+ * SIZE — one txid element is judged by its 64-char length before it is
+ * scanned, decoded and reversed, not after. */
+throws('oversize txid element refused by length', () => spv.merkleRoot(['ab'.repeat(1000)]), '32 bytes');
+throws('non-string txid element refused', () => spv.merkleRoot([123]), '32 bytes');
 
 /* --- inclusion proofs (branch elements are internal-order, oracle-pinned) --- */
 const BRANCH_IDX2 = [
@@ -96,6 +107,15 @@ throws('oversize inclusion branch refused', () =>
   spv.verifyInclusion(leaf(3), 2, new Array(spv.MAX_INCLUSION_BRANCH + 1).fill(leaf(1)), ROOT5), 'bound');
 ok('inclusion branch at the bound still runs', typeof spv.verifyInclusion(leaf(3), 2, new Array(spv.MAX_INCLUSION_BRANCH).fill(leaf(1)), ROOT5) === 'boolean');
 throws('non-array inclusion branch refused', () => spv.verifyInclusion(leaf(3), 2, 'not-an-array', ROOT5), 'array');
+/* Same length-before-decode rule on this path: an oversize branch
+ * element refuses by its string length, and a non-string expected root
+ * is the module's own Error — pre-fix it crashed with a raw TypeError
+ * from .toLowerCase. A short STRING root stays a plain false: it is a
+ * well-formed shape that simply does not match. */
+throws('oversize branch element refused by length', () =>
+  spv.verifyInclusion(leaf(3), 2, ['ab'.repeat(1000)], ROOT5), '32 bytes');
+throws('non-string expected root refused', () => spv.verifyInclusion(leaf(3), 2, BRANCH_IDX2, 123), 'string');
+ok('short expected root simply fails', spv.verifyInclusion(leaf(3), 2, BRANCH_IDX2, 'abcd') === false);
 
 /* --- address format checks --- */
 ok('btc legacy address format', spv.looksLikeBtcAddress(SATOSHI_ADDR) === true);

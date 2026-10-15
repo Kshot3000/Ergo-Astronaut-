@@ -105,7 +105,10 @@ headers) — with 129 tools on one page it beats scrolling.
   on 2026-10-07; a votable chain parameter). Exact BigInt maths: the
   checker shows the exact minimum for a box's size, whether a value
   clears it (and by how much, or the shortfall), and how it compares
-  with the recommended safe user minimum of 0.001 ERG per box.
+  with the recommended safe user minimum of 0.001 ERG per box. A size
+  past 20 digits is refused from its length before any parsing — a
+  byte size is a u64 at most, the same bound the storage rent
+  estimator judges a size by.
 - **Token amount converter** — on-chain token amounts are whole integers;
   a token's display amount is its raw integer divided by 10^decimals,
   with the decimals declared in the token's own metadata (ERG itself is

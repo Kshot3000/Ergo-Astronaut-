@@ -293,11 +293,21 @@ function analyzeStorageRent(sizeStr, ergStr) {
    /api/v1/info, checked 2026-10-07); it is votable, so re-check it
    before citing it again. sigma-rust's recommended safe user minimum
    is 1,000,000 nanoERG (0.001 ERG), which covers boxes up to 2,777
-   bytes at the current rate. Exact BigInt maths throughout. */
+   bytes at the current rate. Exact BigInt maths throughout. The
+   size is judged from its length before the BigInt parse — the same
+   20-character bound tool 3's storageRentNano already judges this
+   same kind of size by ("a byte size is a u64 at most"), which this
+   checker was missing: decimal BigInt parsing is superlinear, and
+   the result string is parsed again downstream (analyzeMinBoxValue
+   and the box-health tool that composes it), so a pasted size of
+   400,000 digits took ~680 ms here and ~1.6 s through the analysis
+   to reach an answer no real box size needs — a serialized size is
+   a u64-scale count, and 20 digits already spans past it. */
 var MIN_VALUE_PER_BYTE_NANO = 360n;
 var SAFE_USER_MIN_BOX_NANO = 1000000n;
 function minBoxValueNano(sizeStr) {
   var s = (sizeStr == null ? "" : String(sizeStr)).trim();
+  if (s.length > 20) return null; /* a byte size is a u64 at most — judged from length before the BigInt parse, the same bound storageRentNano (tool 3) judges a size by */
   if (!/^\d+$/.test(s)) return null;
   var bytes = BigInt(s);
   if (bytes <= 0n) return null;

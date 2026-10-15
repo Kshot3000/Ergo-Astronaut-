@@ -241,7 +241,7 @@ function ergToNano(ergStr) {
 }
 function nanoToErg(nanoStr) {
   var s = (nanoStr == null ? "" : String(nanoStr)).trim();
-  if (s.length > 50) return null; /* same length-first bound as ergToNano — the whole supply in nanoERG is 17 digits */
+  if (s.length > 100) return null; /* judged from length before the BigInt parse — but the bound must span what the hub itself produces, not just the whole supply's 17 digits: ergToNano accepts a 50-character ERG amount, which is a nanoERG string of up to 59 digits, and the builders compose those amounts (sums over up to 20 entries, period multiples up to 48, group-buy quantities up to 20,000,000 units, a babel covered amount up to its 100-digit price cap) reaching past 60 digits, so the old 50-character bound — copied from ergToNano, whose input is ERG, not nanoERG — left valid plans showing "null ERG" for amounts past 41 ERG digits. 100 is the bound the hub's other nano-scale parsers already judge by (token raw amounts, the babel price), and a 100-digit parse is trivial while an oversize string is still refused before any parse */
   if (!/^\d+$/.test(s)) return null;
   var nano = BigInt(s);
   var whole = nano / NANO_PER_ERG;

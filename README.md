@@ -81,7 +81,10 @@ addresses & trees, boxes, codecs & constants, transactions, block
 headers) — with 129 tools on one page it beats scrolling.
 
 - **ERG ⇄ nanoERG converter** — exact BigInt maths (1 ERG = 1,000,000,000
-  nanoERG), no floating-point drift.
+  nanoERG), no floating-point drift. The nanoERG side converts amounts
+  of up to 100 digits exactly — the range the hub's own builders can
+  compose from accepted ERG amounts — and refuses longer strings from
+  their length before parsing.
 - **Ergo address checker** — Base58-decodes an address in your browser,
   verifies its real checksum (the first 4 bytes of Blake2b-256 over the
   address bytes, stored as the last 4 bytes) and reports the network and

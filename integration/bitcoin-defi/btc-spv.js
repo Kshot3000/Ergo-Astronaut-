@@ -20,6 +20,9 @@
  * ceil(log2(tx count)), so 32 levels already cover 2^32 transactions,
  * more than any block can contain — no valid proof is ever refused,
  * and a longer "branch" is not a proof, it is unbounded hashing work.
+ * The leaf index is judged against that same depth: a depth-d branch
+ * spans exactly 2^d leaf positions, and an index at or past that
+ * bound fails instead of aliasing onto a real position's proof.
  * Element SIZES are likewise checked from the string length BEFORE any
  * regex scan or buffer decode: a header is exactly 160 hex characters
  * and a hash exactly 64, so an oversize element refuses in O(1) instead
@@ -154,6 +157,22 @@ function verifyInclusion(txidDisplay, index, branchInternalHex, expectedRootDisp
     cur = idx % 2 === 0 ? sha256d(Buffer.concat([cur, sib])) : sha256d(Buffer.concat([sib, cur]));
     idx = Math.floor(idx / 2);
   }
+  // The index must name a leaf position the branch can actually
+  // commit to. The fold consumes one index bit per branch level,
+  // so the bits still standing in idx after the last level are
+  // exactly the part of the index the proof never examined — and
+  // pre-fix they were simply discarded, so a branch of depth d,
+  // which spans exactly 2^d leaf positions, verified
+  // index + k*2^d identically for every k: a proof for position 2
+  // in a depth-3 tree also "verified" at positions 10, 18 and
+  // 1026, and a single-leaf tree (empty branch, position 0 only)
+  // verified at position 1. A position at or past 2^d leaves a
+  // non-zero remainder and does not exist in a tree of this
+  // depth, so it fails plainly, like any other wrong index. The
+  // check sits after the fold so every malformed-element refusal
+  // above keeps its precedence. No valid proof is refused: a real
+  // index is always below 2^(branch depth), so its remainder is 0.
+  if (idx !== 0) return false;
   return Buffer.from(cur).reverse().toString('hex') === expectedRootDisplay.toLowerCase();
 }
 

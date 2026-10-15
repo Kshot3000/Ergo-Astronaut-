@@ -109,6 +109,15 @@ const wrongIndex = deposit.verifyDepositEvidence(evidence({
   payment: { txid: PAY_TXID, index: 3, branch: PAY_BRANCH, blockHeight: 100000 },
 }));
 ok('the right tx at the wrong index is refused as inclusion', wrongIndex.accept === false && wrongIndex.refusals.some((r) => r.check === 'inclusion'));
+/* The payment branch has depth 2 (block 100000 carries 4 txs,
+ * positions 0-3), so position 6 — the real position 2 plus 2^2 —
+ * aliased onto this proof pre-fix and the evidence accepted. A
+ * position past the branch depth does not exist in the block's
+ * tree, so the evidence now refuses as inclusion, by name. */
+const aliasIndex = deposit.verifyDepositEvidence(evidence({
+  payment: { txid: PAY_TXID, index: 6, branch: PAY_BRANCH, blockHeight: 100000 },
+}));
+ok('the right tx at an aliased index past the branch depth is refused as inclusion', aliasIndex.accept === false && aliasIndex.refusals.some((r) => r.check === 'inclusion'));
 const tamperedBranch = deposit.verifyDepositEvidence(evidence({
   payment: { txid: PAY_TXID, index: 2, branch: ['00'.repeat(32), PAY_BRANCH[1]], blockHeight: 100000 },
 }));

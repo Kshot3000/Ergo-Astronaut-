@@ -99,6 +99,18 @@ const tamperedBranch = BRANCH_IDX2.slice();
 tamperedBranch[1] = '00' + tamperedBranch[1].slice(2);
 ok('tampered branch fails', spv.verifyInclusion(leaf(3), 2, tamperedBranch, ROOT5) === false);
 ok('single-leaf inclusion is identity', spv.verifyInclusion(GENESIS_COINBASE_TXID, 0, [], GENESIS_COINBASE_TXID) === true);
+/* The index is judged against the branch depth: the fold consumes
+ * one index bit per level and discards the rest, so pre-fix every
+ * index + k*2^depth verified identically — position 2 in this
+ * depth-3 tree (positions 0-7) also verified at 10, 18 and 1026,
+ * and the single-leaf tree (empty branch, position 0 only) verified
+ * at position 1. Positions at or past 2^depth do not exist in a
+ * tree of this depth and now fail like any other wrong index,
+ * while the last real position of the depth still runs. */
+ok('inclusion proof at an aliased index past the branch depth fails', spv.verifyInclusion(leaf(3), 10, BRANCH_IDX2, ROOT5) === false);
+ok('inclusion proof at a far aliased index fails', spv.verifyInclusion(leaf(3), 1026, BRANCH_IDX2, ROOT5) === false);
+ok('single-leaf inclusion at index 1 fails (empty branch spans one position)', spv.verifyInclusion(GENESIS_COINBASE_TXID, 1, [], GENESIS_COINBASE_TXID) === false);
+ok('inclusion index at the depth bound still runs', typeof spv.verifyInclusion(leaf(3), 7, BRANCH_IDX2, ROOT5) === 'boolean');
 /* Bounds: branch depth is ceil(log2(tx count)) — 32 levels cover 2^32
  * txs, so a deeper branch is not a proof, it is unbounded hashing work,
  * and it refuses up front. A branch at the bound still runs. */

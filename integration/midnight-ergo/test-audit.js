@@ -230,6 +230,21 @@ fails('an oversize claim id is a plain ledger miss, judged from its length',
   mainBundle({ claim: { ...claimMain, claimId: 'ab'.repeat(100000) } }), 'claim-not-in-ledger');
 fails('an oversize settlement record id is a plain ledger miss',
   mainBundle({ settlementRecord: { ...settleMain.record, recordId: 'cd'.repeat(100000) } }), 'claim-not-in-ledger');
+/* The compared ids are judged by type before length, never coerced:
+ * a non-string id whose String() conversion itself throws (a
+ * null-prototype object, a throwing toString) is a plain miss, not
+ * a crash — the audit promises a failed verdict on hostile bundles,
+ * and these ids reach the ledger scan unvalidated (the claim/record
+ * links above them already failed, which is exactly when the scan
+ * still runs). */
+fails('a claim id that cannot be stringified is a plain ledger miss, not a crash',
+  mainBundle({ claim: { ...claimMain, claimId: Object.create(null) } }), 'claim-not-in-ledger');
+fails('a settlement record id that cannot be stringified is a plain ledger miss, not a crash',
+  mainBundle({ settlementRecord: { ...settleMain.record, recordId: Object.create(null) } }), 'claim-not-in-ledger');
+fails('a claim id with a throwing toString is a plain ledger miss, not a crash',
+  mainBundle({ claim: { ...claimMain, claimId: { toString() { throw new Error('hostile'); } } } }), 'claim-not-in-ledger');
+fails('a settlement record id with a throwing toString is a plain ledger miss, not a crash',
+  mainBundle({ settlementRecord: { ...settleMain.record, recordId: { toString() { throw new Error('hostile'); } } } }), 'claim-not-in-ledger');
 ok('an uppercase genuine claim id still audits end to end', (() => {
   const r = a.auditBundle(mainBundle({ claim: { ...claimMain, claimId: claimMain.claimId.toUpperCase() } }));
   return r.verdict === 'audited' && r.auditId === AUDIT_MAIN_ID;

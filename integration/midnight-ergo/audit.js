@@ -97,15 +97,19 @@ function isHex32(s) {
   return typeof s === 'string' && s.length === 64 && /^[0-9a-fA-F]{64}$/.test(s); // length first, O(1) refusal for oversize
 }
 /*
- * An id in the shape the ledger scan compares: coerced once, and
- * lowercased only when it is exactly 64 characters — the length of
- * every verified ledger entry id, so any other length can never
- * match one and is a plain miss (null), judged from its length
- * instead of being copied in full by toLowerCase().
+ * An id in the shape the ledger scan compares: lowercased only when
+ * it is a string of exactly 64 characters — the length of every
+ * verified ledger entry id, so any other length can never match one
+ * and is a plain miss (null), judged from its length instead of
+ * being copied in full by toLowerCase(). The value is never coerced
+ * with String() first: an id that is not a string is a miss by its
+ * type, and coercing an arbitrary hostile value can itself throw
+ * (a null-prototype object, an object with a throwing toString) —
+ * which would crash the one function in this layer that promises
+ * never to throw on a malformed bundle.
  */
 function idForCompare(v) {
-  const s = String(v || '');
-  return s.length === 64 ? s.toLowerCase() : null;
+  return typeof v === 'string' && v.length === 64 ? v.toLowerCase() : null;
 }
 function sameIdSet(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;

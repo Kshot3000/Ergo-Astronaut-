@@ -71,6 +71,21 @@ const CONTRACT = '1fca6b4cec100a425db72d769d1ef19f673de7552b4c9196611797f6b565e7
   ok('midnight contract address sent as variable', seenBody.variables.address === CONTRACT);
   await throws('midnight graphql errors surface', () =>
     dc.getMidnightHeight({ fetchImpl: async () => jsonRes({ errors: [{ message: 'boom' }] }) }), 'boom');
+  await throws('midnight graphql null error entry named, not a TypeError', () =>
+    dc.getMidnightHeight({ fetchImpl: async () => jsonRes({ errors: [null] }) }), 'GraphQL errors: unknown');
+  await throws('midnight graphql undefined error entry named', () =>
+    dc.getMidnightHeight({ fetchImpl: async () => jsonRes({ errors: [undefined] }) }), 'GraphQL errors: unknown');
+  await throws('midnight graphql null entry beside a real one keeps the real message', () =>
+    dc.getMidnightHeight({ fetchImpl: async () => jsonRes({ errors: [null, { message: 'boom' }] }) }), 'unknown; boom');
+  await throws('midnight graphql string error entry named unknown', () =>
+    dc.getMidnightHeight({ fetchImpl: async () => jsonRes({ errors: ['boom'] }) }), 'GraphQL errors: unknown');
+  await throws('midnight graphql non-string message named unknown, never coerced', () =>
+    dc.getMidnightHeight({ fetchImpl: async () => jsonRes({ errors: [{ message: 42 }] }) }), 'GraphQL errors: unknown');
+  await throws('midnight graphql hostile message object named unknown, never thrown through', () =>
+    dc.getMidnightHeight({
+      fetchImpl: async () =>
+        jsonRes({ errors: [{ message: { toString() { throw new Error('hostile'); } } }] }),
+    }), 'GraphQL errors: unknown');
   await throws('midnight contract address must be hex', () =>
     dc.getMidnightContractAction('not-hex!', { fetchImpl: mnFetch }), 'hex');
   await throws('midnight contract address refused from its length when oversize', () =>

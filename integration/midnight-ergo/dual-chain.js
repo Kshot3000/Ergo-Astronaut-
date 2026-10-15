@@ -85,7 +85,14 @@ async function midnightGraphQL(query, variables, { endpoint = MIDNIGHT_INDEXER_D
   }
   const payload = await res.json();
   if (payload && Array.isArray(payload.errors) && payload.errors.length > 0) {
-    throw new Error('Midnight indexer GraphQL errors: ' + payload.errors.map((e) => e.message || 'unknown').join('; '));
+    // Each entry is judged before its message is read: a null/undefined entry
+    // (or a non-string message) has no message to report — reading .message
+    // off null threw a raw TypeError that escaped as an unnamed crash instead
+    // of this function's own named GraphQL error.
+    throw new Error(
+      'Midnight indexer GraphQL errors: ' +
+        payload.errors.map((e) => (e && typeof e.message === 'string' && e.message) || 'unknown').join('; ')
+    );
   }
   if (!payload || payload.data == null) throw new Error('Midnight indexer returned no data');
   return payload.data;

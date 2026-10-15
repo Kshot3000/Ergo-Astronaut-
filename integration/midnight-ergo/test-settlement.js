@@ -192,5 +192,12 @@ ok('record verification refuses a non-string record id', (() => {
 throws('decision refuses a zero quorum', () => decide({ quorum: 0 }), 'positive integer');
 throws('decision refuses a negative height', () => decide({ currentHeight: -1 }), 'non-negative integer');
 throws('decision refuses a plan without a commitment', () => decide({ plan: {} }), 'intent-box plan');
+/* A plan admitted by the commitment check but stripped of its
+ * registers is rejected as a verdict, not crashed on: the shared
+ * inspection judges the plan shape it reads. */
+ok('decision rejects, by verdict, a registers-stripped plan it admitted by commitment', (() => {
+  const d = decide({ plan: { commitment: plan.commitment, timeoutHeight: 2000 } });
+  return d.verdict === 'reject' && d.record === null && d.reasons.includes('box-does-not-match-plan');
+})());
 
 console.log('ALL PASS (' + pass + ' checks)');

@@ -110,6 +110,23 @@ const wrongCommitmentBox = { value: 2000000000, additionalRegisters: { R4: { ser
 ok('watcher rejects a wrong commitment', ib.inspectIntentBox(wrongCommitmentBox, plan).matches === false &&
   ib.inspectIntentBox(wrongCommitmentBox, plan).checks.commitmentRegister === false);
 ok('watcher rejects a shapeless box', ib.inspectIntentBox({ value: 2000000000 }, plan).matches === false);
+/* A plan that names no commitment register is a plan no box can
+ * match — judged, never crashed on: the settler admits a plan by its
+ * commitment alone, so a registers-stripped plan (or none) reached
+ * the inspection admitted and died there on plan.registers.R4. */
+const strippedPlan = { commitment: plan.commitment, timeoutHeight: 2000, network: 'testnet' };
+ok('watcher declines a registers-stripped plan instead of throwing', (() => {
+  const r = ib.inspectIntentBox(goodBox, strippedPlan);
+  return r.matches === false && r.checks.shape === true &&
+    r.checks.commitmentRegister === false && r.checks.valueCovers === false;
+})());
+ok('watcher declines a missing plan instead of throwing',
+  ib.inspectIntentBox(goodBox, null).matches === false &&
+  ib.inspectIntentBox(goodBox, undefined).matches === false);
+ok('watcher declines a plan whose R4 names no serialized value',
+  ib.inspectIntentBox(goodBox, { ...plan, registers: {} }).matches === false &&
+  ib.inspectIntentBox(goodBox, { ...plan, registers: { R4: {} } }).matches === false &&
+  ib.inspectIntentBox(goodBox, { ...plan, registers: { R4: { serializedValue: 42 } } }).matches === false);
 ok('watcher tolerates string values from the explorer', ib.inspectIntentBox(
   { value: '2000000000', additionalRegisters: { R4: { serializedValue: '0e20' + base } } }, plan).matches === true);
 

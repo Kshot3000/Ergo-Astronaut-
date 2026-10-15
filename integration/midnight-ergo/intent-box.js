@@ -320,13 +320,34 @@ function boxValueCovers(boxValue, planValue) {
 
 function inspectIntentBox(box, plan) {
   const checks = { shape: false, commitmentRegister: false, valueCovers: false };
-  if (box && typeof box === 'object' && box.additionalRegisters && typeof box.additionalRegisters === 'object') {
-    checks.shape = true;
-    const r4 = box.additionalRegisters.R4;
-    const serialized = r4 && (r4.serializedValue || r4.serialized_value);
-    checks.commitmentRegister = serialized === plan.registers.R4.serializedValue;
-    checks.valueCovers = boxValueCovers(box.value, plan.valueNanoErg);
+  if (!box || typeof box !== 'object' || !box.additionalRegisters ||
+      typeof box.additionalRegisters !== 'object') {
+    return { matches: false, checks };
   }
+  checks.shape = true;
+  // The plan is judged by the shape this check actually reads, before
+  // it is read: the commitment register it names. Every caller above
+  // this layer judges a plan more loosely than that — the settler
+  // admits any plan carrying a commitment ('plan must be an
+  // intent-box plan (with a commitment)'), the watcher judges none of
+  // it — so a plan stripped of its registers (or no plan at all)
+  // reached this line admitted and then crashed it with an unnamed
+  // TypeError on plan.registers.R4, escaping the settler's verdict
+  // and the watcher's named checks entirely; only the auditor
+  // escaped, because its own plan check happens to require the
+  // registers. A plan that names no commitment register is a plan no
+  // box can match: the register and value checks stay false and the
+  // verdict layers above answer in their own names (the settler's
+  // 'reject' / box-does-not-match-plan, the watcher's not-attestable).
+  const planR4 = plan && typeof plan === 'object' && plan.registers &&
+    typeof plan.registers === 'object' ? plan.registers.R4 : null;
+  if (!planR4 || typeof planR4 !== 'object' || typeof planR4.serializedValue !== 'string') {
+    return { matches: false, checks };
+  }
+  const r4 = box.additionalRegisters.R4;
+  const serialized = r4 && (r4.serializedValue || r4.serialized_value);
+  checks.commitmentRegister = serialized === planR4.serializedValue;
+  checks.valueCovers = boxValueCovers(box.value, plan.valueNanoErg);
   return { matches: checks.shape && checks.commitmentRegister && checks.valueCovers, checks };
 }
 

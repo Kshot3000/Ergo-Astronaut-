@@ -94,6 +94,15 @@ ok('attestation is labelled an unsigned Phase 1 record', att1.status === 'unsign
 ok('attestation carries the oracle MAIN id', att1.attestationId === 'fed644fac6e6ca21d9e9a3643192bb557851ef022e8bc695b3952251ef555d61');
 ok('attestation names plan commitment and box', att1.commitment === plan.commitment && att1.boxId === BOX_A && att1.confirmations === 501);
 throws('attestation refuses a shallow box', () => w.buildAttestation({ watcherId: 'watcher-1', box: goodBox(), plan, currentHeight: 1002 }), 'depthReached');
+/* A registers-stripped plan is judged through the shared inspection:
+ * the observation names boxMatchesPlan and the mint refuses by that
+ * name, instead of the inspection crashing on plan.registers.R4. */
+ok('observation names boxMatchesPlan against a registers-stripped plan, without throwing', (() => {
+  const r = w.evaluateObservation({ box: goodBox(), plan: { commitment: plan.commitment, timeoutHeight: 2000 }, currentHeight: 1500 });
+  return r.attestable === false && r.checks.boxMatchesPlan === false;
+})());
+throws('attestation refuses a registers-stripped plan by the check name', () =>
+  w.buildAttestation({ watcherId: 'watcher-1', box: goodBox(), plan: { commitment: plan.commitment, timeoutHeight: 2000 }, currentHeight: 1500 }), 'boxMatchesPlan');
 throws('attestation refuses a spent box', () => w.buildAttestation({ watcherId: 'watcher-1', box: goodBox({ spentTransactionId: 'bb'.repeat(32) }), plan, currentHeight: 1500 }), 'unspent');
 throws('attestation refuses an empty watcher id', () => w.buildAttestation({ watcherId: '', box: goodBox(), plan, currentHeight: 1500 }), 'watcherId');
 /* The box id is judged from its length before it is lowercased for

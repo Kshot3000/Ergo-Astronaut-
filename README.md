@@ -1193,7 +1193,11 @@ headers) — with 129 tools on one page it beats scrolling.
   bytes are reported, not ignored — and the parser's stated limits
   apply unchanged: an Option, Box or AvlTree constant type, and a
   SigmaProp that is not the ProveDlog form, stop the decode plainly
-  rather than being guessed past. Verified against fleet-sdk's
+  rather than being guessed past. A collection constant (`bytes:`,
+  `ints:` or `longs:`) holds at most 1,000,000 elements — the count
+  the decoder itself accepts — and the encoder refuses a longer one
+  by name before encoding it, rather than producing a constant
+  nothing here could read back. Verified against fleet-sdk's
   published Sigma constant vectors in both directions and the
   register raw hexes the box parser tests already record.
 - **P2PK ErgoTree builder** — public key → ErgoTree, the encode

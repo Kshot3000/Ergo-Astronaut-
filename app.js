@@ -1014,6 +1014,15 @@ function buildSplitPayment(potStr, recipientsRaw, minerFeeStr) {
   var potNano = BigInt(pot);
   var minerNano = BigInt(miner);
   var rawLines = (recipientsRaw == null ? "" : String(recipientsRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > SPLIT_MAX_RECIPIENTS) return fail("This builder takes at most " + SPLIT_MAX_RECIPIENTS + " recipients (you listed " + listedCount + ") — a transaction with more outputs than that belongs in a dedicated wallet flow, not a copyable plan.");
   var entries = [];
   var seen = {};
   var network = null;
@@ -1039,7 +1048,6 @@ function buildSplitPayment(potStr, recipientsRaw, minerFeeStr) {
     entries.push({ address: addr, network: check.network, type: check.type, shares: share, line: lineNo });
   }
   if (entries.length < 2) return fail("A split needs at least two recipients — for a single payee, build a plain invoice with tool 112 instead.");
-  if (entries.length > SPLIT_MAX_RECIPIENTS) return fail("This builder takes at most " + SPLIT_MAX_RECIPIENTS + " recipients (you listed " + entries.length + ") — a transaction with more outputs than that belongs in a dedicated wallet flow, not a copyable plan.");
   var totalShares = 0n;
   for (var si = 0; si < entries.length; si++) totalShares += entries[si].shares;
   /* Largest-remainder split, exact BigInt. */
@@ -1274,6 +1282,15 @@ function buildPayrollPlan(entriesRaw, minerFeeStr) {
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > PAYROLL_MAX_EMPLOYEES) return fail("This builder takes at most " + PAYROLL_MAX_EMPLOYEES + " employees (you listed " + listedCount + ") — a payroll with more outputs than that belongs in a dedicated wallet flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = {};
@@ -1303,7 +1320,6 @@ function buildPayrollPlan(entriesRaw, minerFeeStr) {
     entries.push({ name: name, address: addr, network: check.network, type: check.type, amountNano: BigInt(amt), line: lineNo });
   }
   if (entries.length < 2) return fail("A payroll needs at least two employees — for a single payee, build a plain invoice with tool 112 instead.");
-  if (entries.length > PAYROLL_MAX_EMPLOYEES) return fail("This builder takes at most " + PAYROLL_MAX_EMPLOYEES + " employees (you listed " + entries.length + ") — a payroll with more outputs than that belongs in a dedicated wallet flow, not a copyable plan.");
   /* Total payroll, summed forwards and in reverse — must agree. */
   var sumFwd = 0n, sumRev = 0n;
   for (var fi = 0; fi < entries.length; fi++) sumFwd += entries[fi].amountNano;
@@ -1999,6 +2015,15 @@ function buildRewardPlan(poolStr, entriesRaw, minerFeeStr) {
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > REWARD_MAX_STAKERS) return fail("This builder takes at most " + REWARD_MAX_STAKERS + " stakers (you listed " + listedCount + ") — a distribution with more outputs than that belongs in a dedicated pool flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = {};
@@ -2028,7 +2053,6 @@ function buildRewardPlan(poolStr, entriesRaw, minerFeeStr) {
     entries.push({ name: name, address: addr, network: check.network, type: check.type, stakeNano: BigInt(stake), line: lineNo });
   }
   if (entries.length < 2) return fail("A reward distribution needs at least two stakers — for a single payee, build a plain invoice with tool 112 instead.");
-  if (entries.length > REWARD_MAX_STAKERS) return fail("This builder takes at most " + REWARD_MAX_STAKERS + " stakers (you listed " + entries.length + ") — a distribution with more outputs than that belongs in a dedicated pool flow, not a copyable plan.");
   /* Total stake, summed forwards and in reverse — must agree. */
   var stakeFwd = 0n, stakeRev = 0n;
   for (var fi = 0; fi < entries.length; fi++) stakeFwd += entries[fi].stakeNano;
@@ -2170,6 +2194,15 @@ function buildCrowdfundPlan(creatorRaw, labelRaw, goalStr, entriesRaw, minerFeeS
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > CROWDFUND_MAX_BACKERS) return fail("This builder takes at most " + CROWDFUND_MAX_BACKERS + " backers (you listed " + listedCount + ") — a campaign with more backers than that belongs in a dedicated crowdfunding contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = {};
@@ -2198,7 +2231,6 @@ function buildCrowdfundPlan(creatorRaw, labelRaw, goalStr, entriesRaw, minerFeeS
     entries.push({ name: name, address: addr, network: check.network, type: check.type, pledgeNano: BigInt(pledge), line: lineNo });
   }
   if (entries.length < 1) return fail("A campaign needs at least one backer — list who has pledged before building the plan.");
-  if (entries.length > CROWDFUND_MAX_BACKERS) return fail("This builder takes at most " + CROWDFUND_MAX_BACKERS + " backers (you listed " + entries.length + ") — a campaign with more backers than that belongs in a dedicated crowdfunding contract, not a copyable plan.");
   /* Total pledged, summed forwards and in reverse — must agree. */
   var pledgeFwd = 0n, pledgeRev = 0n;
   for (var fi = 0; fi < entries.length; fi++) pledgeFwd += entries[fi].pledgeNano;
@@ -2386,6 +2418,15 @@ function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > AUCTION_MAX_BIDDERS) return fail("This builder takes at most " + AUCTION_MAX_BIDDERS + " bidders (you listed " + listedCount + ") — an auction with more bidders than that belongs in a dedicated auction contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = {};
@@ -2415,7 +2456,6 @@ function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
     entries.push({ name: name, address: addr, network: check.network, type: check.type, bidNano: BigInt(bid), line: lineNo });
   }
   if (entries.length < 1) return fail("An auction needs at least one bid — list who has bid before building the plan.");
-  if (entries.length > AUCTION_MAX_BIDDERS) return fail("This builder takes at most " + AUCTION_MAX_BIDDERS + " bidders (you listed " + entries.length + ") — an auction with more bidders than that belongs in a dedicated auction contract, not a copyable plan.");
   /* Total bid, summed forwards and in reverse — must agree. */
   var bidFwd = 0n, bidRev = 0n;
   for (var fi = 0; fi < entries.length; fi++) bidFwd += entries[fi].bidNano;
@@ -2763,6 +2803,15 @@ function buildGroupExpensePlan(labelRaw, entriesRaw, minerFeeStr) {
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > GROUPXP_MAX_PEOPLE) return fail("This builder takes at most " + GROUPXP_MAX_PEOPLE + " people (you listed " + listedCount + ") — a settlement with more people than that belongs in a dedicated group flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = {};
@@ -2792,7 +2841,6 @@ function buildGroupExpensePlan(labelRaw, entriesRaw, minerFeeStr) {
     entries.push({ name: name, address: addr, network: check.network, type: check.type, paidNano: BigInt(paid), line: lineNo });
   }
   if (entries.length < 2) return fail("A shared expense needs at least two people — a cost carried by one person alone has nobody to settle with.");
-  if (entries.length > GROUPXP_MAX_PEOPLE) return fail("This builder takes at most " + GROUPXP_MAX_PEOPLE + " people (you listed " + entries.length + ") — a settlement with more people than that belongs in a dedicated group flow, not a copyable plan.");
   var totalPaidNano = 0n;
   for (var ti = 0; ti < entries.length; ti++) totalPaidNano += entries[ti].paidNano;
   if (totalPaidNano <= 0n) return fail("The group paid nothing in total — with no shared cost there is no share to compute and nothing to settle. Enter what each person actually fronted.");
@@ -2955,6 +3003,15 @@ function buildRoscaPlan(labelRaw, membersRaw, contributionStr, minerFeeStr) {
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   var rawLines = (membersRaw == null ? "" : String(membersRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > ROSCA_MAX_MEMBERS) return fail("This builder takes at most " + ROSCA_MAX_MEMBERS + " members (you listed " + listedCount + ") — a circle with more members than that belongs in a dedicated group flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = {};
@@ -2981,7 +3038,6 @@ function buildRoscaPlan(labelRaw, membersRaw, contributionStr, minerFeeStr) {
     entries.push({ name: name, address: addr, network: check.network, type: check.type, line: lineNo });
   }
   if (entries.length < 2) return fail("A rotating savings circle needs at least two members — one person paying themselves in turn is just saving, which tool 120 plans without a fee.");
-  if (entries.length > ROSCA_MAX_MEMBERS) return fail("This builder takes at most " + ROSCA_MAX_MEMBERS + " members (you listed " + entries.length + ") — a circle with more members than that belongs in a dedicated group flow, not a copyable plan.");
   var n = BigInt(entries.length);
   var potNano = n * contributionNano;
   /* Second route for the pot: add the contribution once per member. */
@@ -3109,6 +3165,15 @@ function buildWaterfallPlan(labelRaw, tiersRaw, revenueStr, minerFeeStr) {
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   var rawLines = (tiersRaw == null ? "" : String(tiersRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > WATERFALL_MAX_TIERS) return fail("This builder takes at most " + WATERFALL_MAX_TIERS + " tiers (you listed " + listedCount + ") — a waterfall with more tiers than that belongs in a dedicated contract flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = {};
@@ -3146,7 +3211,6 @@ function buildWaterfallPlan(labelRaw, tiersRaw, revenueStr, minerFeeStr) {
     entries.push({ name: name, address: addr, network: check.network, type: check.type, line: lineNo, isRest: isRest, capNano: capNano });
   }
   if (entries.length < 2) return fail("A revenue waterfall needs at least two tiers — one capped tier and a final rest tier; paying one person everything is a plain payment, which needs no builder and no fee.");
-  if (entries.length > WATERFALL_MAX_TIERS) return fail("This builder takes at most " + WATERFALL_MAX_TIERS + " tiers (you listed " + entries.length + ") — a waterfall with more tiers than that belongs in a dedicated contract flow, not a copyable plan.");
   if (restCount === 0) return fail("The last tier must be uncapped — write its cap as the word rest — so whatever revenue is left after the capped tiers always has somewhere to go and none is left undistributed.");
   if (restCount > 1) return fail("Only one tier may be uncapped (rest) — the first rest tier would take everything left and every tier below it would be dead text.");
   if (restIndex !== entries.length - 1) return fail("The uncapped (rest) tier must be the LAST tier — it takes whatever is left, so any tier listed below it could never receive anything.");
@@ -3283,6 +3347,15 @@ function buildPrizeSplitPlan(labelRaw, winnersRaw, poolStr, minerFeeStr) {
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   var rawLines = (winnersRaw == null ? "" : String(winnersRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > PRIZESPLIT_MAX_WINNERS) return fail("This builder takes at most " + PRIZESPLIT_MAX_WINNERS + " places (you listed " + listedCount + ") — a prize table with more places than that belongs in a dedicated contract flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = {};
@@ -3316,7 +3389,6 @@ function buildPrizeSplitPlan(labelRaw, winnersRaw, poolStr, minerFeeStr) {
     entries.push({ name: name, address: addr, network: check.network, type: check.type, line: lineNo, shareBps: bps });
   }
   if (entries.length < 2) return fail("A prize split needs at least two places — paying one winner the whole pool is a plain payment, which needs no builder and no fee.");
-  if (entries.length > PRIZESPLIT_MAX_WINNERS) return fail("This builder takes at most " + PRIZESPLIT_MAX_WINNERS + " places (you listed " + entries.length + ") — a prize table with more places than that belongs in a dedicated contract flow, not a copyable plan.");
   if (shareTotalBps !== 10000n) return fail("The shares add up to " + formatPrizePercent(shareTotalBps) + ", not 100% — a prize table must account for the whole pool exactly, so fix the percentages until they total 100%.");
   /* Service fee: same two-route check as tools 112-127, on the POOL. */
   var feeA = (poolNano * SERVICE_FEE_BPS + 9999n) / 10000n;
@@ -3447,6 +3519,15 @@ function buildLoanSyndicatePlan(labelRaw, borrowerRaw, lendersRaw, repaymentStr,
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   var rawLines = (lendersRaw == null ? "" : String(lendersRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > SYNDICATE_MAX_LENDERS) return fail("This builder takes at most " + SYNDICATE_MAX_LENDERS + " lenders (you listed " + listedCount + ") — a syndicate with more lenders than that belongs in a dedicated contract flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = {};
@@ -3478,7 +3559,6 @@ function buildLoanSyndicatePlan(labelRaw, borrowerRaw, lendersRaw, repaymentStr,
     entries.push({ name: name, address: addr, network: check.network, type: check.type, line: lineNo, fundedNano: BigInt(funded) });
   }
   if (entries.length < 2) return fail("A syndicate needs at least two lenders — a loan from one lender is a plain loan, which tool 119 schedules and this builder does not fee.");
-  if (entries.length > SYNDICATE_MAX_LENDERS) return fail("This builder takes at most " + SYNDICATE_MAX_LENDERS + " lenders (you listed " + entries.length + ") — a syndicate with more lenders than that belongs in a dedicated contract flow, not a copyable plan.");
   var borrower = (borrowerRaw == null ? "" : String(borrowerRaw)).trim();
   var bcheck = checkErgoAddress(borrower);
   if (!bcheck.valid) return fail("The borrower's address is refused: " + bcheck.reason);
@@ -3781,6 +3861,15 @@ function buildCascadingRoyaltyPlan(labelRaw, sellerRaw, recipientsRaw, priceStr,
   if (!scheck.valid) return fail("The seller's address is refused: " + scheck.reason);
   var network = scheck.network;
   var rawLines = (recipientsRaw == null ? "" : String(recipientsRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > CASROY_MAX_RECIPIENTS) return fail("This builder takes at most " + CASROY_MAX_RECIPIENTS + " recipients (you listed " + listedCount + ") — a royalty chain longer than that belongs in a dedicated contract flow, not a copyable plan.");
   var entries = [];
   var seenNames = {};
   var seenAddrs = {};
@@ -3811,7 +3900,6 @@ function buildCascadingRoyaltyPlan(labelRaw, sellerRaw, recipientsRaw, priceStr,
     entries.push({ line: lineNo, name: name, address: addr, rateBps: rateBps });
   }
   if (entries.length < 2) return fail("A cascading royalty needs at least two recipients — a single flat royalty on the price is what tool 116 builds, and this builder does not fee a second copy of it.");
-  if (entries.length > CASROY_MAX_RECIPIENTS) return fail("This builder takes at most " + CASROY_MAX_RECIPIENTS + " recipients (you listed " + entries.length + ") — a royalty chain longer than that belongs in a dedicated contract flow, not a copyable plan.");
   /* Service fee: same two-route check as tools 112-130, on the SALE PRICE. */
   var feeA = (priceNano * SERVICE_FEE_BPS + 9999n) / 10000n;
   var feeB = priceNano / 100n + (priceNano % 100n > 0n ? 1n : 0n);
@@ -4056,6 +4144,15 @@ function buildVickreyPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > VICKREY_MAX_BIDDERS) return fail("This builder takes at most " + VICKREY_MAX_BIDDERS + " bidders (you listed " + listedCount + ") — an auction with more bidders than that belongs in a dedicated auction contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = {};
@@ -4085,7 +4182,6 @@ function buildVickreyPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
     entries.push({ name: name, address: addr, network: check.network, type: check.type, bidNano: BigInt(bid), line: lineNo });
   }
   if (entries.length < 1) return fail("An auction needs at least one bid — list who has bid before building the plan.");
-  if (entries.length > VICKREY_MAX_BIDDERS) return fail("This builder takes at most " + VICKREY_MAX_BIDDERS + " bidders (you listed " + entries.length + ") — an auction with more bidders than that belongs in a dedicated auction contract, not a copyable plan.");
   /* Total bid, summed forwards and in reverse — must agree. */
   var bidFwd = 0n, bidRev = 0n;
   for (var fi = 0; fi < entries.length; fi++) bidFwd += entries[fi].bidNano;
@@ -4302,6 +4398,15 @@ function buildLaunchpadPlan(projectRaw, labelRaw, capStr, entriesRaw, minerFeeSt
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > LAUNCHPAD_MAX_SUBSCRIBERS) return fail("This builder takes at most " + LAUNCHPAD_MAX_SUBSCRIBERS + " subscribers (you listed " + listedCount + ") — a sale with more subscribers than that belongs in a dedicated launchpad contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = {};
@@ -4331,7 +4436,6 @@ function buildLaunchpadPlan(projectRaw, labelRaw, capStr, entriesRaw, minerFeeSt
     entries.push({ name: name, address: addr, network: check.network, type: check.type, pledgeNano: BigInt(pledge), line: lineNo });
   }
   if (entries.length < 1) return fail("A sale needs at least one subscriber — list who has pledged before building the plan.");
-  if (entries.length > LAUNCHPAD_MAX_SUBSCRIBERS) return fail("This builder takes at most " + LAUNCHPAD_MAX_SUBSCRIBERS + " subscribers (you listed " + entries.length + ") — a sale with more subscribers than that belongs in a dedicated launchpad contract, not a copyable plan.");
   /* Total pledged, summed forwards and in reverse — must agree. */
   var pledgeFwd = 0n, pledgeRev = 0n;
   for (var fi = 0; fi < entries.length; fi++) pledgeFwd += entries[fi].pledgeNano;
@@ -4513,6 +4617,15 @@ function buildReverseAuctionPlan(buyerRaw, labelRaw, budgetStr, entriesRaw, mine
   var budgetNano = BigInt(budget);
   if (budgetNano <= minerNano) return fail("The maximum budget of " + nanoToErg(budgetNano.toString()) + " ERG does not cover the " + nanoToErg(minerNano.toString()) + " ERG miner fee a refund transaction needs if no bid qualifies — that budget could never come back. Raise the budget or lower the miner fee.");
   var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > REVAUCTION_MAX_BIDDERS) return fail("This builder takes at most " + REVAUCTION_MAX_BIDDERS + " bidders (you listed " + listedCount + ") — a procurement with more bidders than that belongs in a dedicated procurement contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = {};
@@ -4541,7 +4654,6 @@ function buildReverseAuctionPlan(buyerRaw, labelRaw, budgetStr, entriesRaw, mine
     entries.push({ name: name, address: addr, network: check.network, type: check.type, bidNano: BigInt(bid), line: lineNo });
   }
   if (entries.length < 1) return fail("A procurement needs at least one bid — list who has quoted before building the plan.");
-  if (entries.length > REVAUCTION_MAX_BIDDERS) return fail("This builder takes at most " + REVAUCTION_MAX_BIDDERS + " bidders (you listed " + entries.length + ") — a procurement with more bidders than that belongs in a dedicated procurement contract, not a copyable plan.");
   /* Total quoted, summed forwards and in reverse — must agree.
      (Quotes are prices, not money held: the sum is reported only
      to describe the field.) */
@@ -5462,6 +5574,15 @@ function buildGroupBuyPlan(sellerRaw, labelRaw, unitPriceStr, discountPercentStr
   var threshold = parseGroupBuyCount(thresholdStr, GROUPBUY_MAX_THRESHOLD);
   if (threshold === null) return fail("The discount threshold is refused: give a whole number of units from 1 to 1000000000 — the threshold is the total quantity at which the discount unlocks.");
   var rawLines = (buyersRaw == null ? "" : String(buyersRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > GROUPBUY_MAX_BUYERS) return fail("This builder takes at most " + GROUPBUY_MAX_BUYERS + " buyers (you listed " + listedCount + ") — a larger group belongs in a dedicated storefront flow, not a copyable plan.");
   var entries = [];
   var seenNames = {};
   var seenAddresses = {};
@@ -5490,7 +5611,6 @@ function buildGroupBuyPlan(sellerRaw, labelRaw, unitPriceStr, discountPercentStr
     entries.push({ name: name, line: lineNo, address: addrRaw, type: check.type, quantity: qty, grossNano: qty * unitNano });
   }
   if (entries.length === 0) return fail("List at least one buyer — a group buy with no orders has nothing to price.");
-  if (entries.length > GROUPBUY_MAX_BUYERS) return fail("This builder takes at most " + GROUPBUY_MAX_BUYERS + " buyers (you listed " + entries.length + ") — a larger group belongs in a dedicated storefront flow, not a copyable plan.");
   /* Total quantity and gross, summed forwards and in reverse:
      the two routes must agree before anything is shown, and
      the gross must also equal the sum of the per-buyer
@@ -5671,6 +5791,15 @@ function buildGiftFundPlan(sellerRaw, labelRaw, priceStr, contributorsRaw, miner
   if (price === null || BigInt(price) <= 0n) return fail("The gift price must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit) — a free gift has nothing to settle.");
   var priceNano = BigInt(price);
   var rawLines = (contributorsRaw == null ? "" : String(contributorsRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > GIFTFUND_MAX_CONTRIBUTORS) return fail("This builder takes at most " + GIFTFUND_MAX_CONTRIBUTORS + " contributors (you listed " + listedCount + ") — a larger group belongs in a dedicated registry flow, not a copyable plan.");
   var entries = [];
   var seenNames = {};
   var seenAddresses = {};
@@ -5699,7 +5828,6 @@ function buildGiftFundPlan(sellerRaw, labelRaw, priceStr, contributorsRaw, miner
     entries.push({ name: name, line: lineNo, address: addrRaw, type: check.type, amountNano: BigInt(amt) });
   }
   if (entries.length === 0) return fail("List at least one contributor — a group gift with no contributions has nothing to settle.");
-  if (entries.length > GIFTFUND_MAX_CONTRIBUTORS) return fail("This builder takes at most " + GIFTFUND_MAX_CONTRIBUTORS + " contributors (you listed " + entries.length + ") — a larger group belongs in a dedicated registry flow, not a copyable plan.");
   /* Total contributed, summed forwards and in reverse: the two
      routes must agree before anything is shown. */
   var totalNano = 0n;
@@ -5890,6 +6018,15 @@ function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersR
   var pct = BigInt(pctRaw);
   if (pct > 100n) return fail("The withholding percent is " + pctRaw + "% — a withholding above 100% would take more than the pool itself.");
   var rawLines = (holdersRaw == null ? "" : String(holdersRaw)).split(/\r?\n/);
+  /* The entry cap is judged from the non-empty line count BEFORE
+     the loop below: the loop checksum-validates every address it
+     reads (Base58 decode + Blake2b-256), so an over-cap paste
+     must be refused here rather than after paying that cost
+     for every listed line. The count is the entries the loop
+     would build, so the refusal below is the loop's own. */
+  var listedCount = 0;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  if (listedCount > DIVIDEND_MAX_HOLDERS) return fail("This builder takes at most " + DIVIDEND_MAX_HOLDERS + " holders (you listed " + listedCount + ") — a larger register belongs in a dedicated distribution flow, not a copyable plan.");
   var entries = [];
   var seenNames = {};
   var seenAddresses = {};
@@ -5920,7 +6057,6 @@ function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersR
     entries.push({ name: name, line: lineNo, address: addrRaw, type: check.type, shares: shares });
   }
   if (entries.length === 0) return fail("List at least one holder — a dividend with no holders has nothing to distribute.");
-  if (entries.length > DIVIDEND_MAX_HOLDERS) return fail("This builder takes at most " + DIVIDEND_MAX_HOLDERS + " holders (you listed " + entries.length + ") — a larger register belongs in a dedicated distribution flow, not a copyable plan.");
   /* Total shares, summed forwards and in reverse: the two
      routes must agree before anything is shown. */
   var totalShares = 0n;

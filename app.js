@@ -11050,9 +11050,21 @@ function compareTransactions(aHex, bHex) {
   var identicalBytes = !!(aBytes && bBytes && aBytes.length === bBytes.length && aBytes.every(function (x, i) { return x === bBytes[i]; }));
   var sameTxId = a.txId === b.txId;
   /* set-style diff for the two bare ID lists */
+  /* Membership is resolved through first-seen maps, not indexOf
+     inside the filters: each list here can hold 10,000 IDs (the
+     parser's own count bound) at 32 wire bytes apiece, so the scan
+     made the differ quadratic in the list section (D x D string
+     comparisons against ~22 ms of parsing for the same bytes).
+     Membership semantics are unchanged — an element is added or
+     removed exactly when it occurs nowhere on the other side, so
+     a duplicated ID on one side still reports every occurrence,
+     in that side's order, exactly as the scan reported it. */
   var listDiff = function (la, lb) {
-    var added = lb.filter(function (x) { return la.indexOf(x) === -1; });
-    var removed = la.filter(function (x) { return lb.indexOf(x) === -1; });
+    var inA = {}, inB = {};
+    la.forEach(function (x) { inA[x] = true; });
+    lb.forEach(function (x) { inB[x] = true; });
+    var added = lb.filter(function (x) { return !Object.prototype.hasOwnProperty.call(inA, x); });
+    var removed = la.filter(function (x) { return !Object.prototype.hasOwnProperty.call(inB, x); });
     var seqSame = la.length === lb.length && la.every(function (x, i) { return x === lb[i]; });
     return { added: added, removed: removed, seqSame: seqSame, reordered: !seqSame && added.length === 0 && removed.length === 0 && la.length === lb.length };
   };

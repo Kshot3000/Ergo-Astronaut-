@@ -2935,7 +2935,8 @@ headers) — with 129 tools on one page it beats scrolling.
   chain counts, the tally covers only the
   headers pasted, and a duplicated header
   is refused rather than counted twice.
-  Verified against an independent Python
+  A tally counts at most 10,000 headers
+  at a time. Verified against an independent Python
   oracle over the real headers, the vote
   synthetics, and a 513-header set whose
   tally is exactly the approval minimum.
@@ -3427,7 +3428,10 @@ headers) — with 129 tools on one page it beats scrolling.
   most one of them can confirm. Duplicate
   transaction IDs (including a
   transaction's signed and unsigned
-  forms) are refused. Verified against
+  forms) are refused. A set holds at
+  most 100 transactions at a time (the
+  same bound the two-set transaction
+  tools enforce on each side). Verified against
   an independent Python oracle over
   three real/fleet transactions, an
   output-variant pair over identical

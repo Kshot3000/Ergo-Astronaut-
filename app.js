@@ -8333,6 +8333,16 @@ function parseErgoTransaction(txHex) {
   var outputs = [];
   var totalNano = 0n;
   var tokenTotals = [];
+  /* The totals are accumulated through this id -> entry map, not by
+     scanning tokenTotals for every token entry: a token entry costs
+     ~3 wire bytes (index VLQ + amount VLQ) while the distinct list
+     it scans can hold 10,000 entries, so the scan made the reader
+     quadratic in the token section (T entries x D distinct) — the
+     map is the idiom the tx builder (tokenIndex) and the box-set
+     summarizer (tokenMap) already use. First-appearance order and
+     the summed amounts are unchanged: an entry is pushed onto
+     tokenTotals exactly when its id is first seen. */
+  var tokenTotalById = {};
   for (var o = 0; o < outCount.count; o++) {
     var outWhat = "output " + (o + 1);
     var outStart = pos;
@@ -8383,10 +8393,9 @@ function parseErgoTransaction(txHex) {
       var idB = hexToBytes(tokenIds[tokenIndex]);
       for (var ib = 0; ib < idB.length; ib++) outTokenFull.push(idB[ib]);
       for (var ab = amtStart; ab < pos; ab++) outTokenFull.push(bytes[ab]);
-      var seenTotal = null;
-      for (var tt = 0; tt < tokenTotals.length; tt++) if (tokenTotals[tt].tokenId === tokenIds[tokenIndex]) seenTotal = tokenTotals[tt];
+      var seenTotal = Object.prototype.hasOwnProperty.call(tokenTotalById, tokenIds[tokenIndex]) ? tokenTotalById[tokenIds[tokenIndex]] : null;
       if (seenTotal) seenTotal.amount = (BigInt(seenTotal.amount) + amtVlq.value).toString();
-      else tokenTotals.push({ tokenId: tokenIds[tokenIndex], amount: amtVlq.value.toString() });
+      else { seenTotal = { tokenId: tokenIds[tokenIndex], amount: amtVlq.value.toString() }; tokenTotalById[tokenIds[tokenIndex]] = seenTotal; tokenTotals.push(seenTotal); }
     }
     var regStart = pos;
     var regCount = readCount(outWhat + "'s register count");
@@ -10950,10 +10959,17 @@ function analyzeTxSize(txHex) {
   var inputsBytes = vlqLen(tx.inputs.length) + inputs.reduce(function (s, x) { return s + x.byteLength; }, 0);
   var dataInputsBytes = vlqLen(tx.dataInputs.length) + 32 * tx.dataInputs.length;
   var tokenIdsBytes = vlqLen(tx.tokenIds.length) + 32 * tx.tokenIds.length;
+  /* Each token's distinct-list index is resolved through this map,
+     built once — indexOf per token entry was the same T x D scan
+     the transaction reader's totals accumulation carried. The map
+     keeps the FIRST index for a duplicated id, exactly indexOf's
+     semantics, so a repeated id's VLQ length is unchanged. */
+  var tokenFirstIndex = {};
+  tx.tokenIds.forEach(function (id, ix) { if (!Object.prototype.hasOwnProperty.call(tokenFirstIndex, id)) tokenFirstIndex[id] = ix; });
   var outputs = tx.outputs.map(function (o) {
     var embedded = o.byteLength - 32 - vlqLen(o.index);
     o.tokens.forEach(function (t) {
-      embedded -= 32 - vlqLen(tx.tokenIds.indexOf(t.tokenId));
+      embedded -= 32 - vlqLen(tokenFirstIndex[t.tokenId]);
     });
     return { index: o.index, byteLength: embedded, valueNano: o.valueNano };
   });

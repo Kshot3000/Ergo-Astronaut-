@@ -11574,8 +11574,13 @@ function convertTxJson(direction, text) {
    name, description, decimals, optional EIP-4 asset type and
    raw amount, this plans the whole issuance box content: the
    token ID, the EIP-4 registers (composed from tool 27's
-   encoder, never re-derived), the display amount (tool 6's
-   converter), and the exact field text tools 17 and 30 take —
+   encoder, never re-derived), the display amount (computed
+   exactly over tool 27's full 0–999 decimals range and
+   cross-checked against tool 6's converter wherever that
+   converter's 18-decimal sanity cap applies — the two ranges
+   differ, and composing the converter unchecked returned a
+   null display for 19–999 decimals), and the exact field
+   text tools 17 and 30 take —
    the issuance box's token line ("<tokenId> <rawAmount>") and
    its register lines in R4-first order. The registers are
    decoded back through tool 27's decoder before anything is
@@ -11605,6 +11610,22 @@ function planTokenMint(firstInputId, nameStr, descStr, decStr, amountStr, typeSt
   if (regs.r7Hex) registers.R7 = regs.r7Hex;
   var back = decodeEip4Registers(registers.R4 || "", registers.R5 || "", registers.R6 || "", registers.R7 || "");
   if (!back || back.name !== regs.name || back.description !== (regs.description === "" ? null : regs.description) || back.decimals !== regs.decimals || back.assetType !== regs.assetType) return fail("The EIP-4 registers did not decode back to the metadata they were built from, so nothing is shown.");
+  /* Display amount over the planner's full decimals range:
+     tool 27 accepts 0–999 decimals, but tool 6's converter
+     refuses past its 18-decimal sanity cap, so composing it
+     unchecked left displayAmount null — a valid plan whose
+     page text printed "displayed as null". The display is a
+     pure function of the raw amount and the decimals, so it
+     is computed exactly here for the whole range, and wherever
+     the decimals fall inside tool 6's cap the result must agree
+     with the converter exactly or nothing is shown. */
+  var rawAmt = BigInt(amt);
+  var decCount = Number(regs.decimals); /* 0–999: at most three digits, exactly representable */
+  var decScale = 10n ** BigInt(decCount);
+  var decWhole = rawAmt / decScale;
+  var decFrac = decCount === 0 ? "" : (rawAmt % decScale).toString().padStart(decCount, "0").replace(/0+$/, "");
+  var displayAmount = decFrac ? decWhole.toString() + "." + decFrac : decWhole.toString();
+  if (decCount <= TOKEN_MAX_DECIMALS && tokenRawToDisplay(amt, regs.decimals) !== displayAmount) return fail("Internal check failed: the display amount computed for " + regs.decimals + " decimals does not agree with the token converter (tool 6) — refusing to show it.");
   var keys = Object.keys(registers);
   /* Tool 17's box builder takes typed specs, not raw constants —
      every EIP-4 register is a Coll[Byte] constant, which is
@@ -11620,7 +11641,7 @@ function planTokenMint(firstInputId, nameStr, descStr, decStr, amountStr, typeSt
   return {
     valid: true, reason: null, tokenId: id,
     name: regs.name, description: regs.description, decimals: regs.decimals, assetType: regs.assetType,
-    amountRaw: BigInt(amt).toString(), displayAmount: tokenRawToDisplay(amt, regs.decimals),
+    amountRaw: rawAmt.toString(), displayAmount: displayAmount,
     registers: registers,
     registerLines: keys.map(function (k) { return k + " " + registers[k]; }),
     boxbuildTokens: id + " " + BigInt(amt).toString(),

@@ -1720,9 +1720,12 @@ headers) — with 129 tools on one page it beats scrolling.
   registers, the display amount, and the exact token and
   register field text the box and transaction builders
   take for the issuance box. It composes the EIP-4 codec
-  and the token amount converter rather than re-deriving
-  their maths, and decodes its own registers back before
-  showing them. Planning only — it builds no transaction
+  rather than re-deriving its maths, computes the display
+  amount exactly over the codec's full 0–999 decimals
+  range (the token amount converter's own sanity cap is
+  18, and the computed display is cross-checked against
+  it wherever that cap applies), and decodes its own
+  registers back before showing them. Planning only — it builds no transaction
   and mints nothing. Verified against an independent
   Python oracle over the fleet-recorded box IDs.
 - **Transaction output auditor** — a pre-sign audit of a

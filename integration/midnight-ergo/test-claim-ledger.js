@@ -246,6 +246,22 @@ ok('buildLedgerEntry still canonicalizes uppercase 64-char ids to the same entry
   });
   return upper.entryId === ENTRY0_ID && upper.claimId === CLAIM_MAIN_ID;
 })());
+/* The ids are judged by type, never coerced with String() first: this
+ * mint does not verify its claim, so an unstringifiable id (a
+ * null-prototype object, a throwing toString) reached the mint's
+ * lowercasing directly and escaped as a raw TypeError or the hostile
+ * error itself — and a one-element array wrapping a genuine id
+ * coerced to exactly that id and minted an entry for a non-string.
+ * Each now passes through untouched and is refused by the preimage,
+ * by name. */
+throws('buildLedgerEntry refuses a null-prototype prev head by name, not a coercion throw',
+  () => l.buildLedgerEntry({ prevHead: Object.create(null), seq: 0, claim: claimMain }), 'prevHead must be 32 bytes of hex');
+throws('buildLedgerEntry refuses a claim id with a throwing toString by name',
+  () => l.buildLedgerEntry({ prevHead: l.GENESIS_HEAD, seq: 0, claim: { claimId: { toString() { throw new Error('hostile'); } }, settlementRecordId: SETTLE_MAIN_ID } }), 'claimId must be 32 bytes of hex');
+throws('buildLedgerEntry refuses a null-prototype settlement id by name',
+  () => l.buildLedgerEntry({ prevHead: l.GENESIS_HEAD, seq: 0, claim: { claimId: CLAIM_MAIN_ID, settlementRecordId: Object.create(null) } }), 'settlementRecordId must be 32 bytes of hex');
+throws('buildLedgerEntry refuses an array-wrapped claim id by name, never unwraps it',
+  () => l.buildLedgerEntry({ prevHead: l.GENESIS_HEAD, seq: 0, claim: { claimId: [CLAIM_MAIN_ID.toUpperCase()], settlementRecordId: SETTLE_MAIN_ID } }), 'claimId must be 32 bytes of hex');
 
 console.log('ALL ' + pass + ' CLAIM-LEDGER TESTS PASS');
 assert.ok(pass >= 30);

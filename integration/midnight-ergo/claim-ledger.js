@@ -107,10 +107,16 @@ function computeLedgerEntryId(fields) {
  * passes through untouched for ledgerEntryPreimage's isHex32 check to
  * refuse by name, instead of being copied in full first (a 20 MB
  * "prevHead" was fully lowercased before that check could refuse it).
+ * The pass-through is judged by TYPE, never by coercing with String()
+ * first: coercion itself throws on a value that cannot be converted
+ * (a null-prototype object, a throwing toString), so the hostile
+ * error escaped instead of the named refusal — and a one-element
+ * array wrapping a genuine id coerces to exactly that id and minted,
+ * a non-string judged as the string it wrapped. Same idiom as
+ * watcher.js's lowerId and audit.js's idForCompare.
  */
 function lowerId(value) {
-  const s = String(value);
-  return s.length === 64 ? s.toLowerCase() : s;
+  return typeof value === 'string' && value.length === 64 ? value.toLowerCase() : value;
 }
 
 function buildLedgerEntry({ prevHead, seq, claim } = {}) {

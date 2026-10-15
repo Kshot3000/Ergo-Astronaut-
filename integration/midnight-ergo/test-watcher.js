@@ -106,6 +106,19 @@ ok('attestation from an uppercase box id mints the pinned record', (() => {
   const up = w.buildAttestation({ watcherId: 'watcher-1', box: goodBox({ boxId: BOX_A.toUpperCase() }), plan, currentHeight: 1500 });
   return up.boxId === BOX_A && up.attestationId === att1.attestationId;
 })());
+/* The id is judged by type, never coerced with String() first: the
+ * observation never judges the box id, so an unstringifiable one
+ * (a null-prototype object, a throwing toString) reached the mint's
+ * lowercasing and escaped as a raw TypeError or the hostile error
+ * itself — and a one-element array wrapping a genuine id coerced to
+ * exactly that id and minted. Each now passes through untouched and
+ * is refused by the preimage, by name. */
+throws('attestation refuses a null-prototype box id by name, not a coercion throw', () =>
+  w.buildAttestation({ watcherId: 'watcher-1', box: goodBox({ boxId: Object.create(null) }), plan, currentHeight: 1500 }), 'boxId must be 32 bytes of hex');
+throws('attestation refuses a box id with a throwing toString by name', () =>
+  w.buildAttestation({ watcherId: 'watcher-1', box: goodBox({ boxId: { toString() { throw new Error('hostile'); } } }), plan, currentHeight: 1500 }), 'boxId must be 32 bytes of hex');
+throws('attestation refuses an array-wrapped box id by name, never unwraps it', () =>
+  w.buildAttestation({ watcherId: 'watcher-1', box: goodBox({ boxId: [BOX_A.toUpperCase()] }), plan, currentHeight: 1500 }), 'boxId must be 32 bytes of hex');
 
 /* Verification detects tampering with any field */
 ok('verify accepts a genuine attestation', w.verifyAttestation(att1) === true);

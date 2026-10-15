@@ -145,11 +145,17 @@ function validateWatcherId(watcherId) {
  * isHex32 check to refuse by name, instead of being copied in full
  * first (a 20 MB "box id" was fully lowercased before that check
  * could refuse it; the observation itself never judges the box id).
- * Same idiom as claim-ledger.js's lowerId.
+ * The pass-through is judged by TYPE, never by coercing with
+ * String() first: coercion itself throws on a value that cannot be
+ * converted (a null-prototype object, a throwing toString), so the
+ * hostile error escaped instead of the named refusal — and a
+ * one-element array wrapping a genuine id coerces to exactly that
+ * id and minted, a non-string judged as the string it wrapped.
+ * Same idiom as claim-ledger.js's lowerId and audit.js's
+ * idForCompare.
  */
 function lowerId(value) {
-  const s = String(value);
-  return s.length === 64 ? s.toLowerCase() : s;
+  return typeof value === 'string' && value.length === 64 ? value.toLowerCase() : value;
 }
 
 function buildAttestation({ watcherId, box, plan, currentHeight, minConfirmations = DEFAULT_MIN_CONFIRMATIONS } = {}) {

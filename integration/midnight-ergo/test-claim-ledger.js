@@ -170,6 +170,8 @@ throws('append refuses a payload whose recipient was swapped after minting',
   () => l.appendClaim([], { ...claimMain, midnightRecipient: MN_DUST }), 'claim-payload-invalid');
 throws('append refuses a payload with a foreign claim id',
   () => l.appendClaim([], { ...claimMain, claimId: 'ee'.repeat(32) }), 'claim-payload-invalid');
+throws('append refuses a payload whose amount is an array wrapping the genuine amount (the payload verifier judges it by type, never by coercion)',
+  () => l.appendClaim([], { ...claimMain, amountNanoErg: ['2000000000'] }), 'claim-payload-invalid');
 throws('append refuses to extend a ledger that does not verify',
   () => l.appendClaim([{ ...e0, claimId: 'ee'.repeat(32) }], claimSingle), 'ledger does not verify');
 

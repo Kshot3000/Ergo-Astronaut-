@@ -53,7 +53,7 @@
  * at MAX_CLAIMED_ENTRIES — an unbounded caller-supplied list is
  * refused, never scanned. Scalar fields are bounded the same way:
  * verifyClaimPayload judges a payload's amount string and claim id
- * by size before parsing or lowercasing either, and evaluateClaim
+ * by type and size before parsing or lowercasing either, and evaluateClaim
  * judges each claimed-set entry's ids from their length before
  * comparing them, and the recipient's byte bound is judged from its
  * string length before it is ever UTF-8 encoded in full.
@@ -202,14 +202,27 @@ function verifyClaimPayload(payload) {
     // is exactly 64 hex characters, so any other length can never
     // match the recomputed id and is refused from its length,
     // never lowercased in full first.
-    if (typeof payload.amountNanoErg === 'string' && payload.amountNanoErg.length > 20) return false;
+    // The amount is also judged by TYPE before it is converted:
+    // BigInt() and String() both coerce, so the old flow — convert
+    // with BigInt(payload.amountNanoErg), then compare against
+    // String(payload.amountNanoErg) — accepted every value whose two
+    // coercions agreed with the genuine amount: a number, a BigInt,
+    // a one-element array wrapping the decimal string, and an object
+    // whose toString returns it all verified as if they were the
+    // canonical string the mint emits, and the ledger gate in
+    // claim-ledger.js (which rests on this verifier) appended an
+    // entry for the array form. A payload amount is a string or it
+    // is not a payload amount — the same type-before-conversion
+    // judgement validateReveal applies to raw reveal fields, which
+    // require a BigInt or safe integer and refuse a string outright.
+    if (typeof payload.amountNanoErg !== 'string' || payload.amountNanoErg.length > 20) return false;
     if (typeof payload.claimId !== 'string' || payload.claimId.length !== 64) return false;
     const amount = validateReveal({
       midnightRecipient: payload.midnightRecipient,
       amountNanoErg: BigInt(payload.amountNanoErg),
       nonceHex: payload.nonceHex,
     });
-    if (amount.toString() !== String(payload.amountNanoErg)) return false;
+    if (amount.toString() !== payload.amountNanoErg) return false;
     const idOk = computeClaimId({ ...payload, amountNanoErg: amount }) === payload.claimId.toLowerCase();
     const commitmentOk = verifyCommitment(payload.commitment, {
       midnightRecipient: payload.midnightRecipient,

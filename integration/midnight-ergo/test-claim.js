@@ -220,6 +220,34 @@ ok('verifyClaimPayload refuses a non-string claim id', (() => {
   const p = c.buildClaimPayload({ record: settleMain.record, reveal: REVEAL });
   return c.verifyClaimPayload({ ...p, claimId: 42 }) === false;
 })());
+/* The amount is judged by TYPE before conversion, never by coercion:
+ * BigInt() and String() both coerce, so a number, a BigInt, a
+ * one-element array wrapping the decimal string, an object whose
+ * toString returns it, and a String object each converted and compared
+ * exactly like the canonical string the mint emits — and verified. A
+ * payload amount is the string buildClaimPayload mints, or it is not
+ * a payload amount. */
+ok('verifyClaimPayload refuses a number amount, never coerces it', (() => {
+  const p = c.buildClaimPayload({ record: settleMain.record, reveal: REVEAL });
+  return c.verifyClaimPayload({ ...p, amountNanoErg: 2000000000 }) === false;
+})());
+ok('verifyClaimPayload refuses a BigInt amount, never coerces it', (() => {
+  const p = c.buildClaimPayload({ record: settleMain.record, reveal: REVEAL });
+  return c.verifyClaimPayload({ ...p, amountNanoErg: 2000000000n }) === false;
+})());
+ok('verifyClaimPayload refuses an array-wrapped amount, never unwraps it', (() => {
+  const p = c.buildClaimPayload({ record: settleMain.record, reveal: REVEAL });
+  return c.verifyClaimPayload({ ...p, amountNanoErg: ['2000000000'] }) === false &&
+    c.verifyClaimPayload({ ...p, amountNanoErg: [2000000000] }) === false;
+})());
+ok('verifyClaimPayload refuses a toString-object amount, never coerces it', (() => {
+  const p = c.buildClaimPayload({ record: settleMain.record, reveal: REVEAL });
+  return c.verifyClaimPayload({ ...p, amountNanoErg: { toString: () => '2000000000' } }) === false;
+})());
+ok('verifyClaimPayload refuses a String-object amount, never coerces it', (() => {
+  const p = c.buildClaimPayload({ record: settleMain.record, reveal: REVEAL });
+  return c.verifyClaimPayload({ ...p, amountNanoErg: new String('2000000000') }) === false;
+})());
 ok('verifyClaimPayload still refuses a 20-digit amount beyond the u64 (the length gate is not the range check)', (() => {
   const p = c.buildClaimPayload({ record: settleMain.record, reveal: REVEAL });
   return c.verifyClaimPayload({ ...p, amountNanoErg: '18446744073709551616' }) === false;

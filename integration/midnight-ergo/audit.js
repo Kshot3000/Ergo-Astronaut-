@@ -187,8 +187,16 @@ function auditBundle(bundle = {}) {
   const { plan, box, attestations, quorum, reveal, settlementRecord, claim, ledger } = bundle;
 
   /* Link 1 — the plan and its commitment */
+  // The timeout is judged by VALUE, not just typeof: typeof NaN,
+  // Infinity, 1.5 and 2^53 are all 'number', so the old check admitted
+  // each as a plan timeout — and with Infinity (or any height past the
+  // genuine timeout) the settlement-window check below compared
+  // against it and passed, so a bundle whose plan named no real
+  // timeout audited clean, audit id and all. A timeout is a chain
+  // height: the plan builder mints only a safe integer, and every
+  // height judgement in this layer requires one.
   const planOk = !!(plan && typeof plan === 'object' && isHex32(plan.commitment) &&
-    plan.registers && plan.registers.R4 && typeof plan.timeoutHeight === 'number');
+    plan.registers && plan.registers.R4 && Number.isSafeInteger(plan.timeoutHeight));
   if (!planOk) { fail('plan-malformed'); return done(); }
   checks.planTestnet = plan.network === 'testnet';
   if (!checks.planTestnet) fail('plan-not-testnet');

@@ -164,6 +164,16 @@ fails('a missing reveal is named', mainBundle({ reveal: null }), 'reveal-missing
 fails('a mainnet plan is refused (Phase 1 is testnet-only)',
   mainBundle({ plan: { ...plan, network: 'mainnet' } }), 'plan-not-testnet');
 fails('a bundle with no plan is a failed audit, not a crash', {}, 'plan-malformed');
+fails('a plan whose timeout is NaN is malformed, not a window failure',
+  mainBundle({ plan: { ...plan, timeoutHeight: NaN } }), 'plan-malformed');
+fails('a plan whose timeout is Infinity is malformed — it must not audit clean',
+  mainBundle({ plan: { ...plan, timeoutHeight: Infinity } }), 'plan-malformed');
+fails('a plan whose timeout is a fraction is malformed',
+  mainBundle({ plan: { ...plan, timeoutHeight: 1.5 } }), 'plan-malformed');
+fails('a plan whose timeout is past the safe-integer range is malformed',
+  mainBundle({ plan: { ...plan, timeoutHeight: 2 ** 53 } }), 'plan-malformed');
+fails('a plan whose timeout is a string is malformed',
+  mainBundle({ plan: { ...plan, timeoutHeight: '2000' } }), 'plan-malformed');
 ok('a null bundle is a failed audit, not a crash',
   a.auditBundle(null).verdict === 'failed' && a.auditBundle().verdict === 'failed');
 

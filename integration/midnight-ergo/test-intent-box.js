@@ -129,6 +129,12 @@ ok('watcher declines a huge plan value instead of parsing it', ib.inspectIntentB
   goodBox, { ...plan, valueNanoErg: '9'.repeat(100000) }).checks.valueCovers === false);
 ok('watcher declines a long non-decimal box value', ib.inspectIntentBox(
   { value: 'x'.repeat(100), additionalRegisters: { R4: { serializedValue: '0e20' + base } } }, plan).checks.valueCovers === false);
+ok('watcher declines a long value whose garbage follows 21 significant digits', ib.inspectIntentBox(
+  { value: '9'.repeat(21) + 'x'.repeat(50), additionalRegisters: { R4: { serializedValue: '0e20' + base } } }, plan).checks.valueCovers === false &&
+  ib.boxValueCovers('9'.repeat(21) + '.5' + '0'.repeat(30), '10') === false &&
+  ib.boxValueCovers('0'.repeat(50) + '9'.repeat(21) + 'x'.repeat(10), '10') === false);
+ok('watcher still accepts a long value whose digits continue past 21', ib.inspectIntentBox(
+  { value: '9'.repeat(21) + '5'.repeat(50000), additionalRegisters: { R4: { serializedValue: '0e20' + base } } }, plan).checks.valueCovers === true);
 ok('short native value forms are unchanged (hex string, negative, exact)', ib.boxValueCovers('0x10', '10') === true &&
   ib.boxValueCovers('-5', '10') === false && ib.boxValueCovers('2000000000', '2000000000') === true);
 

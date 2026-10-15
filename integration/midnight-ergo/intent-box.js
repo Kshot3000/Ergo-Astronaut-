@@ -254,6 +254,17 @@ function settlementWindowOpen(plan, currentHeight) {
  * be settled inside the scan bound is not a value any explorer
  * returns: both decline (false), the watcher's safe answer, rather
  * than being parsed in full.
+ *
+ * The magnitude shortcut has one trap, closed after a probe caught
+ * it: once 21 significant digits settle the magnitude, the REST of
+ * the string still has to be digits — a value like 21 nines followed
+ * by 'x…' or '.5…' is not a plain decimal at all, and the native
+ * comparison the short path uses would throw on it, so returning
+ * true from the digit count alone let a malformed value pass the
+ * watcher's gate purely because it was long (the same string at 22
+ * characters, judged natively, declined). The tail is therefore
+ * scanned character by character — a plain linear scan, never a
+ * parse — and any non-digit in it declines.
  */
 const MAX_VALUE_STRING = 40; // short-path bound: any real i64/u64 decimal fits
 const MAX_VALUE_SCAN = 10000; // leading-zero scan bound for long strings
@@ -294,7 +305,16 @@ function boxValueCovers(boxValue, planValue) {
     digits += ch;
     i += 1;
   }
-  if (digits.length > 20) return true; // >= 10^20, beyond the u64 max any plan can name
+  if (digits.length > 20) {
+    // >= 10^20 in magnitude, beyond the u64 max any plan can name —
+    // but only if the rest of the string is digits too (see above):
+    // garbage after the 21st digit makes it not a plain decimal.
+    for (; i < boxValue.length; i += 1) {
+      const ch = boxValue[i];
+      if (ch < '0' || ch > '9') return false;
+    }
+    return true;
+  }
   return BigInt(digits) >= planBig;
 }
 

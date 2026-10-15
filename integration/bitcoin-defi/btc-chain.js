@@ -152,14 +152,30 @@ function verifyHeaderChain(headersHex, options = {}) {
       if (firstTs === null) {
         retargetsUnverified.push(height);
       } else {
-        const expected = expectedRetargetBits(prev.bits, firstTs, prev.timestamp);
-        if (h.bits !== expected) {
+        // The previous header's bits may themselves be undecodable
+        // (sign bit set, or a target above 2^256): that header was
+        // already named as a 'bits' error above and the loop
+        // continued, so re-decoding its bits here must not throw out
+        // of the verdict — the retarget simply cannot be computed,
+        // which is a retarget failure at this height, named like
+        // every other failure this function returns.
+        let expected = null;
+        try {
+          expected = expectedRetargetBits(prev.bits, firstTs, prev.timestamp);
+        } catch (e) {
+          errors.push({
+            height,
+            check: 'retarget',
+            message: 'retarget cannot be computed from the previous header bits: ' + String(e.message),
+          });
+        }
+        if (expected !== null && h.bits !== expected) {
           errors.push({
             height,
             check: 'retarget',
             message: 'bits ' + h.bits.toString(16) + ' != retarget-expected ' + expected.toString(16),
           });
-        } else {
+        } else if (expected !== null) {
           retargetsChecked.push(height);
         }
       }

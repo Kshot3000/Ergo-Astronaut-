@@ -100,6 +100,29 @@ ok('a header that ignores the retarget is invalid', wrongRetarget.valid === fals
 ok('the ignored retarget is named as a retarget failure', wrongRetarget.errors.some((e) => e.check === 'retarget'));
 const overLimit = chain.verifyHeaderChain(['01000000' + '00'.repeat(64) + '00000000' + 'ffff0020' + '00000000']);
 ok('over-limit target named as a bits failure', overLimit.valid === false && overLimit.errors.some((e) => e.check === 'bits'));
+/* A header whose bits the compact codec cannot decode at all (sign bit
+ * set, or a target above 2^256) is named as a 'bits' failure and the
+ * scan continues — but placed directly before a retarget boundary, the
+ * boundary check re-decodes those same bits to compute the expected
+ * retarget. That re-decode must not throw out of the verdict: the
+ * segment returns invalid, the previous header keeps its 'bits'
+ * failure, the boundary gains a named 'retarget' failure, and the
+ * boundary is not reported as checked. (Before the fix both shapes
+ * threw 'bits encode a negative target' / 'above 2^256'.) */
+const SIGN_BITS_HEADER = H0.slice(0, 144) + '0000801d' + H0.slice(152); // u32 0x1d800000, sign bit set
+const OVERFLOW_BITS_HEADER = H0.slice(0, 144) + 'ffff7f23' + H0.slice(152); // u32 0x237fffff, target above 2^256
+const badBeforeBoundary = chain.verifyHeaderChain([H0, SIGN_BITS_HEADER, H0], { startHeight: 2014, periodStartTimestamp: GENESIS_TS });
+ok('sign-bit header before a boundary still returns a verdict', badBeforeBoundary.valid === false);
+ok('sign-bit header keeps its named bits failure', badBeforeBoundary.errors.some((e) => e.height === 2015 && e.check === 'bits'));
+ok('the boundary after it names a retarget failure', badBeforeBoundary.errors.some((e) => e.height === 2016 && e.check === 'retarget'));
+ok('the uncomputable retarget is not reported as checked', badBeforeBoundary.retargetsChecked.length === 0 && badBeforeBoundary.retargetsUnverified.length === 0);
+const overflowBeforeBoundary = chain.verifyHeaderChain([H0, OVERFLOW_BITS_HEADER, H0], { startHeight: 2014, periodStartTimestamp: GENESIS_TS });
+ok('overflow-bits header before a boundary names bits and retarget failures', overflowBeforeBoundary.valid === false &&
+  overflowBeforeBoundary.errors.some((e) => e.height === 2015 && e.check === 'bits') &&
+  overflowBeforeBoundary.errors.some((e) => e.height === 2016 && e.check === 'retarget'));
+const badOffBoundary = chain.verifyHeaderChain([H0, SIGN_BITS_HEADER], { startHeight: 2014 });
+ok('the same sign-bit header away from a boundary names only the bits failure', badOffBoundary.valid === false &&
+  badOffBoundary.errors.every((e) => e.check !== 'retarget'));
 throws('empty chain refused', () => chain.verifyHeaderChain([]), 'at least one header');
 /* Bounds: the header list is untrusted input — oversize segments refuse
  * before a single header is parsed or hashed; at the bound the scan

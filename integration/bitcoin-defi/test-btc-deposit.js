@@ -184,4 +184,21 @@ ok('a work string with leading zeros within the bound still parses to the same v
     deposit.computeEvidenceId({ ...fields, cumulativeWork: '0'.repeat(100) + WORK });
 })());
 
+/* A segment whose bad-bits header sits directly before a retarget
+ * boundary is refused with the chain's failures named — the chain
+ * verifier returns a verdict for it (see test-btc-chain.js), so the
+ * deposit layer folds them into refusals instead of throwing a raw
+ * compact-codec error out of the evidence check. */
+const GENESIS_HEADER = '0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c';
+const SIGN_BITS_HEADER = GENESIS_HEADER.slice(0, 144) + '0000801d' + GENESIS_HEADER.slice(152); // u32 0x1d800000
+const badBoundaryVerdict = deposit.verifyDepositEvidence({
+  headersHex: [GENESIS_HEADER, SIGN_BITS_HEADER, GENESIS_HEADER],
+  startHeight: 2014,
+  periodStartTimestamp: 1231006505,
+  payment: { txid: PAY_TXID, index: 0, branch: [], blockHeight: 2014 },
+});
+ok('bad-bits header before a boundary refuses the deposit, never throws', badBoundaryVerdict.accept === false);
+ok('the refusal names the chain bits failure', badBoundaryVerdict.refusals.some((r) => r.check === 'bits'));
+ok('the refusal names the chain retarget failure', badBoundaryVerdict.refusals.some((r) => r.check === 'retarget'));
+
 console.log('ALL PASS (' + pass + ' checks)');

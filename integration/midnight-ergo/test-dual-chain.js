@@ -41,6 +41,24 @@ const CONTRACT = '1fca6b4cec100a425db72d769d1ef19f673de7552b4c9196611797f6b565e7
     dc.getErgoHeight({ fetchImpl: async () => jsonRes({}, 503) }), '503');
   await throws('ergo height bad shape refused', () =>
     dc.getErgoHeight({ fetchImpl: async () => jsonRes({ items: [] }) }), 'unexpected');
+  /* Heights are judged by value, not typeof alone: NaN, Infinity, a
+   * negative and a fractional 'height' are all numbers by typeof but
+   * none is a chain height, and an unsafe integer cannot be compared
+   * exactly by any consumer in this layer. */
+  for (const [label, bad] of [['nan', NaN], ['infinity', Infinity], ['negative', -5], ['fractional', 1.5], ['unsafe integer', 2 ** 53]]) {
+    await throws('ergo height ' + label + ' refused by name, never returned as a height', () =>
+      dc.getErgoHeight({ fetchImpl: async () => jsonRes({ items: [{ height: bad }] }) }), 'unexpected');
+    await throws('midnight height ' + label + ' refused by name, never returned as a height', () =>
+      dc.getMidnightHeight({ fetchImpl: async () => jsonRes({ data: { block: { height: bad } } }) }), 'unexpected');
+  }
+  await throws('ergo height null item refused by name, never a raw TypeError', () =>
+    dc.getErgoHeight({ fetchImpl: async () => jsonRes({ items: [null] }) }), 'unexpected');
+  ok('ergo height zero is a genuine height', (await dc.getErgoHeight({
+    fetchImpl: async () => jsonRes({ items: [{ height: 0 }] }),
+  })) === 0);
+  ok('midnight height zero is a genuine height', (await dc.getMidnightHeight({
+    fetchImpl: async () => jsonRes({ data: { block: { height: 0 } } }),
+  })) === 0);
 
   /* Ergo box + balance */
   const boxFetch = async (url) => {
@@ -53,6 +71,16 @@ const CONTRACT = '1fca6b4cec100a425db72d769d1ef19f673de7552b4c9196611797f6b565e7
   ok('ergo balance parsed', (await dc.getErgoAddressBalance(KYLE_ERG, { fetchImpl: boxFetch })).nanoErgs === 42);
   await throws('ergo balance bad shape refused', () =>
     dc.getErgoAddressBalance(KYLE_ERG, { fetchImpl: async () => jsonRes({}) }), 'unexpected');
+  for (const [label, bad] of [['nan', NaN], ['infinity', Infinity], ['negative', -5], ['fractional', 1.5]]) {
+    await throws('ergo balance ' + label + ' nanoErgs refused by name, never returned as a balance', () =>
+      dc.getErgoAddressBalance(KYLE_ERG, { fetchImpl: async () => jsonRes({ nanoErgs: bad, tokens: [] }) }), 'unexpected');
+  }
+  ok('ergo balance zero is a genuine balance', (await dc.getErgoAddressBalance(KYLE_ERG, {
+    fetchImpl: async () => jsonRes({ nanoErgs: 0, tokens: [] }),
+  })).nanoErgs === 0);
+  ok('ergo balance past the safe-integer range still returned (whole-supply scale is integer-valued)', (await dc.getErgoAddressBalance(KYLE_ERG, {
+    fetchImpl: async () => jsonRes({ nanoErgs: 97739925000000000, tokens: [] }),
+  })).nanoErgs === 97739925000000000);
 
   /* Midnight GraphQL */
   let seenBody = null;

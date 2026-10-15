@@ -42,7 +42,16 @@ async function getJson(url, fetchImpl) {
 async function getErgoHeight({ explorerBase = ERGO_EXPLORER_DEFAULT, fetchImpl } = {}) {
   const page = await getJson(explorerBase + '/blocks?limit=1&offset=0&sortBy=height&sortDirection=desc', fetchImpl);
   const items = page && page.items;
-  if (!Array.isArray(items) || items.length === 0 || typeof items[0].height !== 'number') {
+  // The height is judged by VALUE, not just typeof: typeof NaN, Infinity,
+  // -5 and 1.5 are all 'number', so the old check returned each of them
+  // as a chain height. A height is a non-negative safe integer — the
+  // judgement every consumer in this layer already applies to heights
+  // it is handed (watcher confirmations, settlement windows, u32
+  // attestation fields) — so a malformed explorer response is refused
+  // here, by this reader's own name. A null first item is likewise a
+  // malformed response, not a raw TypeError from reading .height off it.
+  if (!Array.isArray(items) || items.length === 0 || !items[0] ||
+    !Number.isSafeInteger(items[0].height) || items[0].height < 0) {
     throw new Error('unexpected Ergo explorer blocks response');
   }
   return items[0].height;
@@ -67,7 +76,13 @@ async function getErgoAddressBalance(address, { explorerBase = ERGO_EXPLORER_DEF
     explorerBase + '/addresses/' + encodeURIComponent(address) + '/balance/confirmed',
     fetchImpl
   );
-  if (!bal || typeof bal.nanoErgs !== 'number') throw new Error('unexpected Ergo balance response');
+  // Judged by value like the heights above: NaN, Infinity, a negative
+  // amount and a fractional amount are all 'number' by typeof but none
+  // is a balance. The judgement is integer-valued and non-negative,
+  // NOT safe-integer: a large balance in nanoERG legitimately exceeds
+  // the safe-integer range (the whole supply is ~9.8e16 nanoERG), and
+  // those integer-valued responses returned before still return.
+  if (!bal || !Number.isInteger(bal.nanoErgs) || bal.nanoErgs < 0) throw new Error('unexpected Ergo balance response');
   return bal; // { nanoErgs, tokens: [...] } exactly as the explorer reports it
 }
 
@@ -102,7 +117,9 @@ const MIDNIGHT_LATEST_BLOCK_QUERY = 'query { block { height hash timestamp } }';
 
 async function getMidnightHeight(opts = {}) {
   const data = await midnightGraphQL(MIDNIGHT_LATEST_BLOCK_QUERY, {}, opts);
-  if (!data.block || typeof data.block.height !== 'number') {
+  // Same value judgement as getErgoHeight: NaN, Infinity, -5 and 1.5
+  // are all 'number' by typeof but none is a block height.
+  if (!data.block || !Number.isSafeInteger(data.block.height) || data.block.height < 0) {
     throw new Error('unexpected Midnight block response');
   }
   return data.block.height;

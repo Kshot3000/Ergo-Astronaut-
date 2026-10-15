@@ -99,6 +99,18 @@ ok('refund not eligible inside the window', ib.refundEligible(plan, 1999) === fa
 ok('refund eligible at the timeout height', ib.refundEligible(plan, 2000) === true);
 ok('settlement window open before timeout', ib.settlementWindowOpen(plan, 1999) === true);
 ok('settlement window closed at timeout', ib.settlementWindowOpen(plan, 2000) === false);
+ok('window helpers decline a missing plan instead of crashing', ib.settlementWindowOpen(null, 1500) === false &&
+  ib.settlementWindowOpen(undefined, 1500) === false &&
+  ib.refundEligible(null, 1500) === false && ib.refundEligible(undefined, 1500) === false);
+ok('window helpers judge a non-number timeout by value, never by coercion',
+  ib.settlementWindowOpen({ timeoutHeight: '2000' }, 1500) === false &&
+  ib.settlementWindowOpen({ timeoutHeight: Infinity }, 1500) === false &&
+  ib.refundEligible({ timeoutHeight: Infinity }, 1500) === false &&
+  ib.settlementWindowOpen({ timeoutHeight: 1500.5 }, 1500) === false &&
+  ib.settlementWindowOpen({ timeoutHeight: { valueOf() { throw new Error('hostile'); } } }, 1500) === false &&
+  ib.refundEligible({ timeoutHeight: { valueOf() { throw new Error('hostile'); } } }, 1500) === false);
+ok('window helpers keep a negative safe-integer timeout judged as before',
+  ib.settlementWindowOpen({ timeoutHeight: -5 }, 0) === false && ib.refundEligible({ timeoutHeight: -5 }, 0) === true);
 
 /* Watcher inspection against explorer-shaped boxes */
 const goodBox = { boxId: 'a'.repeat(64), value: 2000000000, additionalRegisters: { R4: { serializedValue: '0e20' + base } } };

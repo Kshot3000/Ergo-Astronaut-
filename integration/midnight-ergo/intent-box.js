@@ -217,11 +217,35 @@ function buildIntentBoxPlan({ network, ergoSender, midnightRecipient, amountNano
   };
 }
 
+/*
+ * The window helpers judge the plan's timeout by VALUE before
+ * comparing against it. Both helpers read plan.timeoutHeight
+ * unjudged before this: a missing plan (null/undefined) crashed
+ * them with a raw TypeError — and the watcher's evaluateObservation
+ * above them, which judges none of the plan and relies on
+ * inspectIntentBox declining a plan-less box by its named checks,
+ * crashed with it instead of answering not-attestable; a timeout
+ * that was not a number at all was silently coerced by the
+ * comparison (the string '2000' opened the window, an object with
+ * a throwing valueOf escaped the settler as the hostile error
+ * itself), and Infinity or a fractional timeout opened a window
+ * no chain height can close. A timeout is a chain height: the
+ * plan builder mints only a safe integer, and every height
+ * judgement in this layer (the auditor's plan gate included)
+ * requires one — a plan naming no safe-integer timeout has no
+ * window and no refund point, so both helpers answer false.
+ */
+function planTimeout(plan) {
+  return plan && typeof plan === 'object' && Number.isSafeInteger(plan.timeoutHeight)
+    ? plan.timeoutHeight : null;
+}
 function refundEligible(plan, currentHeight) {
-  return Number.isSafeInteger(currentHeight) && currentHeight >= plan.timeoutHeight;
+  const timeout = planTimeout(plan);
+  return timeout !== null && Number.isSafeInteger(currentHeight) && currentHeight >= timeout;
 }
 function settlementWindowOpen(plan, currentHeight) {
-  return Number.isSafeInteger(currentHeight) && currentHeight < plan.timeoutHeight;
+  const timeout = planTimeout(plan);
+  return timeout !== null && Number.isSafeInteger(currentHeight) && currentHeight < timeout;
 }
 
 /* ---------------- Watcher-side box inspection ---------------- */

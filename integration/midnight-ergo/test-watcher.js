@@ -87,6 +87,15 @@ ok('observation refuses after the refund timeout', w.evaluateObservation({ box: 
   w.evaluateObservation({ box: goodBox(), plan, currentHeight: 2000 }).checks.windowOpen === false);
 ok('observation refuses a box not carrying the plan', obs({ additionalRegisters: { R4: { serializedValue: '0e20' + '00'.repeat(32) } } }).checks.boxMatchesPlan === false);
 throws('observation refuses a zero min depth', () => w.evaluateObservation({ box: goodBox(), plan, currentHeight: 1500, minConfirmations: 0 }), 'positive integer');
+/* A missing plan declines through the named checks, never a crash:
+ * the shared inspection already declines a plan-less box by name,
+ * and the window helper now judges the plan's timeout by value
+ * before reading it (it crashed on plan.timeoutHeight before). */
+ok('observation names its checks against a missing plan, without throwing', (() => {
+  const o = w.evaluateObservation({ box: goodBox(), plan: null, currentHeight: 1500 });
+  return o.attestable === false && o.checks.boxMatchesPlan === false && o.checks.windowOpen === false;
+})());
+throws('attestation refuses a missing plan by name', () => w.buildAttestation({ watcherId: 'watcher-1', box: goodBox(), plan: undefined, currentHeight: 1500 }), 'boxMatchesPlan');
 
 /* Building attestations */
 const att1 = w.buildAttestation({ watcherId: 'watcher-1', box: goodBox(), plan, currentHeight: 1500 });

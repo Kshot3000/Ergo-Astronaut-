@@ -136,6 +136,17 @@ ok('refund-only at the timeout even with quorum and preimage', (() => {
     d.reasons.includes('settlement-window-closed');
 })());
 ok('refund-only after the timeout', decide({ currentHeight: 2500 }).verdict === 'refund-only');
+/* A plan whose timeout is not a safe-integer height names no real
+ * window: the settler answers refund-only by verdict, never by
+ * coercing the timeout (a string, Infinity or a hostile valueOf
+ * object escaped or silently opened the window before). */
+ok('refund-only, never a throw, for a plan with a non-height timeout', (() => {
+  for (const timeoutHeight of ['2000', Infinity, 1500.5, { valueOf() { throw new Error('hostile'); } }]) {
+    const d = decide({ plan: { ...plan, timeoutHeight } });
+    if (d.verdict !== 'refund-only' || d.checks.windowOpen !== false) return false;
+  }
+  return true;
+})());
 
 /* Terminal verdicts outrank everything else */
 ok('spent outranks settle, refund and reject', (() => {

@@ -128,6 +128,37 @@ const CONTRACT = '1fca6b4cec100a425db72d769d1ef19f673de7552b4c9196611797f6b565e7
   await throws('plan refuses float amount', () =>
     dc.planBridgeIntent({ nanoErg: 1.5, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR }), 'BigInt or a safe integer');
 
+  /* The nonce is judged by type, never coerced with String() first:
+   * a counter is a non-negative BigInt or safe integer, exactly the
+   * amount's idiom above it in the same function. */
+  const planBigNonce = dc.planBridgeIntent({ nanoErg: 2000000000n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: 7n });
+  ok('bigint nonce deterministic with number nonce', planBigNonce.intentId === plan.intentId && planBigNonce.nonce === '7');
+  const planNoNonce = dc.planBridgeIntent({ nanoErg: 2000000000n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR });
+  const planZeroNonce = dc.planBridgeIntent({ nanoErg: 2000000000n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: 0 });
+  ok('omitted nonce defaults to 0', planNoNonce.nonce === '0' && planNoNonce.intentId === planZeroNonce.intentId);
+  const planNullNonce = dc.planBridgeIntent({ nanoErg: 2000000000n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: null });
+  ok('null nonce defaults to 0', planNullNonce.intentId === planZeroNonce.intentId);
+  await throws('plan refuses string nonce by name, never coerces it', () =>
+    dc.planBridgeIntent({ nanoErg: 1n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: '7' }), 'nonce');
+  await throws('plan refuses float nonce by name', () =>
+    dc.planBridgeIntent({ nanoErg: 1n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: 1.5 }), 'nonce');
+  await throws('plan refuses negative nonce by name', () =>
+    dc.planBridgeIntent({ nanoErg: 1n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: -1 }), 'nonce');
+  await throws('plan refuses negative bigint nonce by name', () =>
+    dc.planBridgeIntent({ nanoErg: 1n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: -1n }), 'nonce');
+  await throws('plan refuses array-wrapped nonce by name, never unwraps it', () =>
+    dc.planBridgeIntent({ nanoErg: 1n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: [7] }), 'nonce');
+  await throws('plan refuses plain-object nonce by name', () =>
+    dc.planBridgeIntent({ nanoErg: 1n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: {} }), 'nonce');
+  await throws('plan refuses null-prototype nonce by name, never a raw TypeError', () =>
+    dc.planBridgeIntent({ nanoErg: 1n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: Object.create(null) }), 'nonce');
+  await throws('plan refuses throwing-toString nonce by name, never the hostile error', () =>
+    dc.planBridgeIntent({ nanoErg: 1n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: { toString() { throw new Error('hostile'); } } }), 'nonce');
+  await throws('plan refuses boolean nonce by name', () =>
+    dc.planBridgeIntent({ nanoErg: 1n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: true }), 'nonce');
+  await throws('plan refuses symbol nonce by name', () =>
+    dc.planBridgeIntent({ nanoErg: 1n, ergoSender: KYLE_ERG, midnightRecipient: MN_ADDR, nonce: Symbol('x') }), 'nonce');
+
   console.log('ALL PASS (' + pass + ' checks)');
 })().catch((e) => {
   console.error(e.message);

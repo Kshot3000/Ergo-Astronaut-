@@ -215,7 +215,31 @@ function planBridgeIntent({ nanoErg, ergoSender, midnightRecipient, nonce } = {}
   if (!looksLikeMidnightAddress(midnightRecipient)) {
     throw new Error('midnightRecipient is not a Midnight address (format check)');
   }
-  const nonceStr = nonce == null ? '0' : String(nonce);
+  // The nonce is judged by TYPE, never coerced with String() first:
+  // every other scalar in this planner is type-judged before use
+  // (the amount above refuses even a decimal string by name), but the
+  // nonce was String()-converted unjudged — and coercion itself
+  // throws on a value that cannot be converted (a null-prototype
+  // object escaped as a raw TypeError; a throwing toString escaped
+  // as the hostile error itself), while coercible non-counters
+  // minted: a one-element array wrapping 7 minted the genuine nonce
+  // 7's intentId exactly, a plain object minted the intentId for
+  // the literal nonce "[object Object]", and strings, floats,
+  // negatives, booleans and symbols all minted nonce strings the
+  // amount field would have refused. A nonce is a counter: a
+  // non-negative BigInt or safe integer, with the omitted/null
+  // default of 0 unchanged.
+  let nonceStr;
+  if (nonce == null) {
+    nonceStr = '0';
+  } else if (typeof nonce === 'bigint') {
+    if (nonce < 0n) throw new Error('nonce must be a non-negative BigInt or safe integer');
+    nonceStr = nonce.toString();
+  } else if (typeof nonce === 'number' && Number.isSafeInteger(nonce) && nonce >= 0) {
+    nonceStr = String(nonce);
+  } else {
+    throw new Error('nonce must be a non-negative BigInt or safe integer');
+  }
   const canonical = ['ergo->midnight', ergoSender, midnightRecipient, amount.toString(), nonceStr].join('|');
   const intentId = crypto.createHash('sha256').update(canonical, 'utf8').digest('hex');
   return {

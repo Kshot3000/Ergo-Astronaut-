@@ -6681,9 +6681,11 @@ function replaceErgoTreeConstant(treeHex, indexStr, valueSpec, networkStr) {
   if (offset >= bytes.length) return fail("The constants section consumes the whole tree — there is no proposition template after the " + count + " constants, and a segregated tree is a template plus its constants, so these bytes do not parse as one.");
   var templateStart = offset;
   var idxText = indexStr == null ? "" : String(indexStr).trim();
-  if (!/^\d+$/.test(idxText)) return fail("Give the placeholder number of the constant to replace — a whole number, 0 for the first constant (tool 93 lists them by number). Got \"" + (indexStr == null ? "" : String(indexStr)) + "\".");
-  var index = Number(idxText);
-  if (!Number.isSafeInteger(index) || index >= count) return fail("This tree segregates " + count + " constant(s), numbered 0 to " + (count - 1) + " — there is no constant " + idxText + " to replace.");
+  if (!/^\d+$/.test(idxText)) return fail("Give the placeholder number of the constant to replace — a whole number, 0 for the first constant (tool 93 lists them by number). Got \"" + boundedEcho(indexStr == null ? "" : String(indexStr)) + "\".");
+  var sigIdx = idxText.replace(/^0+/, "");
+  if (sigIdx.length > 20) return fail("This tree segregates " + count + " constant(s), numbered 0 to " + (count - 1) + " — there is no constant with " + sigIdx.length + " digits to replace.");
+  var index = sigIdx === "" ? 0 : Number(sigIdx);
+  if (!Number.isSafeInteger(index) || index >= count) return fail("This tree segregates " + count + " constant(s), numbered 0 to " + (count - 1) + " — there is no constant " + index + " to replace.");
   var target = spans[index];
   var rep = sigmaConstantBytes(valueSpec);
   if (!rep.valid) return fail("The replacement is not a usable Sigma constant: " + rep.reason);
@@ -6909,8 +6911,10 @@ function analyzeMerkle(leavesText, indexText, expectedText) {
   var idx = 0;
   if (idxStr !== "") {
     if (!/^[0-9]+$/.test(idxStr)) return fail("The leaf number to prove must be a whole number, 1 for the first leaf.");
-    idx = parseInt(idxStr, 10) - 1;
-    if (idx < 0 || idx >= datas.length) return fail("Leaf number " + idxStr + " is out of range — the tree has " + datas.length + (datas.length === 1 ? " leaf." : " leaves."));
+    var judgedIdx = txIndexTarget(idxStr);
+    if (judgedIdx.huge) return fail("Leaf number with " + judgedIdx.digits + " digits is out of range — the tree has " + datas.length + (datas.length === 1 ? " leaf." : " leaves."));
+    idx = judgedIdx.target;
+    if (idx < 0 || idx >= datas.length) return fail("Leaf number " + judgedIdx.shown + " is out of range — the tree has " + datas.length + (datas.length === 1 ? " leaf." : " leaves."));
   }
   var tree = buildMerkleTree(datas);
   var rootHex = bytesToHex(tree.root);
@@ -8709,7 +8713,7 @@ function encodeSigmaConstant(spec) {
   var fail = function (reason) { return { valid: false, reason: reason }; };
   var s = spec == null ? "" : String(spec).trim();
   var colon = s.indexOf(":");
-  if (colon < 1) return fail("Register spec \"" + s + "\" is not in kind:value form — use one of: " + SIGMA_SPEC_KINDS + ".");
+  if (colon < 1) return fail("Register spec \"" + boundedEcho(s) + "\" is not in kind:value form — use one of: " + SIGMA_SPEC_KINDS + ".");
   var kind = s.slice(0, colon).trim().toLowerCase();
   var val = s.slice(colon + 1).trim();
   var intStr = function (x) { return x.length <= 100 && /^-?\d+$/.test(x); }; /* judged from length before any BigInt parse — the widest kind here, a 256-bit bigint, needs at most 79 characters with its sign */
@@ -8718,34 +8722,34 @@ function encodeSigmaConstant(spec) {
     return { valid: true, typeName: typeName, value: value, bytes: [typeByte].concat(data), rawHex: bytesToHex(Uint8Array.from([typeByte].concat(data))) };
   };
   if (kind === "bool") {
-    if (val !== "true" && val !== "false") return fail("A bool register is bool:true or bool:false — got \"" + s + "\".");
+    if (val !== "true" && val !== "false") return fail("A bool register is bool:true or bool:false — got \"" + boundedEcho(s) + "\".");
     return done(1, [val === "true" ? 1 : 0], "SBoolean", val);
   }
   if (kind === "byte") {
-    if (!ranged(val, -128n, 127n)) return fail("A byte register is a signed byte, -128 to 127 — got \"" + s + "\".");
+    if (!ranged(val, -128n, 127n)) return fail("A byte register is a signed byte, -128 to 127 — got \"" + boundedEcho(s) + "\".");
     return done(2, [Number(BigInt(val)) & 0xff], "SByte", String(Number(BigInt(val))));
   }
   if (kind === "short") {
-    if (!ranged(val, -32768n, 32767n)) return fail("A short register is a signed 16-bit integer — got \"" + s + "\".");
+    if (!ranged(val, -32768n, 32767n)) return fail("A short register is a signed 16-bit integer — got \"" + boundedEcho(s) + "\".");
     return done(3, writeVlqBig(sigmaIntZigzag(Number(val))), "SShort", String(Number(val)));
   }
   if (kind === "int") {
-    if (!ranged(val, -2147483648n, 2147483647n)) return fail("An int register is a signed 32-bit integer — got \"" + s + "\".");
+    if (!ranged(val, -2147483648n, 2147483647n)) return fail("An int register is a signed 32-bit integer — got \"" + boundedEcho(s) + "\".");
     return done(4, writeVlqBig(sigmaIntZigzag(Number(val))), "SInt", String(Number(val)));
   }
   if (kind === "long") {
-    if (!ranged(val, -9223372036854775808n, 9223372036854775807n)) return fail("A long register is a signed 64-bit integer — got \"" + s + "\".");
+    if (!ranged(val, -9223372036854775808n, 9223372036854775807n)) return fail("A long register is a signed 64-bit integer — got \"" + boundedEcho(s) + "\".");
     return done(5, writeVlqBig(zigzagEncode(BigInt(val))), "SLong", BigInt(val).toString());
   }
   if (kind === "bigint") {
-    if (!intStr(val)) return fail("A bigint register is a decimal integer of any size (up to a 256-bit value) — got \"" + s + "\".");
+    if (!intStr(val)) return fail("A bigint register is a decimal integer of any size (up to a 256-bit value) — got \"" + boundedEcho(s) + "\".");
     var bb = bigIntToSigmaBytes(BigInt(val));
     if (bb.length > 32) return fail("That bigint needs " + bb.length + " bytes — a Sigma BigInt constant holds at most a 256-bit value (32 bytes).");
     return done(6, writeVlqBig(BigInt(bb.length)).concat(bb), "SBigInt", "0x" + bytesToHex(Uint8Array.from(bb)));
   }
   if (kind === "group" || kind === "dlog") {
     var gb = hexToBytes(val.toLowerCase());
-    if (!gb || gb.length !== 33 || (gb[0] !== 0x02 && gb[0] !== 0x03)) return fail("A " + kind + " register is a compressed group element: 33 bytes, 66 hex characters, starting 02 or 03 — got \"" + s + "\".");
+    if (!gb || gb.length !== 33 || (gb[0] !== 0x02 && gb[0] !== 0x03)) return fail("A " + kind + " register is a compressed group element: 33 bytes, 66 hex characters, starting 02 or 03 — got \"" + boundedEcho(s) + "\".");
     if (kind === "group") return done(7, Array.from(gb), "SGroupElement", bytesToHex(gb));
     return done(8, [0xcd].concat(Array.from(gb)), "SSigmaProp", "proveDlog(" + bytesToHex(gb) + ")");
   }
@@ -8759,7 +8763,7 @@ function encodeSigmaConstant(spec) {
        be megabytes of text. */
     if (val.length > 2 * SIGMA_COLLECTION_MAX_COUNT) return fail("That bytes value is " + val.length + " hex characters — a Coll[SByte] constant here holds at most " + SIGMA_COLLECTION_MAX_COUNT + " bytes (" + (2 * SIGMA_COLLECTION_MAX_COUNT) + " hex characters), the count this hub's decoder (the reader tools 15 and 18 share) accepts, so a longer collection could never be read back.");
     var cb = val === "" ? new Uint8Array(0) : hexToBytes(val.toLowerCase());
-    if (!cb) return fail("A bytes register is Coll[SByte] given as hex (possibly empty) — got \"" + s + "\".");
+    if (!cb) return fail("A bytes register is Coll[SByte] given as hex (possibly empty) — got \"" + boundedEcho(s) + "\".");
     return done(14, writeVlqBig(BigInt(cb.length)).concat(Array.from(cb)), "Coll[SByte]", "0x" + bytesToHex(cb));
   }
   if (kind === "ints" || kind === "longs") {
@@ -8774,7 +8778,7 @@ function encodeSigmaConstant(spec) {
     var lo = isInt ? -2147483648n : -9223372036854775808n;
     var hi = isInt ? 2147483647n : 9223372036854775807n;
     for (var i = 0; i < parts.length; i++) {
-      if (!ranged(parts[i], lo, hi)) return fail("Each element of " + kind + ": must be a signed " + (isInt ? "32" : "64") + "-bit integer — got \"" + parts[i] + "\" in \"" + s + "\".");
+      if (!ranged(parts[i], lo, hi)) return fail("Each element of " + kind + ": must be a signed " + (isInt ? "32" : "64") + "-bit integer — got \"" + boundedEcho(parts[i]) + "\" in \"" + boundedEcho(s) + "\".");
     }
     var data = writeVlqBig(BigInt(parts.length));
     var shown = [];
@@ -8793,7 +8797,7 @@ function encodeSigmaConstant(spec) {
     if (parts.length > 8) shown.push("… +" + (parts.length - 8) + " more");
     return done(isInt ? 16 : 17, data, isInt ? "Coll[SInt]" : "Coll[SLong]", "[" + shown.join(", ") + "]");
   }
-  return fail("Unknown register kind \"" + kind + "\" — use one of: " + SIGMA_SPEC_KINDS + ".");
+  return fail("Unknown register kind \"" + boundedEcho(kind) + "\" — use one of: " + SIGMA_SPEC_KINDS + ".");
 }
 function buildErgoBox(fields) {
   var fail = function (reason) {
@@ -8813,7 +8817,7 @@ function buildErgoBox(fields) {
   var tokenBytes = [];
   for (var t = 0; t < tokens.length; t++) {
     var idBytes = hexToBytes(tokens[t] && tokens[t].tokenId);
-    if (!idBytes || idBytes.length !== 32) return fail("Token " + (t + 1) + ": a token ID is 32 bytes, 64 hex characters — got \"" + (tokens[t] && tokens[t].tokenId) + "\".");
+    if (!idBytes || idBytes.length !== 32) return fail("Token " + (t + 1) + ": a token ID is 32 bytes, 64 hex characters — got \"" + boundedEcho(tokens[t] && tokens[t].tokenId) + "\".");
     if (!digits(tokens[t].amount)) return fail("Token " + (t + 1) + ": enter the amount as a whole raw integer (digits only — tool 6 converts display amounts to raw).");
     var amt = BigInt(tokens[t].amount.trim());
     if (amt < 1n || amt > 9223372036854775807n) return fail("Token " + (t + 1) + ": a token amount is a positive signed 64-bit raw integer.");
@@ -8915,9 +8919,9 @@ function sigmaConstantBytes(entry) {
     return { valid: true, bytes: enc.bytes, rawHex: enc.rawHex, typeName: enc.typeName, value: enc.value };
   }
   var bytes = hexToBytes(s.toLowerCase());
-  if (!bytes) return fail("\"" + s + "\" is neither a typed spec (kind:value — tool 18 lists the kinds) nor one Sigma constant in hex.");
+  if (!bytes) return fail("\"" + boundedEcho(s) + "\" is neither a typed spec (kind:value — tool 18 lists the kinds) nor one Sigma constant in hex.");
   var dec = decodeSigmaConstant(s);
-  if (!dec.valid) return fail("\"" + s + "\" is not one complete Sigma constant: " + dec.reason);
+  if (!dec.valid) return fail("\"" + boundedEcho(s) + "\" is not one complete Sigma constant: " + dec.reason);
   return { valid: true, bytes: Array.from(bytes), rawHex: dec.rawHex, typeName: dec.type, value: dec.value };
 }
 function buildErgoTransaction(fields) {
@@ -8934,7 +8938,7 @@ function buildErgoTransaction(fields) {
   for (var i = 0; i < inFields.length; i++) {
     var inf = inFields[i] || {};
     var inId = hexId(inf.boxId);
-    if (!inId) return fail("Input " + (i + 1) + ": a box ID is 32 bytes, 64 hex characters — got \"" + inf.boxId + "\".");
+    if (!inId) return fail("Input " + (i + 1) + ": a box ID is 32 bytes, 64 hex characters — got \"" + boundedEcho(inf.boxId) + "\".");
     var proofBytes = null;
     if (inf.proofHex != null && String(inf.proofHex).trim() !== "") {
       proofBytes = hexToBytes(String(inf.proofHex).trim().toLowerCase());
@@ -8964,7 +8968,7 @@ function buildErgoTransaction(fields) {
   var dataInputs = [];
   for (var d = 0; d < diFields.length; d++) {
     var diId = hexId(diFields[d]);
-    if (!diId) return fail("Data input " + (d + 1) + ": a box ID is 32 bytes, 64 hex characters — got \"" + diFields[d] + "\".");
+    if (!diId) return fail("Data input " + (d + 1) + ": a box ID is 32 bytes, 64 hex characters — got \"" + boundedEcho(diFields[d]) + "\".");
     dataInputs.push(bytesToHex(diId));
   }
   /* --- outputs (candidates, validated like tool 17's fields) --- */
@@ -8990,7 +8994,7 @@ function buildErgoTransaction(fields) {
     for (var t = 0; t < tkFields.length; t++) {
       var tf = tkFields[t] || {};
       var tkId = hexId(tf.tokenId);
-      if (!tkId) return fail(oWhat + ", token " + (t + 1) + ": a token ID is 32 bytes, 64 hex characters — got \"" + tf.tokenId + "\".");
+      if (!tkId) return fail(oWhat + ", token " + (t + 1) + ": a token ID is 32 bytes, 64 hex characters — got \"" + boundedEcho(tf.tokenId) + "\".");
       if (!digits(tf.amount)) return fail(oWhat + ", token " + (t + 1) + ": enter the amount as a whole raw integer (digits only — tool 6 converts display amounts to raw).");
       var tkAmt = BigInt(String(tf.amount).trim());
       if (tkAmt < 1n || tkAmt > 9223372036854775807n) return fail(oWhat + ", token " + (t + 1) + ": a token amount is a positive signed 64-bit raw integer.");
@@ -9301,7 +9305,7 @@ function hdChildKey(parent, index) {
 }
 function parseHdIndex(str, what) {
   var s = (str == null ? "" : String(str)).trim();
-  if (!/^(0|[1-9][0-9]*)$/.test(s)) return { error: what + " must be a whole number — got \"" + s + "\"." };
+  if (!/^(0|[1-9][0-9]*)$/.test(s)) return { error: what + " must be a whole number — got \"" + boundedEcho(s) + "\"." };
   var v = Number(s);
   if (!Number.isSafeInteger(v) || v > 2147483647) return { error: what + " must be between 0 and 2147483647 (the BIP32 index space is 31 bits plus the hardened flag)." };
   return { value: v };
@@ -9509,7 +9513,7 @@ function calculateGroupElement(keyAHex, keyBHex, operationStr, scalarStr) {
   var scalar = null, scalarReduced = null, k = null;
   if (op === "Multiply (k * A)") {
     var ks = (scalarStr == null ? "" : String(scalarStr)).trim();
-    if (!/^-?[0-9]+$/.test(ks)) return fail("The scalar k must be a whole number written in decimal (digits, with an optional leading minus) — got \"" + ks + "\". It is an ordinary public exponent of the kind a script carries; a private key or seed is never entered anywhere, including here.");
+    if (!/^-?[0-9]+$/.test(ks)) return fail("The scalar k must be a whole number written in decimal (digits, with an optional leading minus) — got \"" + boundedEcho(ks) + "\". It is an ordinary public exponent of the kind a script carries; a private key or seed is never entered anywhere, including here.");
     if (ks.replace("-", "").length > 1000) return fail("The scalar k is capped at 1000 digits — more than enough for any exponent a script carries (the group order itself has 78). Nothing was computed.");
     k = BigInt(ks);
     scalar = k.toString();
@@ -9675,9 +9679,9 @@ function aggregateWeightedPublicKeys(termsText) {
   var zeroCount = 0;
   for (var i = 0; i < lines.length; i++) {
     var tokens = lines[i].split(/[\s,]+/).filter(function (t) { return t !== ""; });
-    if (tokens.length !== 2) return fail("Line " + (i + 1) + " is not a weighted term — write exactly a whole-number coefficient, a space, then a compressed public key in hex (\"" + lines[i] + "\" has " + tokens.length + (tokens.length === 1 ? " part" : " parts") + "). The whole list is refused rather than summed without it — a misread term would change the total with no sign it had happened.");
+    if (tokens.length !== 2) return fail("Line " + (i + 1) + " is not a weighted term — write exactly a whole-number coefficient, a space, then a compressed public key in hex (\"" + boundedEcho(lines[i]) + "\" has " + tokens.length + (tokens.length === 1 ? " part" : " parts") + "). The whole list is refused rather than summed without it — a misread term would change the total with no sign it had happened.");
     var ks = tokens[0];
-    if (!/^-?[0-9]+$/.test(ks)) return fail("Line " + (i + 1) + ": the coefficient \"" + ks + "\" is not a whole number written in decimal (digits, with an optional leading minus). Coefficients are ordinary public exponents of the kind a script carries; a private key or seed is never entered anywhere, including here. The whole list is refused rather than summed without this term.");
+    if (!/^-?[0-9]+$/.test(ks)) return fail("Line " + (i + 1) + ": the coefficient \"" + boundedEcho(ks) + "\" is not a whole number written in decimal (digits, with an optional leading minus). Coefficients are ordinary public exponents of the kind a script carries; a private key or seed is never entered anywhere, including here. The whole list is refused rather than summed without this term.");
     if (ks.replace("-", "").length > 1000) return fail("Line " + (i + 1) + ": the coefficient is capped at 1000 digits — more than enough for any exponent a script carries (the group order itself has 78). The whole list is refused.");
     var k = BigInt(ks);
     var red = k % SECP_N;
@@ -9866,7 +9870,7 @@ function scalePublicKeyList(keysText, scalarText) {
     return { valid: false, reason: reason, count: null, distinctCount: null, duplicates: null, scalar: null, scalarReduced: null, zeroScalar: null, terms: null, plainInfinity: null, plainCompressed: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
   };
   var ks = (scalarText == null ? "" : String(scalarText)).trim();
-  if (!/^-?[0-9]+$/.test(ks)) return fail("The coefficient \"" + ks + "\" is not a whole number written in decimal (digits, with an optional leading minus) — write the one number the whole list is scaled by, for example \"3\" or \"-1\". Coefficients are ordinary public exponents of the kind a script carries; a private key or seed is never entered anywhere, including here.");
+  if (!/^-?[0-9]+$/.test(ks)) return fail("The coefficient \"" + boundedEcho(ks) + "\" is not a whole number written in decimal (digits, with an optional leading minus) — write the one number the whole list is scaled by, for example \"3\" or \"-1\". Coefficients are ordinary public exponents of the kind a script carries; a private key or seed is never entered anywhere, including here.");
   if (ks.replace("-", "").length > 1000) return fail("The coefficient is capped at 1000 digits — more than enough for any exponent a script carries (the group order itself has 78).");
   var k = BigInt(ks);
   var red = k % SECP_N;
@@ -10246,7 +10250,7 @@ function verifySigmaProof(pubkeyHex, commitmentHex, challengeStr, responseStr) {
   };
   function parseScalar(str, label) {
     var s = (str == null ? "" : String(str)).trim();
-    if (!/^-?[0-9]+$/.test(s)) return { ok: false, reason: "The " + label + " must be a whole number written in decimal (digits, with an optional leading minus) — got \"" + s + "\". It is a public proof value of the kind a Sigma proof carries in the open; a private key, a nonce or a seed is never entered anywhere, including here." };
+    if (!/^-?[0-9]+$/.test(s)) return { ok: false, reason: "The " + label + " must be a whole number written in decimal (digits, with an optional leading minus) — got \"" + boundedEcho(s) + "\". It is a public proof value of the kind a Sigma proof carries in the open; a private key, a nonce or a seed is never entered anywhere, including here." };
     if (s.replace("-", "").length > 1000) return { ok: false, reason: "The " + label + " is capped at 1000 digits — more than enough for any proof value (the group order itself has 78). Nothing was computed." };
     var v = BigInt(s);
     var red = v % SECP_N;
@@ -11489,14 +11493,14 @@ function convertTxJson(direction, text) {
     if (typeof jin !== "object" || Array.isArray(jin)) return fail(iWhat + " is not an object — each input is {boxId, extension?}.");
     if (jin.proofBytes != null && String(jin.proofBytes) !== "") return fail(iWhat + " carries proofBytes — this dialect is the unsigned form, which has no place for spending proofs, so a signed JSON transaction is refused rather than have its proofs dropped silently. Tool 30 builds signed bytes from pasted proofs.");
     if (jin.spendingProof != null) return fail(iWhat + " carries a spendingProof — this dialect is the unsigned EIP-12 / fleet form, which has no place for proofs, so the transaction is refused rather than have its proofs dropped silently. Tool 30 builds signed bytes from pasted proofs.");
-    if (typeof jin.boxId !== "string" || !/^[0-9a-fA-F]{64}$/.test(jin.boxId.trim())) return fail(iWhat + ": a box ID is 64 hex characters — got \"" + jin.boxId + "\".");
+    if (typeof jin.boxId !== "string" || !/^[0-9a-fA-F]{64}$/.test(jin.boxId.trim())) return fail(iWhat + ": a box ID is 64 hex characters — got \"" + boundedEcho(jin.boxId) + "\".");
     var extList = [];
     if (jin.extension != null) {
       if (typeof jin.extension !== "object" || Array.isArray(jin.extension)) return fail(iWhat + ": \"extension\" maps numeric-string keys to Sigma constants in hex, e.g. {\"0\": \"0e02cafe\"}.");
       var eKeys = Object.keys(jin.extension);
       for (var e = 0; e < eKeys.length; e++) {
-        if (!/^\d+$/.test(eKeys[e])) return fail(iWhat + ": extension key \"" + eKeys[e] + "\" is not a number — keys are numeric strings (\"0\", \"1\", …).");
-        if (typeof jin.extension[eKeys[e]] !== "string") return fail(iWhat + ", extension key " + eKeys[e] + ": the value is one Sigma constant as a hex string (tool 18 reads them).");
+        if (!/^\d+$/.test(eKeys[e])) return fail(iWhat + ": extension key \"" + boundedEcho(eKeys[e]) + "\" is not a number — keys are numeric strings (\"0\", \"1\", …).");
+        if (typeof jin.extension[eKeys[e]] !== "string") return fail(iWhat + ", extension key " + boundedEcho(eKeys[e]) + ": the value is one Sigma constant as a hex string (tool 18 reads them).");
         extList.push({ key: eKeys[e], value: jin.extension[eKeys[e]] });
       }
     }
@@ -11519,7 +11523,7 @@ function convertTxJson(direction, text) {
     var oWhat = "Output " + (o + 1);
     if (typeof jout !== "object" || Array.isArray(jout)) return fail(oWhat + " is not an object — each output is {value, ergoTree, creationHeight, assets?, additionalRegisters?}.");
     var oVal = amountStr(jout.value, oWhat);
-    if (oVal === null) return fail(oWhat + ": \"value\" is the box value in nanoERG as a decimal string (a safe-integer number is also accepted) — got " + JSON.stringify(jout.value) + ", and an amount is never rounded to fit.");
+    if (oVal === null) return fail(oWhat + ": \"value\" is the box value in nanoERG as a decimal string (a safe-integer number is also accepted) — got " + boundedEcho(JSON.stringify(jout.value)) + ", and an amount is never rounded to fit.");
     if (typeof jout.ergoTree !== "string" || !/^(0x)?[0-9a-fA-F]+$/.test(jout.ergoTree.trim()) || jout.ergoTree.replace(/^0x/, "").length % 2 !== 0) return fail(oWhat + ": \"ergoTree\" is the guarding script as hex (an even number of 0-9/a-f characters).");
     var oHeight = amountStr(jout.creationHeight, oWhat);
     if (oHeight === null) return fail(oWhat + ": \"creationHeight\" is a whole block number (a number, or digits as a string).");
@@ -11539,11 +11543,11 @@ function convertTxJson(direction, text) {
       if (typeof jout.additionalRegisters !== "object" || Array.isArray(jout.additionalRegisters)) return fail(oWhat + ": \"additionalRegisters\" maps register names to Sigma constants in hex, e.g. {\"R4\": \"0e04deadbeef\"}.");
       var rKeys = Object.keys(jout.additionalRegisters);
       for (var r = 0; r < rKeys.length; r++) {
-        if (!/^R[4-9]$/.test(rKeys[r])) return fail(oWhat + ": register key \"" + rKeys[r] + "\" is not one of R4–R9 — a box's non-mandatory registers are exactly R4 through R9.");
+        if (!/^R[4-9]$/.test(rKeys[r])) return fail(oWhat + ": register key \"" + boundedEcho(rKeys[r]) + "\" is not one of R4–R9 — a box's non-mandatory registers are exactly R4 through R9.");
         var expect = "R" + (4 + r);
         var sorted = rKeys.slice().sort(function (a, b) { return Number(a.slice(1)) - Number(b.slice(1)); });
-        if (sorted[r] !== expect) return fail(oWhat + ": registers are positional and must start at R4 with no gaps — got " + sorted.join(", ") + ", so " + expect + " is missing. A register cannot be skipped: R5's bytes would be read as R4.");
-        if (typeof jout.additionalRegisters[rKeys[r]] !== "string") return fail(oWhat + ", register " + rKeys[r] + ": the value is one Sigma constant as a hex string (tool 18 reads them).");
+        if (sorted[r] !== expect) return fail(oWhat + ": registers are positional and must start at R4 with no gaps — got " + boundedEcho(sorted.join(", ")) + ", so " + expect + " is missing. A register cannot be skipped: R5's bytes would be read as R4.");
+        if (typeof jout.additionalRegisters[rKeys[r]] !== "string") return fail(oWhat + ", register " + boundedEcho(rKeys[r]) + ": the value is one Sigma constant as a hex string (tool 18 reads them).");
       }
       var ordered = rKeys.slice().sort(function (a, b) { return Number(a.slice(1)) - Number(b.slice(1)); });
       oRegs = ordered.map(function (k) { return jout.additionalRegisters[k]; });
@@ -12280,6 +12284,25 @@ function attachTxProofs(txHex, proofsText) {
    every genuine index: without leading zeros the shown form is the
    typed string itself, and a zero-padded index still extracts
    exactly the entry its number names. */
+/* A refusal that quotes the caller's own text back may quote at
+   most a bounded preview of it. Several tools echoed the refused
+   value verbatim -- a register spec, a scalar, an HD index, a box
+   or token ID in a built box/transaction or a JSON transaction, an
+   extension or register key -- although none of those values is
+   longer than 66 characters when genuine, and two tools already
+   previewed pasted lines this way (the Merkle tools' slice(0, 48)).
+   A 400,000-character paste produced a 400,000-character reason
+   for the page to render (800,000 for one register spec, which was
+   echoed twice -- the bad element and the whole spec). boundedEcho
+   is String() of the value when it is at most 48 characters --
+   byte-identical to the verbatim echo for every genuine value --
+   and its first 48 characters plus its full length past that. */
+function boundedEcho(text) {
+  var s = String(text);
+  if (s.length <= 48) return s;
+  return s.slice(0, 48) + "\u2026 (" + s.length + " characters in all)";
+}
+
 function txIndexTarget(raw) {
   var sig = raw.replace(/^0+/, "");
   if (sig.length > 20) return { huge: true, digits: sig.length, target: -1, shown: null };
@@ -17607,7 +17630,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, MERKLE_PROOF_MAX_LEVELS, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, SIGMA_TYPE_MAX_DEPTH, SIGMA_COLLECTION_MAX_COUNT, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, txIndexTarget, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, TX_SET_MAX_LINES, HEADER_SET_MAX_LINES, VOTE_TALLY_MAX_HEADERS, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, MERKLE_PROOF_MAX_LEVELS, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, SIGMA_TYPE_MAX_DEPTH, SIGMA_COLLECTION_MAX_COUNT, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, boundedEcho, txIndexTarget, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, TX_SET_MAX_LINES, HEADER_SET_MAX_LINES, VOTE_TALLY_MAX_HEADERS, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {

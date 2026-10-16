@@ -141,6 +141,25 @@ ok('watcher declines a plan whose R4 names no serialized value',
   ib.inspectIntentBox(goodBox, { ...plan, registers: { R4: { serializedValue: 42 } } }).matches === false);
 ok('watcher tolerates string values from the explorer', ib.inspectIntentBox(
   { value: '2000000000', additionalRegisters: { R4: { serializedValue: '0e20' + base } } }, plan).matches === true);
+/* The register value is hex, and hex is case-insensitive: the same
+ * commitment bytes arrive in the other case from a different source
+ * (an SDK, another indexer, a hand transcription). This comparison
+ * was the layer's lone strict string equality — verifyCommitment,
+ * the watcher's collection and the settlement preimage all
+ * case-normalize — so an uppercase-register box never matched its
+ * own plan although every verifier accepted its uppercase ids.
+ * Byte-identical registers match in any case mix; a register that
+ * differs in any byte, or in length, still fails. */
+ok('watcher accepts a box whose register hex is uppercase', ib.inspectIntentBox(
+  { value: 2000000000, additionalRegisters: { R4: { serializedValue: ('0e20' + base).toUpperCase() } } }, plan).matches === true);
+ok('watcher accepts a box whose register hex is mixed case', ib.inspectIntentBox(
+  { value: 2000000000, additionalRegisters: { R4: { serializedValue: '0E20' + base.slice(0, 20).toUpperCase() + base.slice(20) } } }, plan).matches === true);
+ok('watcher accepts a lowercase box against an uppercase plan register', ib.inspectIntentBox(
+  goodBox, { ...plan, registers: { R4: { serializedValue: ('0e20' + base).toUpperCase() } } }).matches === true);
+ok('watcher still rejects an uppercase register that differs in a byte', ib.inspectIntentBox(
+  { value: 2000000000, additionalRegisters: { R4: { serializedValue: ('0e20' + base).toUpperCase().slice(0, -2) + 'FF' } } }, plan).matches === false);
+ok('watcher still rejects a register of the wrong length in either case', ib.inspectIntentBox(
+  { value: 2000000000, additionalRegisters: { R4: { serializedValue: ('0e20' + base).toUpperCase() + 'AB' } } }, plan).matches === false);
 
 /* Bounds: the value comparison never parses an unbounded string.
  * A hostile box (or plan) value is judged by its significant digits:

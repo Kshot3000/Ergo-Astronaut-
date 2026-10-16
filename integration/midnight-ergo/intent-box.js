@@ -370,7 +370,22 @@ function inspectIntentBox(box, plan) {
   }
   const r4 = box.additionalRegisters.R4;
   const serialized = r4 && (r4.serializedValue || r4.serialized_value);
-  checks.commitmentRegister = serialized === planR4.serializedValue;
+  // The register value is hex, and hex is case-insensitive: the same
+  // commitment bytes arrive lowercase from one source and uppercase
+  // from another (a different indexer, an SDK, a hand transcription).
+  // This comparison was the layer's lone strict string equality —
+  // verifyCommitment, the watcher's collection and the settlement
+  // preimage all case-normalize before comparing — so a box carrying
+  // byte-identical register bytes in the other case never matched
+  // its own plan: the watcher refused it, the settler rejected it,
+  // and the audit failed it box-does-not-match-plan, while every
+  // verifier accepted the same artifacts' uppercase ids. Compare
+  // case-insensitively, length first (an O(1) refusal for a value of
+  // the wrong size, and no full copy of an oversize value): a value
+  // of a different length, or one differing in any byte, still fails.
+  checks.commitmentRegister = typeof serialized === 'string' &&
+    serialized.length === planR4.serializedValue.length &&
+    serialized.toLowerCase() === planR4.serializedValue.toLowerCase();
   checks.valueCovers = boxValueCovers(box.value, plan.valueNanoErg);
   return { matches: checks.shape && checks.commitmentRegister && checks.valueCovers, checks };
 }

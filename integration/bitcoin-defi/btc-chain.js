@@ -38,10 +38,11 @@ const POW_LIMIT_TARGET = powTarget(POW_LIMIT_BITS);
 
 /* ---------------- Compact target codec (Bitcoin SetCompact/GetCompact) --- */
 
-// powTarget in btc-spv.js decodes the full 0xffffff mantissa; the chain
-// rules need Core's exact codec: a 23-bit mantissa, a sign bit that makes
-// the value invalid, and overflow rejection. Kept separate so Phase 0's
-// pinned behaviour does not move.
+// The chain rules need Core's exact codec: a 23-bit mantissa, a sign bit
+// that makes the value invalid, and overflow rejection. powTarget in
+// btc-spv.js applies the same judgement since its sign/overflow fix;
+// this codec stays separate because it is the one the retarget and
+// work computations are pinned against.
 function targetFromBits(bits) {
   if (!Number.isSafeInteger(bits) || bits < 0 || bits > 0xffffffff) throw new Error('bits must be a u32');
   if (bits & 0x00800000) throw new Error('bits encode a negative target');

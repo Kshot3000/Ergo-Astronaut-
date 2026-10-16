@@ -51,6 +51,22 @@ ok(
 const crushedBits = GENESIS_HEADER.slice(0, 144) + '56340001' + GENESIS_HEADER.slice(152);
 ok('crushed-target pow target is zero', spv.powTarget(0x01003456) === 0n);
 ok('crushed-target header fails pow', spv.checkPow(crushedBits) === false);
+/* The compact target is judged as Core's SetCompact judges it — the
+ * judgement btc-chain's targetFromBits already applied: the top
+ * mantissa bit is a sign bit, and a target above 2^256 admits every
+ * hash. Pre-fix powTarget decoded the full 0xffffff mantissa and
+ * never rejected overflow: bits 0x2200ffff returned a target above
+ * 2^256, a tampered-nonce header carrying those bits passed checkPow
+ * with no work at all, and sign-bit bits 0x1d80ffff decoded as a
+ * positive target ~129x the genuine one. Genuine bits (sign clear)
+ * decode byte-identically — the genesis target above is unchanged. */
+throws('sign-bit bits refused as a negative target', () => spv.powTarget(0x1d80ffff), 'negative target');
+throws('overflow bits refused above 2^256', () => spv.powTarget(0x2200ffff), 'above 2^256');
+const forgedBits = GENESIS_HEADER.slice(0, 144) + 'ffff0022' + '00000000';
+ok('tampered nonce fails pow under genuine bits', spv.checkPow(GENESIS_HEADER.slice(0, 152) + '00000000') === false);
+throws('forged no-work header with overflow bits refused, not passed', () => spv.checkPow(forgedBits), 'above 2^256');
+throws('header with sign-bit bits refused, not passed', () => spv.checkPow(GENESIS_HEADER.slice(0, 144) + 'ffff801d' + GENESIS_HEADER.slice(152)), 'negative target');
+ok('largest in-range exponent still decodes', spv.powTarget(0x2100ffff) < (1n << 256n));
 const tamperedNonce = GENESIS_HEADER.slice(0, 152) + '00000000';
 ok('tampered nonce changes the hash', spv.parseHeader(tamperedNonce).hash !== GENESIS_HASH);
 throws('short header refused', () => spv.parseHeader(GENESIS_HEADER.slice(0, 158)), '80 bytes');

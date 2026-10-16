@@ -92,10 +92,25 @@ function parseHeader(headerHex) {
 
 function powTarget(bits) {
   if (!Number.isSafeInteger(bits) || bits < 0 || bits > 0xffffffff) throw new Error('bits must be a u32');
+  // The compact form is judged the way Bitcoin Core's SetCompact judges
+  // it — the judgement btc-chain.js's targetFromBits already applies:
+  // the top mantissa bit is a SIGN bit, not value, so a bits field with
+  // it set encodes a negative target and names no target at all; and a
+  // decoded target above 2^256 can never be met honestly, because every
+  // hash is below 2^256, so admitting it would pass ANY header. Pre-fix
+  // this decoded the full 0xffffff mantissa and never rejected
+  // overflow: bits 0x2200ffff handed back a target above 2^256 and a
+  // tampered-nonce header carrying those bits passed checkPow with no
+  // work at all, and sign-bit bits 0x1d80ffff decoded as a positive
+  // target ~129x the genuine one. For every bits field Core accepts
+  // (sign bit clear) the 23-bit mask is byte-identical to the old
+  // 24-bit one, so every genuine target is unchanged.
+  if (bits & 0x00800000) throw new Error('bits encode a negative target');
   const exponent = bits >>> 24;
-  const mantissa = BigInt(bits & 0xffffff);
-  if (exponent <= 3) return mantissa >> BigInt(8 * (3 - exponent));
-  return mantissa << BigInt(8 * (exponent - 3));
+  const mantissa = BigInt(bits & 0x007fffff);
+  const target = exponent <= 3 ? mantissa >> BigInt(8 * (3 - exponent)) : mantissa << BigInt(8 * (exponent - 3));
+  if (target >> 256n !== 0n) throw new Error('bits encode a target above 2^256');
+  return target;
 }
 
 function checkPow(headerHex) {

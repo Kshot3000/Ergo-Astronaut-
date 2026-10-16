@@ -12294,7 +12294,14 @@ function attachTxProofs(txHex, proofsText) {
    previewed pasted lines this way (the Merkle tools' slice(0, 48)).
    A 400,000-character paste produced a 400,000-character reason
    for the page to render (800,000 for one register spec, which was
-   echoed twice -- the bad element and the whole spec). boundedEcho
+   echoed twice -- the bad element and the whole spec). The same
+   echo survived one layer up in the address-set summarizer's page
+   handler: summarizeAddressSet's structured invalid entries are
+   that tool's data (their input field is oracle-pinned, not a
+   rendered reason), but the handler rendered each entry's input
+   verbatim into the page message, so a huge invalid line -- and
+   up to 100 of them -- reached the page at full length there even
+   after the strict tools' refusals were bounded. boundedEcho
    is String() of the value when it is at most 48 characters --
    byte-identical to the verbatim echo for every genuine value --
    and its first 48 characters plus its full length past that. */
@@ -18773,7 +18780,7 @@ if (typeof document !== "undefined") {
         return s;
       }).join(" ");
       if (res.crossNetworkPairs.length > 0) msg += " Cross-network pairs (same type and content, both networks): " + res.crossNetworkPairs.map(function (g) { return g.join(" ⇄ "); }).join(" · ") + ".";
-      if (res.invalid.length > 0) msg += " Invalid lines: " + res.invalid.map(function (iv) { return "line " + iv.line + " (" + iv.input + "): " + iv.reason; }).join(" · ");
+      if (res.invalid.length > 0) msg += " Invalid lines: " + res.invalid.map(function (iv) { return "line " + iv.line + " (" + boundedEcho(iv.input) + "): " + iv.reason; }).join(" · ");
       msg += " Summarized locally; nothing was fetched, signed or sent, and nothing here says any address holds a balance or who owns it.";
       out.textContent = msg;
     });

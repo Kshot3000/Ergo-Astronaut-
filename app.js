@@ -7313,7 +7313,7 @@ function subtractAddressSets(aText, bText) {
     if (!s.valid) return { error: "The " + side + " list is refused: " + s.reason };
     if (s.invalidCount > 0) {
       var iv = s.invalid[0];
-      return { error: "The " + side + " list is refused: line " + iv.line + " (" + iv.input + ") is not a valid payment address — " + iv.reason + " A subtraction hands back a remainder meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line in the first list would silently drop an address from the remainder, and one in the second would silently fail to remove one." };
+      return { error: "The " + side + " list is refused: line " + iv.line + " (" + boundedEcho(iv.input) + ") is not a valid payment address — " + iv.reason + " A subtraction hands back a remainder meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line in the first list would silently drop an address from the remainder, and one in the second would silently fail to remove one." };
     }
     return { summary: s };
   };
@@ -7397,7 +7397,7 @@ function intersectAddressSets(aText, bText) {
     if (!s.valid) return { error: "The " + side + " list is refused: " + s.reason };
     if (s.invalidCount > 0) {
       var iv = s.invalid[0];
-      return { error: "The " + side + " list is refused: line " + iv.line + " (" + iv.input + ") is not a valid payment address — " + iv.reason + " An intersection hands back a shared list meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line could silently drop an address that really is shared, and an omission is the one error a shared list cannot show." };
+      return { error: "The " + side + " list is refused: line " + iv.line + " (" + boundedEcho(iv.input) + ") is not a valid payment address — " + iv.reason + " An intersection hands back a shared list meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line could silently drop an address that really is shared, and an omission is the one error a shared list cannot show." };
     }
     return { summary: s };
   };
@@ -7489,7 +7489,7 @@ function xorAddressSets(aText, bText) {
     if (!s.valid) return { error: "The " + side + " list is refused: " + s.reason };
     if (s.invalidCount > 0) {
       var iv = s.invalid[0];
-      return { error: "The " + side + " list is refused: line " + iv.line + " (" + iv.input + ") is not a valid payment address — " + iv.reason + " A symmetric difference hands back the disagreement meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line could silently drop an address that really is a disagreement, and an omission is the one error a difference cannot show." };
+      return { error: "The " + side + " list is refused: line " + iv.line + " (" + boundedEcho(iv.input) + ") is not a valid payment address — " + iv.reason + " A symmetric difference hands back the disagreement meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line could silently drop an address that really is a disagreement, and an omission is the one error a difference cannot show." };
     }
     return { summary: s };
   };
@@ -7601,7 +7601,7 @@ function mergeAddressSets(aText, bText) {
     if (!s.valid) return { error: "The " + side + " list is refused: " + s.reason };
     if (s.invalidCount > 0) {
       var iv = s.invalid[0];
-      return { error: "The " + side + " list is refused: line " + iv.line + " (" + iv.input + ") is not a valid payment address — " + iv.reason + " A merger hands back the combined list meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line could silently drop an address the merged list claims to cover, and an omission is the one error a union cannot show." };
+      return { error: "The " + side + " list is refused: line " + iv.line + " (" + boundedEcho(iv.input) + ") is not a valid payment address — " + iv.reason + " A merger hands back the combined list meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line could silently drop an address the merged list claims to cover, and an omission is the one error a union cannot show." };
     }
     return { summary: s };
   };
@@ -7720,7 +7720,7 @@ function convertAddressListNetwork(addressesText, targetStr) {
   if (!s.valid) return fail(s.reason);
   if (s.invalidCount > 0) {
     var iv = s.invalid[0];
-    return fail("The list is refused: line " + iv.line + " (" + iv.input + ") is not a valid payment address — " + iv.reason + " A converter hands back the whole list meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line could silently drop an address the converted list claims to cover.");
+    return fail("The list is refused: line " + iv.line + " (" + boundedEcho(iv.input) + ") is not a valid payment address — " + iv.reason + " A converter hands back the whole list meant to be used as-is, so unlike tool 97's triage no line is skipped here: a skipped line could silently drop an address the converted list claims to cover.");
   }
   var pairs = [], convertedAddresses = [], byOut = {}, outOrder = [];
   var convertedCount = 0, alreadyCount = 0;
@@ -12288,7 +12288,8 @@ function attachTxProofs(txHex, proofsText) {
    most a bounded preview of it. Several tools echoed the refused
    value verbatim -- a register spec, a scalar, an HD index, a box
    or token ID in a built box/transaction or a JSON transaction, an
-   extension or register key -- although none of those values is
+   extension or register key, an invalid address line in the strict
+   address-set tools' refusals -- although none of those values is
    longer than 66 characters when genuine, and two tools already
    previewed pasted lines this way (the Merkle tools' slice(0, 48)).
    A 400,000-character paste produced a 400,000-character reason

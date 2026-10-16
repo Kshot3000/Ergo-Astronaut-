@@ -15504,6 +15504,29 @@ function analyzeNextDifficulty(inputStr) {
     why += ". Tool 62 shows the height, timestamp and difficulty of any serialized header, and explorers list all three per block. Nothing was calculated.";
     return fail(why);
   }
+  /* Every duration the calculations below divide by is the gap between
+     two consecutive boundary timestamps: diffPredictive divides by each
+     pair's gap, and the EIP-37 classic term divides by the last pair's.
+     Those gaps were never judged here — diffPredictive's only guard
+     compares the FIRST and LAST timestamps — so an equal pair anywhere
+     in the list divided by zero and the analyser threw a raw RangeError
+     instead of answering with a named refusal (and through the page,
+     the submit handler died with it), while a pair that ran backwards
+     made its epoch's classic adjustment negative, dragged the fitted
+     line below 1, and the analyser quietly presented the genesis
+     initial difficulty as the calculated answer. A real epoch's
+     boundary blocks are 128 or 1,024 blocks apart, so their timestamps
+     strictly increase; a list whose do not describes no epoch sequence
+     either calculation can run on, and it is refused by name, here,
+     before any division reads it. Single-header lists (the genesis
+     epoch's boundary set) have no pair to judge and keep their
+     existing fallback; inherit and v2-activation targets returned
+     above, before any timestamp is read. */
+  for (var ti = 1; ti < headers.length; ti++) {
+    if (headers[ti].timestampMs <= headers[ti - 1].timestampMs) {
+      return fail("Block " + headers[ti].height + "'s timestamp is not later than block " + headers[ti - 1].height + "'s — epoch-boundary blocks must carry strictly increasing timestamps, because each epoch's duration is a divisor in the adjustment. Check both blocks' timestamps against an explorer. Nothing was calculated.");
+    }
+  }
   var pred = diffPredictive(headers, epochLength);
   if (!eip37) {
     return finish("legacy", epochLength, pred.difficulty, {

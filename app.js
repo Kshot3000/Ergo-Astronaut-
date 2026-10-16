@@ -12263,6 +12263,30 @@ function attachTxProofs(txHex, proofsText) {
   };
 }
 
+/* ---------- Transaction extractor index judging (shared) ---------- */
+/* Every extractor below takes a 1-based index typed by the user and
+   echoes it in its out-of-range reason — and tool 52 also echoes it
+   in later messages ("Output N carries no tokens…"). The echo was
+   the raw string, unjudged: a 400,000-digit "index" produced a
+   400,083-character reason for the page to render, and a zero-padded
+   in-range index ("000…001", which Number() reads as 1 and extracts)
+   was echoed in full the same way. An index is judged here from its
+   significant digits instead: leading zeros are stripped (a bounded
+   scan of zeros, never a parse of the whole string), more than 20
+   significant digits is an index no list in any transaction can
+   carry — it is refused by its digit count, never echoed — and the
+   shown form is the canonical number, so every later message names
+   the index the extractor actually used. Verdicts are unchanged for
+   every genuine index: without leading zeros the shown form is the
+   typed string itself, and a zero-padded index still extracts
+   exactly the entry its number names. */
+function txIndexTarget(raw) {
+  var sig = raw.replace(/^0+/, "");
+  if (sig.length > 20) return { huge: true, digits: sig.length, target: -1, shown: null };
+  var v = sig === "" ? 0 : Number(sig);
+  return { huge: false, digits: sig.length, target: v - 1, shown: String(v) };
+}
+
 /* ---------- Transaction output box extractor ---------- */
 /* A transaction's outputs travel in an EMBEDDED box form that the
    box tools cannot read: no creating transaction ID, no output
@@ -12293,8 +12317,10 @@ function extractTxOutputBox(txHex, indexStr) {
   if (!tx.valid) return fail(tx.reason);
   var raw = indexStr == null ? "" : String(indexStr).trim();
   if (!/^\d+$/.test(raw)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
-  var target = Number(raw) - 1;
-  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + raw + " to extract.");
+  var judged = txIndexTarget(raw);
+  if (judged.huge) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output with " + judged.digits + " digits to extract.");
+  var target = judged.target;
+  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + judged.shown + " to extract.");
   var cleaned = String(txHex).replace(/\s+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
@@ -12452,8 +12478,10 @@ function extractTxInputProof(txHex, indexStr) {
   if (!tx.valid) return fail(tx.reason);
   var raw = indexStr == null ? "" : String(indexStr).trim();
   if (!/^\d+$/.test(raw)) return fail("Enter the input number as a whole number — 1 is the transaction's first input, 2 its second, and so on. This transaction has " + tx.inputs.length + " input(s).");
-  var target = Number(raw) - 1;
-  if (target < 0 || target >= tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input " + raw + " to extract from.");
+  var judged = txIndexTarget(raw);
+  if (judged.huge) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input with " + judged.digits + " digits to extract from.");
+  var target = judged.target;
+  if (target < 0 || target >= tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input " + judged.shown + " to extract from.");
   var cleaned = String(txHex).replace(/\s+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
@@ -12554,8 +12582,10 @@ function extractTxDataInput(txHex, indexStr) {
   if (tx.dataInputs.length === 0) return fail("This transaction has no data inputs — its scripts read no extra boxes, so there is no data input to extract. (Its " + tx.inputs.length + " ordinary input(s) are the boxes it spends; tool 48 lifts those inputs' proofs.)");
   var raw = indexStr == null ? "" : String(indexStr).trim();
   if (!/^\d+$/.test(raw)) return fail("Enter the data-input number as a whole number — 1 is the transaction's first data input, 2 its second, and so on. This transaction has " + tx.dataInputs.length + " data input(s).");
-  var target = Number(raw) - 1;
-  if (target < 0 || target >= tx.dataInputs.length) return fail("This transaction has " + tx.dataInputs.length + " data input(s), numbered 1 to " + tx.dataInputs.length + " — there is no data input " + raw + " to extract from.");
+  var judged = txIndexTarget(raw);
+  if (judged.huge) return fail("This transaction has " + tx.dataInputs.length + " data input(s), numbered 1 to " + tx.dataInputs.length + " — there is no data input with " + judged.digits + " digits to extract from.");
+  var target = judged.target;
+  if (target < 0 || target >= tx.dataInputs.length) return fail("This transaction has " + tx.dataInputs.length + " data input(s), numbered 1 to " + tx.dataInputs.length + " — there is no data input " + judged.shown + " to extract from.");
   var cleaned = String(txHex).replace(/\s+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
@@ -12659,8 +12689,10 @@ function extractTxToken(txHex, indexStr) {
   if (tx.tokenIds.length === 0) return fail("This transaction lists no distinct token IDs — its outputs hold no tokens, so there is no token to extract. (Its outputs carry " + tx.totalOutputErg + " ERG in total; tool 47 lifts an output out as a standalone box.)");
   var raw = indexStr == null ? "" : String(indexStr).trim();
   if (!/^\d+$/.test(raw)) return fail("Enter the token number as a whole number — 1 is the first token ID in the transaction's distinct-token list, 2 its second, and so on. This transaction lists " + tx.tokenIds.length + " distinct token ID(s).");
-  var target = Number(raw) - 1;
-  if (target < 0 || target >= tx.tokenIds.length) return fail("This transaction lists " + tx.tokenIds.length + " distinct token ID(s), numbered 1 to " + tx.tokenIds.length + " — there is no token " + raw + " to extract from.");
+  var judged = txIndexTarget(raw);
+  if (judged.huge) return fail("This transaction lists " + tx.tokenIds.length + " distinct token ID(s), numbered 1 to " + tx.tokenIds.length + " — there is no token with " + judged.digits + " digits to extract from.");
+  var target = judged.target;
+  if (target < 0 || target >= tx.tokenIds.length) return fail("This transaction lists " + tx.tokenIds.length + " distinct token ID(s), numbered 1 to " + tx.tokenIds.length + " — there is no token " + judged.shown + " to extract from.");
   var tokenId = tx.tokenIds[target];
   var cleaned = String(txHex).replace(/\s+/g, "");
   var bytes = hexToBytes(cleaned);
@@ -12781,8 +12813,11 @@ function extractTxRegister(txHex, outputStr, registerStr) {
   if (!tx.valid) return fail(tx.reason);
   var rawOut = outputStr == null ? "" : String(outputStr).trim();
   if (!/^\d+$/.test(rawOut)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
-  var target = Number(rawOut) - 1;
-  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + rawOut + " to extract a register from.");
+  var judgedOut = txIndexTarget(rawOut);
+  if (judgedOut.huge) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output with " + judgedOut.digits + " digits to extract a register from.");
+  var target = judgedOut.target;
+  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + judgedOut.shown + " to extract a register from.");
+  rawOut = judgedOut.shown;
   var regName = registerStr == null ? "" : String(registerStr).trim().toUpperCase();
   if (!/^R[4-9]$/.test(regName)) return fail("Enter the register as R4, R5, R6, R7, R8 or R9 — those are a box's six non-mandatory registers (R0–R3 are the value, ErgoTree, creation height and box ID every box derives, not stored constants).");
   var out = tx.outputs[target];
@@ -12958,8 +12993,11 @@ function extractTxExtension(txHex, inputStr, keyStr) {
   if (!tx.valid) return fail(tx.reason);
   var rawIn = inputStr == null ? "" : String(inputStr).trim();
   if (!/^\d+$/.test(rawIn)) return fail("Enter the input number as a whole number — 1 is the transaction's first input, 2 its second, and so on. This transaction has " + tx.inputs.length + " input(s).");
-  var target = Number(rawIn) - 1;
-  if (target < 0 || target >= tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input " + rawIn + " to extract an extension entry from.");
+  var judgedIn = txIndexTarget(rawIn);
+  if (judgedIn.huge) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input with " + judgedIn.digits + " digits to extract an extension entry from.");
+  var target = judgedIn.target;
+  if (target < 0 || target >= tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input " + judgedIn.shown + " to extract an extension entry from.");
+  rawIn = judgedIn.shown;
   var rawKey = keyStr == null ? "" : String(keyStr).trim();
   if (!/^\d+$/.test(rawKey) || Number(rawKey) > 255) return fail("Enter the extension key as a whole number from 0 to 255 — a context extension key is a single byte, written as its number (the keys tool 39 lists for each input).");
   var wantKey = Number(rawKey);
@@ -13091,8 +13129,11 @@ function extractTxTree(txHex, outputStr, networkStr) {
   if (!tx.valid) return fail(tx.reason);
   var rawOut = outputStr == null ? "" : String(outputStr).trim();
   if (!/^\d+$/.test(rawOut)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
-  var target = Number(rawOut) - 1;
-  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + rawOut + " to extract an ErgoTree from.");
+  var judgedOut = txIndexTarget(rawOut);
+  if (judgedOut.huge) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output with " + judgedOut.digits + " digits to extract an ErgoTree from.");
+  var target = judgedOut.target;
+  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + judgedOut.shown + " to extract an ErgoTree from.");
+  rawOut = judgedOut.shown;
   var out = tx.outputs[target];
   var treeHex = out.ergoTree;
   var info = analyzeErgoTree(treeHex, networkStr);
@@ -13228,14 +13269,20 @@ function extractTxOutToken(txHex, outputStr, tokenStr) {
   if (!tx.valid) return fail(tx.reason);
   var rawOut = outputStr == null ? "" : String(outputStr).trim();
   if (!/^\d+$/.test(rawOut)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
-  var target = Number(rawOut) - 1;
-  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + rawOut + " to extract a token from.");
+  var judgedOut = txIndexTarget(rawOut);
+  if (judgedOut.huge) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output with " + judgedOut.digits + " digits to extract a token from.");
+  var target = judgedOut.target;
+  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + judgedOut.shown + " to extract a token from.");
+  rawOut = judgedOut.shown;
   var out = tx.outputs[target];
   if (out.tokens.length === 0) return fail("Output " + rawOut + " carries no tokens — it holds " + out.valueErg + " ERG only. (Tool 50 lifts a token out of the transaction's distinct-token list as a whole, with every output that carries it.)");
   var rawTok = tokenStr == null ? "" : String(tokenStr).trim();
   if (!/^\d+$/.test(rawTok)) return fail("Enter the token number within this output as a whole number — 1 is the first token output " + rawOut + " carries, 2 its second, and so on. This output carries " + out.tokens.length + " token(s).");
-  var tTarget = Number(rawTok) - 1;
-  if (tTarget < 0 || tTarget >= out.tokens.length) return fail("Output " + rawOut + " carries " + out.tokens.length + " token(s), numbered 1 to " + out.tokens.length + " — there is no token " + rawTok + " to extract from it.");
+  var judgedTok = txIndexTarget(rawTok);
+  if (judgedTok.huge) return fail("Output " + rawOut + " carries " + out.tokens.length + " token(s), numbered 1 to " + out.tokens.length + " — there is no token with " + judgedTok.digits + " digits to extract from it.");
+  var tTarget = judgedTok.target;
+  if (tTarget < 0 || tTarget >= out.tokens.length) return fail("Output " + rawOut + " carries " + out.tokens.length + " token(s), numbered 1 to " + out.tokens.length + " — there is no token " + judgedTok.shown + " to extract from it.");
+  rawTok = judgedTok.shown;
   var chosen = out.tokens[tTarget];
   var distinctIndex = tx.tokenIds.indexOf(chosen.tokenId);
   if (distinctIndex < 0) return fail("Internal error: the chosen token is missing from the transaction's distinct-token list — nothing was shown rather than an unverified extraction.");
@@ -13404,8 +13451,11 @@ function extractTxOutputRegisters(txHex, outputStr) {
   if (!tx.valid) return fail(tx.reason);
   var rawOut = outputStr == null ? "" : String(outputStr).trim();
   if (!/^\d+$/.test(rawOut)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
-  var target = Number(rawOut) - 1;
-  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + rawOut + " to extract a register set from.");
+  var judgedOut = txIndexTarget(rawOut);
+  if (judgedOut.huge) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output with " + judgedOut.digits + " digits to extract a register set from.");
+  var target = judgedOut.target;
+  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + judgedOut.shown + " to extract a register set from.");
+  rawOut = judgedOut.shown;
   var out = tx.outputs[target];
   if (out.registers.length === 0) return fail("Output " + (target + 1) + " of transaction " + tx.txId + " carries no non-mandatory registers — its register section is empty, so there is no register set to extract. (Tool 38 audits what this output does carry, and tool 47 lifts the whole output out as a standalone box.)");
   var regText = function (reg) {
@@ -13589,8 +13639,11 @@ function extractTxExtensionSet(txHex, inputStr) {
   if (!tx.valid) return fail(tx.reason);
   var rawIn = inputStr == null ? "" : String(inputStr).trim();
   if (!/^\d+$/.test(rawIn)) return fail("Enter the input number as a whole number — 1 is the transaction's first input, 2 its second, and so on. This transaction has " + tx.inputs.length + " input(s).");
-  var target = Number(rawIn) - 1;
-  if (target < 0 || target >= tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input " + rawIn + " to extract an extension set from.");
+  var judgedIn = txIndexTarget(rawIn);
+  if (judgedIn.huge) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input with " + judgedIn.digits + " digits to extract an extension set from.");
+  var target = judgedIn.target;
+  if (target < 0 || target >= tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input " + judgedIn.shown + " to extract an extension set from.");
+  rawIn = judgedIn.shown;
   var inp = tx.inputs[target];
   if (inp.extension.length === 0) return fail("Input " + (target + 1) + " of transaction " + tx.txId + " carries no context extension entries — its extension is empty, so there is no extension set to extract. (Tool 39 audits which inputs do carry entries, and tool 48 lifts an input's proof out.)");
   var entryText = function (en) {
@@ -13734,8 +13787,11 @@ function extractTxOutputTokenSet(txHex, outputStr) {
   if (!tx.valid) return fail(tx.reason);
   var rawOut = outputStr == null ? "" : String(outputStr).trim();
   if (!/^\d+$/.test(rawOut)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
-  var target = Number(rawOut) - 1;
-  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + rawOut + " to extract a token set from.");
+  var judgedOut = txIndexTarget(rawOut);
+  if (judgedOut.huge) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output with " + judgedOut.digits + " digits to extract a token set from.");
+  var target = judgedOut.target;
+  if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + judgedOut.shown + " to extract a token set from.");
+  rawOut = judgedOut.shown;
   var out = tx.outputs[target];
   if (out.tokens.length === 0) return fail("Output " + (target + 1) + " of transaction " + tx.txId + " carries no tokens — it holds " + out.valueErg + " ERG only, so there is no token set to extract. (Tool 50 lifts a token out of the transaction's distinct-token list as a whole, and tool 47 lifts the whole output out as a standalone box.)");
   var sameSet = function (a, b) {
@@ -17551,7 +17607,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, MERKLE_PROOF_MAX_LEVELS, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, SIGMA_TYPE_MAX_DEPTH, SIGMA_COLLECTION_MAX_COUNT, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, TX_SET_MAX_LINES, HEADER_SET_MAX_LINES, VOTE_TALLY_MAX_HEADERS, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, MERKLE_PROOF_MAX_LEVELS, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, SIGMA_TYPE_MAX_DEPTH, SIGMA_COLLECTION_MAX_COUNT, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, txIndexTarget, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, TX_SET_MAX_LINES, HEADER_SET_MAX_LINES, VOTE_TALLY_MAX_HEADERS, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {

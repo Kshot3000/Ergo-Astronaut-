@@ -204,6 +204,49 @@ fails('a record resting on fewer attestations than the bundle shows fails the bi
   mainBundle({
     settlementRecord: settleSingle.record, claim: claimSingle, ledger: [e0, e1],
   }), 'settlement-attestations-mismatch');
+/* The ids a record binds are a SET, not a multiset: the record's own
+ * preimage dedupes and sorts them before hashing, so multiplicity is
+ * not part of what its recordId commits to. The duplicate a multiset
+ * comparison tripped on is one the layer itself mints — the
+ * attestation id binds the observation, not the watcher, so two
+ * watchers observing the same box at the same height with the same
+ * confirmations mint the SAME id, a genuine counted list carries it
+ * twice, and the settler's record minted from that list carries it
+ * twice too. That record in the canonical deduped form its own id
+ * defines (same recordId, still verifying) — or carrying the id a
+ * third time — is the same record and must audit identically, with
+ * the same audit id (pinned by the Python oracle recomputation of
+ * this bundle's EAU1 preimage). */
+const AUDIT_DUP_ID = 'b98b9a72b2f07ac765cf241d6c7789d3abd7c8238e2cd8f49c5fafc5bfc35031';
+const attDupA = w.buildAttestation({ watcherId: 'watcher-A', box: goodBox(), plan, currentHeight: 1500 });
+const attDupB = w.buildAttestation({ watcherId: 'watcher-B', box: goodBox(), plan, currentHeight: 1500 });
+const settleDup = s.decideSettlement({
+  box: goodBox(), plan, attestations: [attDupA, attDupB], quorum: 2, reveal: REVEAL, currentHeight: 1500,
+});
+const claimDup = c.buildClaimPayload({ record: settleDup.record, reveal: REVEAL });
+const eDup = l.appendClaim([], claimDup);
+const dupBundle = (record) => ({
+  plan, box: goodBox(), attestations: [attDupA, attDupB], quorum: 2, reveal: REVEAL,
+  settlementRecord: record, claim: claimDup, ledger: [eDup],
+});
+ok('two watchers observing identically mint one attestation id, carried twice',
+  attDupA.attestationId === attDupB.attestationId &&
+  settleDup.record.attestationIds.length === 2 &&
+  settleDup.record.recordId === SETTLE_SINGLE_ID && claimDup.claimId === CLAIM_SINGLE_ID);
+ok('the duplicated-id record audits, audit id pinned (oracle)', (() => {
+  const r = a.auditBundle(dupBundle(settleDup.record));
+  return r.verdict === 'audited' && r.checks.settlementBindsCountedAttestations && r.auditId === AUDIT_DUP_ID;
+})());
+ok('the same record in its canonical deduped form audits identically', (() => {
+  const deduped = { ...settleDup.record, attestationIds: [...new Set(settleDup.record.attestationIds)] };
+  const r = s.verifySettlementRecord(deduped) && a.auditBundle(dupBundle(deduped));
+  return r.verdict === 'audited' && r.auditId === AUDIT_DUP_ID;
+})());
+ok('the same record carrying the counted id a third time audits identically', (() => {
+  const tripled = { ...settleDup.record, attestationIds: [attDupA.attestationId, attDupA.attestationId, attDupA.attestationId] };
+  const r = s.verifySettlementRecord(tripled) && a.auditBundle(dupBundle(tripled));
+  return r.verdict === 'audited' && r.auditId === AUDIT_DUP_ID;
+})());
 ok('a self-consistent record decided after the timeout fails window and reproduction', (() => {
   const late = {
     version: 1, status: 'unsigned-phase1-record',

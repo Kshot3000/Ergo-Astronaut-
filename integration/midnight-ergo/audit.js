@@ -111,11 +111,31 @@ function isHex32(s) {
 function idForCompare(v) {
   return typeof v === 'string' && v.length === 64 ? v.toLowerCase() : null;
 }
+/*
+ * The attestation ids a settlement record binds are a SET, not a
+ * multiset: settlementRecordPreimage canonicalizes the list with a
+ * Set and a sort before hashing, so the recordId a record carries
+ * binds the distinct ids, never their multiplicities. This
+ * comparison must use the same semantics. It did not: length plus
+ * sorted elements made it a multiset comparison, and the duplicate
+ * it tripped on is one the layer itself mints — two watchers who
+ * observe the same box at the same height with the same
+ * confirmations produce the SAME attestationId (the id binds the
+ * observation, not the watcher), so a genuine counted list carries
+ * that id twice, while the same record (same recordId, still
+ * verifying) stored in the canonical deduped form its own id
+ * defines carries it once, and the audit failed that record with
+ * 'settlement-attestations-mismatch'. Each element is judged the
+ * idForCompare way — a 64-character string lowercases, anything
+ * else is a plain non-id (null) — never coerced with String()
+ * first, for the reason idForCompare gives; duplicates collapse
+ * before the comparison, on both sides alike.
+ */
 function sameIdSet(a, b) {
-  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-  const sa = a.map((x) => String(x).toLowerCase()).sort();
-  const sb = b.map((x) => String(x).toLowerCase()).sort();
-  return sa.every((x, i) => x === sb[i]);
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  const sa = [...new Set(a.map((x) => idForCompare(x) || ''))].sort();
+  const sb = [...new Set(b.map((x) => idForCompare(x) || ''))].sort();
+  return sa.length === sb.length && sa.every((x, i) => x === sb[i]);
 }
 
 /* ---------------- Audit id ---------------- */

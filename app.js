@@ -948,9 +948,16 @@ function planPayment(boxesStr, paymentStr, feeStr) {
    collapses to the empty string the builders already refuse (or
    replace with their unnamed default). Parsed fields (amounts,
    addresses, rates) do NOT come through here — those keep their
-   strict refuse-don't-repair parsers. */
+   strict refuse-don't-repair parsers. The strip now covers the
+   complete Unicode Bidi_Control set: alongside the marks and
+   embeddings/overrides above, the Arabic letter mark (U+061C) and
+   the bidi isolates (U+2066-U+2069, the isolate counterparts of
+   the overrides) steer rendering direction just as invisibly, and
+   the deprecated format controls beside the word joiner
+   (U+206A-U+206F) are removed with it — U+2065 is unassigned and
+   is left alone. */
 function planText(raw) {
-  return (raw == null ? "" : String(raw)).replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g, "").replace(/\s+/g, " ").trim();
+  return (raw == null ? "" : String(raw)).replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/g, "").replace(/\s+/g, " ").trim();
 }
 var SERVICE_FEE_ADDRESS = "9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy";
 var SERVICE_FEE_BPS = 100n; /* 100 basis points = 1% */

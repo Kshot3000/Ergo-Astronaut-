@@ -1005,7 +1005,19 @@ function planPayment(boxesStr, paymentStr, feeStr) {
    itself) is a real character and is preserved, as are the
    script-meaningful default ignorables (the Mn variation
    selectors, Mongolian free variation selectors and Khmer
-   inherent marks select or shape the glyph they follow). */
+   inherent marks select or shape the glyph they follow).
+   The blank-rendering spacing fillers are removed here too:
+   beside U+2800 (the empty braille cell), the Hangul fillers
+   (U+115F HANGUL CHOSEONG FILLER, U+1160 HANGUL JUNGSEONG
+   FILLER, U+3164 HANGUL FILLER and U+FFA0 HALFWIDTH HANGUL
+   FILLER) have no visible glyph of their own — in a label they
+   occupy space while showing nothing — yet Unicode White_Space
+   is No for every one of them and the whitespace class does not
+   match them, so they also survived the collapse below; a label
+   made only of fillers rendered completely empty while evading
+   the builders' unnamed default. Genuine Hangul syllables and
+   jamo text are untouched — only the four filler code points
+   are removed. */
 function stripLoneSurrogates(s) {
   var out = "";
   for (var i = 0; i < s.length; i++) {
@@ -1034,7 +1046,7 @@ function hasLoneSurrogate(s) {
   return false;
 }
 function planText(raw) {
-  return stripLoneSurrogates(raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u00ad\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\u2800\ufeff\ufff9-\ufffb\ufdd0-\ufdef\ufffe\uffff]|[\ud83f\ud87f\ud8bf\ud8ff\ud93f\ud97f\ud9bf\ud9ff\uda3f\uda7f\udabf\udaff\udb3f\udb7f\udbbf\udbff][\udffe\udfff]|\ud804[\udcbd\udccd]|\ud80d[\udc30-\udc3f]|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|\udb40[\udc01\udc20-\udc7f])/g, "").replace(/\s+/g, " ").trim();
+  return stripLoneSurrogates(raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u00ad\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\u2800\u115f\u1160\u3164\uffa0\ufeff\ufff9-\ufffb\ufdd0-\ufdef\ufffe\uffff]|[\ud83f\ud87f\ud8bf\ud8ff\ud93f\ud97f\ud9bf\ud9ff\uda3f\uda7f\udabf\udaff\udb3f\udb7f\udbbf\udbff][\udffe\udfff]|\ud804[\udcbd\udccd]|\ud80d[\udc30-\udc3f]|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|\udb40[\udc01\udc20-\udc7f])/g, "").replace(/\s+/g, " ").trim();
 }
 var SERVICE_FEE_ADDRESS = "9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy";
 var SERVICE_FEE_BPS = 100n; /* 100 basis points = 1% */

@@ -932,6 +932,26 @@ function planPayment(boxesStr, paymentStr, feeStr) {
    plan + a copyable text block) only: it fetches nothing, signs
    nothing and sends nothing; the buyer builds the actual transaction
    in their own wallet with the two outputs shown. */
+/* Display text for the plan builders below (plan names, entry
+   names, items, descriptions): it is rendered into the copyable
+   plan block each builder mints, and that block is pasted into
+   chats, documents and terminals that render it as-is. Whitespace
+   was already collapsed to single spaces, but the invisible and
+   direction-control characters are not whitespace, so they
+   survived verbatim: a right-to-left override (U+202E) in a plan
+   name visually reorders the text that follows it in many
+   renderers, and zero-width characters hide inside names —
+   either can make a shared plan read differently from the plan
+   that was built. They are removed here, before the collapse;
+   every other character is untouched, so a genuine name renders
+   byte-identically, and a name made only of such characters
+   collapses to the empty string the builders already refuse (or
+   replace with their unnamed default). Parsed fields (amounts,
+   addresses, rates) do NOT come through here — those keep their
+   strict refuse-don't-repair parsers. */
+function planText(raw) {
+  return (raw == null ? "" : String(raw)).replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g, "").replace(/\s+/g, " ").trim();
+}
 var SERVICE_FEE_ADDRESS = "9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy";
 var SERVICE_FEE_BPS = 100n; /* 100 basis points = 1% */
 var SERVICE_FEE_MIN_NANO = 1000000n; /* 0.001 ERG */
@@ -946,7 +966,7 @@ function buildErgoInvoice(sellerRaw, itemStr, minerFeeStr, descriptionRaw) {
   if (item === null || BigInt(item) <= 0n) return fail("The item amount must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
-  var description = (descriptionRaw == null ? "" : String(descriptionRaw)).replace(/\s+/g, " ").trim();
+  var description = planText((descriptionRaw == null ? "" : String(descriptionRaw)));
   if (description.length > 140) return fail("The description is " + description.length + " characters — keep it to 140 or fewer so the invoice stays a single copyable block.");
   if (description === "") description = "(no description)";
   var itemNano = BigInt(item);
@@ -1173,7 +1193,7 @@ function buildMilestonePlan(sellerRaw, contractStr, milestonesRaw, minerFeeStr) 
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — milestone name, shares (e.g. \"Design, 1\").");
-    var label = parts[0].replace(/\s+/g, " ").trim();
+    var label = planText(parts[0]);
     var shareStr = parts[1].trim();
     if (label === "") return fail("Line " + lineNo + " is refused: give the milestone a name before the comma, so the plan says what each payment is for.");
     if (label.length > MILESTONE_MAX_LABEL_CHARS) return fail("Line " + lineNo + "'s name is " + label.length + " characters — keep milestone names to " + MILESTONE_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
@@ -1311,7 +1331,7 @@ function buildPayrollPlan(entriesRaw, minerFeeStr) {
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, amount in ERG (e.g. \"Ada, an address, 2.5\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     var amountStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the employee a name before the first comma, so the plan says who each payment is for.");
@@ -1407,7 +1427,7 @@ function buildSaleSplitPlan(sellerRaw, creatorRaw, itemRaw, priceStr, royaltyPct
   if (!creatorCheck.valid) return fail("The creator address is refused: " + creatorCheck.reason);
   var creator = typeof creatorRaw === "string" ? creatorRaw.trim() : "";
   if (creatorCheck.network !== sellerCheck.network) return fail("The creator address is " + creatorCheck.network + " but the seller is " + sellerCheck.network + " — one transaction lives on one network, so both addresses must match.");
-  var item = (itemRaw == null ? "" : String(itemRaw)).replace(/\s+/g, " ").trim();
+  var item = planText((itemRaw == null ? "" : String(itemRaw)));
   if (item.length > SALESPLIT_MAX_ITEM_CHARS) return fail("The item name is " + item.length + " characters — keep it to " + SALESPLIT_MAX_ITEM_CHARS + " or fewer so the plan stays a single copyable block.");
   if (item === "") item = "(unnamed item)";
   var price = ergToNano(priceStr);
@@ -1515,7 +1535,7 @@ function buildVestingPlan(beneficiaryRaw, labelRaw, totalStr, periodsStr, cliffS
   var benCheck = checkErgoAddress(beneficiaryRaw);
   if (!benCheck.valid) return fail("The beneficiary address is refused: " + benCheck.reason);
   var beneficiary = typeof beneficiaryRaw === "string" ? beneficiaryRaw.trim() : "";
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > VESTING_MAX_LABEL_CHARS) return fail("The plan name is " + label.length + " characters — keep it to " + VESTING_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed vesting plan)";
   var total = ergToNano(totalStr);
@@ -1642,7 +1662,7 @@ function buildSubscriptionPlan(recipientRaw, labelRaw, amountStr, periodsStr, mi
   var recCheck = checkErgoAddress(recipientRaw);
   if (!recCheck.valid) return fail("The recipient address is refused: " + recCheck.reason);
   var recipient = typeof recipientRaw === "string" ? recipientRaw.trim() : "";
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > SUBSCRIPTION_MAX_LABEL_CHARS) return fail("The plan name is " + label.length + " characters — keep it to " + SUBSCRIPTION_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed recurring payment plan)";
   var amount = ergToNano(amountStr);
@@ -1749,7 +1769,7 @@ function buildLoanPlan(lenderRaw, labelRaw, principalStr, rateStr, periodsStr, m
   var lenCheck = checkErgoAddress(lenderRaw);
   if (!lenCheck.valid) return fail("The lender address is refused: " + lenCheck.reason);
   var lender = typeof lenderRaw === "string" ? lenderRaw.trim() : "";
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > LOAN_MAX_LABEL_CHARS) return fail("The loan name is " + label.length + " characters — keep it to " + LOAN_MAX_LABEL_CHARS + " or fewer so the schedule stays a single copyable block.");
   if (label === "") label = "(unnamed loan)";
   var principal = ergToNano(principalStr);
@@ -1896,7 +1916,7 @@ function buildSavingsPlan(addressRaw, labelRaw, targetStr, periodsStr, minerFeeS
   var lenCheck = checkErgoAddress(addressRaw);
   if (!lenCheck.valid) return fail("The savings address is refused: " + lenCheck.reason);
   var savingsAddress = typeof addressRaw === "string" ? addressRaw.trim() : "";
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > SAVINGS_MAX_LABEL_CHARS) return fail("The goal name is " + label.length + " characters — keep it to " + SAVINGS_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed savings goal)";
   var target = ergToNano(targetStr);
@@ -2044,7 +2064,7 @@ function buildRewardPlan(poolStr, entriesRaw, minerFeeStr) {
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, stake in ERG (e.g. \"Ada, an address, 50\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     var stakeStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the staker a name before the first comma, so the plan says who each reward is for.");
@@ -2194,7 +2214,7 @@ function buildCrowdfundPlan(creatorRaw, labelRaw, goalStr, entriesRaw, minerFeeS
   var creatorCheck = checkErgoAddress(creatorRaw);
   if (!creatorCheck.valid) return fail("The creator address is refused: " + creatorCheck.reason);
   var creatorAddress = typeof creatorRaw === "string" ? creatorRaw.trim() : "";
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > CROWDFUND_MAX_LABEL_CHARS) return fail("The campaign name is " + label.length + " characters — keep it to " + CROWDFUND_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed campaign)";
   var goal = ergToNano(goalStr);
@@ -2223,7 +2243,7 @@ function buildCrowdfundPlan(creatorRaw, labelRaw, goalStr, entriesRaw, minerFeeS
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, pledge in ERG (e.g. \"Ada, an address, 50\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     var pledgeStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the backer a name before the first comma, so the plan says who each pledge is from.");
@@ -2418,7 +2438,7 @@ function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
   var sellerCheck = checkErgoAddress(sellerRaw);
   if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
   var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > AUCTION_MAX_LABEL_CHARS) return fail("The item name is " + label.length + " characters — keep it to " + AUCTION_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed item)";
   var reserve = ergToNano(reserveStr);
@@ -2447,7 +2467,7 @@ function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, bid in ERG (e.g. \"Ada, an address, 50\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     var bidStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the bidder a name before the first comma, so the plan says who each bid is from.");
@@ -2651,7 +2671,7 @@ function buildEscrowPlan(buyerRaw, sellerRaw, labelRaw, depositStr, outcomeStr, 
   if (buyerAddress === sellerAddress) return fail("The buyer and seller are the same address — an escrow settles a deal between two different parties, so a deposit to yourself has nothing to release, refund or split.");
   if (buyerCheck.network !== sellerCheck.network) return fail("The buyer is on " + buyerCheck.network + " but the seller is on " + sellerCheck.network + " — one escrow lives on one network, so both addresses must match.");
   var network = buyerCheck.network;
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > ESCROW_MAX_LABEL_CHARS) return fail("The deal name is " + label.length + " characters — keep it to " + ESCROW_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed deal)";
   var deposit = ergToNano(depositStr);
@@ -2806,7 +2826,7 @@ function buildGroupExpensePlan(labelRaw, entriesRaw, minerFeeStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, network: null, label: null, participants: null, participantCount: null, transfers: null, transferCount: null, totalPaidNano: null, totalPaidErg: null, totalDebtNano: null, totalDebtErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, feePayerName: null, feePayerAddress: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, groupText: null };
   };
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > GROUPXP_MAX_LABEL_CHARS) return fail("The expense name is " + label.length + " characters — keep it to " + GROUPXP_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed shared expense)";
   var miner = ergToNano(minerFeeStr);
@@ -2832,7 +2852,7 @@ function buildGroupExpensePlan(labelRaw, entriesRaw, minerFeeStr) {
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, amount they already paid in ERG (e.g. \"Ada, an address, 50\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     var paidStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the person a name before the first comma, so the plan says who each balance belongs to.");
@@ -3003,7 +3023,7 @@ function buildRoscaPlan(labelRaw, membersRaw, contributionStr, minerFeeStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, network: null, label: null, members: null, memberCount: null, rounds: null, roundCount: null, contributionNano: null, contributionErg: null, potNano: null, potErg: null, payoutNano: null, payoutErg: null, feePerPayoutNano: null, feePerPayoutErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, totalContributionsNano: null, totalContributionsErg: null, totalPayoutsNano: null, totalPayoutsErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, roscaText: null };
   };
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > ROSCA_MAX_LABEL_CHARS) return fail("The circle name is " + label.length + " characters — keep it to " + ROSCA_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed savings circle)";
   var contrib = ergToNano(contributionStr);
@@ -3032,7 +3052,7 @@ function buildRoscaPlan(labelRaw, membersRaw, contributionStr, minerFeeStr) {
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — name, address (e.g. \"Ada, an address\"). The contribution is the same for everyone and goes in its own field.");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the member a name before the comma, so the plan says whose payout round each round is.");
     if (name.length > ROSCA_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + ROSCA_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
@@ -3165,7 +3185,7 @@ function buildWaterfallPlan(labelRaw, tiersRaw, revenueStr, minerFeeStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, network: null, label: null, tiers: null, tierCount: null, revenueNano: null, revenueErg: null, distributableNano: null, distributableErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, totalPayoutsNano: null, totalPayoutsErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, anyZeroPayout: null, includesServiceAddress: null, waterfallText: null };
   };
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > WATERFALL_MAX_LABEL_CHARS) return fail("The waterfall name is " + label.length + " characters — keep it to " + WATERFALL_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed revenue waterfall)";
   var rev = ergToNano(revenueStr);
@@ -3196,7 +3216,7 @@ function buildWaterfallPlan(labelRaw, tiersRaw, revenueStr, minerFeeStr) {
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, cap (e.g. \"Ops, an address, 10\"), with the last tier's cap written as the word rest.");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     var capRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the tier a name before the first comma, so the plan says who each tier pays.");
@@ -3347,7 +3367,7 @@ function buildPrizeSplitPlan(labelRaw, winnersRaw, poolStr, minerFeeStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, network: null, label: null, winners: null, winnerCount: null, shareTotalBps: null, poolNano: null, poolErg: null, distributableNano: null, distributableErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, totalPayoutsNano: null, totalPayoutsErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, prizeText: null };
   };
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > PRIZESPLIT_MAX_LABEL_CHARS) return fail("The prize name is " + label.length + " characters — keep it to " + PRIZESPLIT_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed prize pool)";
   var pool = ergToNano(poolStr);
@@ -3377,7 +3397,7 @@ function buildPrizeSplitPlan(labelRaw, winnersRaw, poolStr, minerFeeStr) {
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, percent (e.g. \"First place, an address, 50\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     var pctRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the place a name before the first comma, so the plan says who each share pays.");
@@ -3519,7 +3539,7 @@ function buildLoanSyndicatePlan(labelRaw, borrowerRaw, lendersRaw, repaymentStr,
   var fail = function (reason) {
     return { valid: false, reason: reason, network: null, label: null, borrower: null, lenders: null, lenderCount: null, totalFundedNano: null, totalFundedErg: null, repaymentNano: null, repaymentErg: null, distributableNano: null, distributableErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, totalPayoutsNano: null, totalPayoutsErg: null, netNano: null, netErg: null, outcome: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, includesServiceAddress: null, borrowerIsServiceAddress: null, syndicateText: null };
   };
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > SYNDICATE_MAX_LABEL_CHARS) return fail("The loan name is " + label.length + " characters — keep it to " + SYNDICATE_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed loan)";
   var repayment = ergToNano(repaymentStr);
@@ -3549,7 +3569,7 @@ function buildLoanSyndicatePlan(labelRaw, borrowerRaw, lendersRaw, repaymentStr,
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, amount funded in ERG (e.g. \"Alice, an address, 60\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     var amtRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the lender a name before the first comma, so the plan says who funded what.");
@@ -3689,7 +3709,7 @@ function buildTieredCommissionPlan(labelRaw, sellerRaw, agentRaw, bracketsRaw, s
   var fail = function (reason) {
     return { valid: false, reason: reason, network: null, label: null, seller: null, agent: null, brackets: null, bracketCount: null, salesNano: null, salesErg: null, grossCommissionNano: null, grossCommissionErg: null, effectiveRateBps: null, effectiveRatePercent: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, agentNetNano: null, agentNetErg: null, sellerNetNano: null, sellerNetErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, agentBelowSafeMin: null, sellerBelowSafeMin: null, sellerIsServiceAddress: null, agentIsServiceAddress: null, commissionText: null };
   };
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > TIERCOMM_MAX_LABEL_CHARS) return fail("The sale name is " + label.length + " characters — keep it to " + TIERCOMM_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed sale)";
   var sales = ergToNano(salesStr);
@@ -3857,7 +3877,7 @@ function buildCascadingRoyaltyPlan(labelRaw, sellerRaw, recipientsRaw, priceStr,
   var fail = function (reason) {
     return { valid: false, reason: reason, network: null, label: null, seller: null, recipients: null, recipientCount: null, priceNano: null, priceErg: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, distributableNano: null, distributableErg: null, totalPayoutsNano: null, totalPayoutsErg: null, sellerNetNano: null, sellerNetErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, anyBelowSafeMin: null, sellerBelowSafeMin: null, sellerIsServiceAddress: null, includesServiceAddress: null, royaltyText: null };
   };
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > CASROY_MAX_LABEL_CHARS) return fail("The sale name is " + label.length + " characters — keep it to " + CASROY_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed sale)";
   var price = ergToNano(priceStr);
@@ -3889,7 +3909,7 @@ function buildCascadingRoyaltyPlan(labelRaw, sellerRaw, recipientsRaw, priceStr,
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, percent of the remainder (e.g. \"Alice, 9f…, 5\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     var rateRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " has no name — every royalty recipient needs a name so the plan can be checked against your records.");
@@ -4018,7 +4038,7 @@ function buildDutchAuctionPlan(labelRaw, sellerRaw, startStr, floorStr, stepsStr
   var fail = function (reason) {
     return { valid: false, reason: reason, network: null, label: null, seller: null, startNano: null, startErg: null, floorNano: null, floorErg: null, stepCount: null, saleStep: null, schedule: null, salePriceNano: null, salePriceErg: null, discountNano: null, discountErg: null, discountBps: null, discountPercent: null, serviceFeeNano: null, serviceFeeErg: null, serviceFeeAddress: null, serviceFeeWasMinimum: null, sellerNetNano: null, sellerNetErg: null, minerFeeNano: null, minerFeeErg: null, totalNano: null, totalErg: null, sellerBelowSafeMin: null, sellerIsServiceAddress: null, dutchText: null };
   };
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > DUTCH_MAX_LABEL_CHARS) return fail("The item name is " + label.length + " characters — keep it to " + DUTCH_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed item)";
   var seller = (sellerRaw == null ? "" : String(sellerRaw)).trim();
@@ -4144,7 +4164,7 @@ function buildVickreyPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
   var sellerCheck = checkErgoAddress(sellerRaw);
   if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
   var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > VICKREY_MAX_LABEL_CHARS) return fail("The item name is " + label.length + " characters — keep it to " + VICKREY_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed item)";
   var reserve = ergToNano(reserveStr);
@@ -4173,7 +4193,7 @@ function buildVickreyPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, bid in ERG (e.g. \"Ada, an address, 50\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     var bidStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the bidder a name before the first comma, so the plan says who each bid is from.");
@@ -4398,7 +4418,7 @@ function buildLaunchpadPlan(projectRaw, labelRaw, capStr, entriesRaw, minerFeeSt
   var projectCheck = checkErgoAddress(projectRaw);
   if (!projectCheck.valid) return fail("The project address is refused: " + projectCheck.reason);
   var projectAddress = typeof projectRaw === "string" ? projectRaw.trim() : "";
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > LAUNCHPAD_MAX_LABEL_CHARS) return fail("The sale name is " + label.length + " characters — keep it to " + LAUNCHPAD_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed sale)";
   var cap = ergToNano(capStr);
@@ -4427,7 +4447,7 @@ function buildLaunchpadPlan(projectRaw, labelRaw, capStr, entriesRaw, minerFeeSt
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, pledge in ERG (e.g. \"Ada, an address, 50\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     var pledgeStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the subscriber a name before the first comma, so the plan says who each pledge is from.");
@@ -4616,7 +4636,7 @@ function buildReverseAuctionPlan(buyerRaw, labelRaw, budgetStr, entriesRaw, mine
   var buyerCheck = checkErgoAddress(buyerRaw);
   if (!buyerCheck.valid) return fail("The buyer address is refused: " + buyerCheck.reason);
   var buyerAddress = typeof buyerRaw === "string" ? buyerRaw.trim() : "";
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > REVAUCTION_MAX_LABEL_CHARS) return fail("The job name is " + label.length + " characters — keep it to " + REVAUCTION_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed job)";
   var miner = ergToNano(minerFeeStr);
@@ -4646,7 +4666,7 @@ function buildReverseAuctionPlan(buyerRaw, labelRaw, budgetStr, entriesRaw, mine
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, bid in ERG (e.g. \"Ada, an address, 50\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addr = parts[1].trim();
     var bidStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the provider a name before the first comma, so the plan says who each bid is from.");
@@ -4859,7 +4879,7 @@ function buildFactoringPlan(sellerRaw, factorRaw, labelRaw, faceStr, advancePctS
   if (factorCheck.network !== sellerCheck.network) return fail("The factor is a " + factorCheck.network + " address but the seller is " + sellerCheck.network + " — one factoring plan lives on one network, so every address must match.");
   if (factorAddress === sellerAddress) return fail("The seller and the factor are the same address — factoring is a sale of the receivable to someone else, so the two sides must differ.");
   var network = sellerCheck.network;
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > FACTORING_MAX_LABEL_CHARS) return fail("The invoice name is " + label.length + " characters — keep it to " + FACTORING_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed invoice)";
   var miner = ergToNano(minerFeeStr);
@@ -4997,7 +5017,7 @@ function buildClaimPlan(claimantRaw, insurerRaw, labelRaw, claimStr, deductibleS
   if (insurerCheck.network !== claimantCheck.network) return fail("The insurer is a " + insurerCheck.network + " address but the claimant is " + claimantCheck.network + " — one claim settlement lives on one network, so every address must match.");
   if (insurerAddress === claimantAddress) return fail("The claimant and the insurer are the same address — a claim is settled between two different sides, so the two addresses must differ.");
   var network = claimantCheck.network;
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > CLAIM_MAX_LABEL_CHARS) return fail("The claim name is " + label.length + " characters — keep it to " + CLAIM_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed claim)";
   var miner = ergToNano(minerFeeStr);
@@ -5138,7 +5158,7 @@ function buildDepositPlan(tenantRaw, landlordRaw, labelRaw, depositStr, deductio
   if (landlordCheck.network !== tenantCheck.network) return fail("The landlord is a " + landlordCheck.network + " address but the tenant is " + tenantCheck.network + " — one deposit settlement lives on one network, so every address must match.");
   if (landlordAddress === tenantAddress) return fail("The tenant and the landlord are the same address — a deposit is settled between two different sides, so the two addresses must differ.");
   var network = tenantCheck.network;
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > DEPOSIT_MAX_LABEL_CHARS) return fail("The tenancy name is " + label.length + " characters — keep it to " + DEPOSIT_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed tenancy)";
   var miner = ergToNano(minerFeeStr);
@@ -5156,7 +5176,7 @@ function buildDepositPlan(tenantRaw, landlordRaw, labelRaw, depositStr, deductio
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — name, amount (e.g. \"Cleaning, 40\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var amtRaw = parts[1].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the deduction a name before the comma, so the plan says what each deduction is for.");
     if (name.length > DEPOSIT_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + DEPOSIT_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
@@ -5342,7 +5362,7 @@ function buildMatchPlan(charityRaw, matcherRaw, labelRaw, percentStr, capStr, do
   if (matcherCheck.network !== charityCheck.network) return fail("The matcher is a " + matcherCheck.network + " address but the charity is " + charityCheck.network + " — one matching campaign lives on one network, so every address must match.");
   if (matcherAddress === charityAddress) return fail("The charity and the matcher are the same address — a match is pledged by a different side from the one that receives it, so the two addresses must differ.");
   var network = charityCheck.network;
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > MATCH_MAX_LABEL_CHARS) return fail("The campaign name is " + label.length + " characters — keep it to " + MATCH_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed campaign)";
   var miner = ergToNano(minerFeeStr);
@@ -5362,7 +5382,7 @@ function buildMatchPlan(charityRaw, matcherRaw, labelRaw, percentStr, capStr, do
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — name, amount (e.g. \"Alice, 100\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var amtRaw = parts[1].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the donor a name before the comma, so the plan says whose gift unlocked each part of the match.");
     if (name.length > MATCH_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + MATCH_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
@@ -5570,7 +5590,7 @@ function buildGroupBuyPlan(sellerRaw, labelRaw, unitPriceStr, discountPercentStr
   if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
   var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
   var network = sellerCheck.network;
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > GROUPBUY_MAX_LABEL_CHARS) return fail("The item name is " + label.length + " characters — keep it to " + GROUPBUY_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed item)";
   var miner = ergToNano(minerFeeStr);
@@ -5602,7 +5622,7 @@ function buildGroupBuyPlan(sellerRaw, labelRaw, unitPriceStr, discountPercentStr
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, quantity (e.g. \"Alice, 9f…, 3\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addrRaw = parts[1].replace(/\s+/g, " ").trim();
     var qtyRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the buyer a name before the first comma, so the plan says who ordered each quantity.");
@@ -5791,7 +5811,7 @@ function buildGiftFundPlan(sellerRaw, labelRaw, priceStr, contributorsRaw, miner
   if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
   var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
   var network = sellerCheck.network;
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > GIFTFUND_MAX_LABEL_CHARS) return fail("The gift name is " + label.length + " characters — keep it to " + GIFTFUND_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed gift)";
   var miner = ergToNano(minerFeeStr);
@@ -5819,7 +5839,7 @@ function buildGiftFundPlan(sellerRaw, labelRaw, priceStr, contributorsRaw, miner
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, contribution in ERG (e.g. \"Alice, 9f…, 25\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addrRaw = parts[1].replace(/\s+/g, " ").trim();
     var amtRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the contributor a name before the first comma, so the plan says who chipped in each amount.");
@@ -6013,7 +6033,7 @@ function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersR
   if (!payerCheck.valid) return fail("The payer address is refused: " + payerCheck.reason);
   var payerAddress = typeof payerRaw === "string" ? payerRaw.trim() : "";
   var network = payerCheck.network;
-  var label = (labelRaw == null ? "" : String(labelRaw)).replace(/\s+/g, " ").trim();
+  var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > DIVIDEND_MAX_LABEL_CHARS) return fail("The distribution name is " + label.length + " characters — keep it to " + DIVIDEND_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed distribution)";
   var miner = ergToNano(minerFeeStr);
@@ -6046,7 +6066,7 @@ function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersR
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, shares (e.g. \"Alice, 9f…, 300\").");
-    var name = parts[0].replace(/\s+/g, " ").trim();
+    var name = planText(parts[0]);
     var addrRaw = parts[1].replace(/\s+/g, " ").trim();
     var sharesRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the holder a name before the first comma, so the plan says who receives each payout.");
@@ -17638,7 +17658,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, MERKLE_PROOF_MAX_LEVELS, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, SIGMA_TYPE_MAX_DEPTH, SIGMA_COLLECTION_MAX_COUNT, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, boundedEcho, txIndexTarget, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, TX_SET_MAX_LINES, HEADER_SET_MAX_LINES, VOTE_TALLY_MAX_HEADERS, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, MERKLE_PROOF_MAX_LEVELS, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, SIGMA_TYPE_MAX_DEPTH, SIGMA_COLLECTION_MAX_COUNT, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, boundedEcho, planText, txIndexTarget, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, TX_SET_MAX_LINES, HEADER_SET_MAX_LINES, VOTE_TALLY_MAX_HEADERS, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {

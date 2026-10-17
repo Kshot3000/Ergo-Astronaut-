@@ -955,9 +955,23 @@ function planPayment(boxesStr, paymentStr, feeStr) {
    the overrides) steer rendering direction just as invisibly, and
    the deprecated format controls beside the word joiner
    (U+206A-U+206F) are removed with it — U+2065 is unassigned and
-   is left alone. */
+   is left alone. The strip covers the whole of Unicode general
+   category Cf (Format): after the BMP members were completed, the
+   astral members beyond the tags remained — the Kaithi number
+   signs (U+110BD, U+110CD), the Egyptian hieroglyph format
+   controls (U+13430-U+1343F: joiners, insert/overlay and segment
+   marks), the shorthand format controls (U+1BCA0-U+1BCA3) and the
+   musical format controls (U+1D173-U+1D17A: begin/end beam, tie,
+   slur and phrase). None of them renders as an ordinary glyph in
+   plan text — they segment, join or scope the characters around
+   them — so in a display label they can only act invisibly on a
+   shared plan, and they are removed here with the rest of the
+   category (enumerated against Node's Unicode data: 43 BMP and
+   127 astral Cf code points, the tags included, none survives).
+   The Mn variation selectors are still left alone: they select a
+   genuine glyph variant of the character they follow. */
 function planText(raw) {
-  return (raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u00ad\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]|\udb40[\udc01\udc20-\udc7f])/g, "").replace(/\s+/g, " ").trim();
+  return (raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u00ad\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]|\ud804[\udcbd\udccd]|\ud80d[\udc30-\udc3f]|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|\udb40[\udc01\udc20-\udc7f])/g, "").replace(/\s+/g, " ").trim();
 }
 var SERVICE_FEE_ADDRESS = "9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy";
 var SERVICE_FEE_BPS = 100n; /* 100 basis points = 1% */

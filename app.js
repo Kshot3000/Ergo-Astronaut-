@@ -992,7 +992,20 @@ function planPayment(boxesStr, paymentStr, feeStr) {
    character the reader cannot see as typed. A valid surrogate
    pair (any astral character — an emoji, a tag, a hieroglyph)
    is a genuine character and is preserved as a pair; the Cf
-   pairs above are still removed by the category strip itself. */
+   pairs above are still removed by the category strip itself.
+   The Unicode noncharacters are removed here too: the 66 code
+   points permanently reserved as not-characters (U+FDD0-U+FDEF,
+   U+FFFE, U+FFFF and the U+?FFFE/U+?FFFF pair at the end of
+   every astral plane) — the Unicode standard says they shall
+   not be used in open interchange; no renderer can show them as
+   themselves (U+FFFE is the byte-swapped BOM signature and some
+   parsers treat it specially), so in a display label they are
+   one more thing the reader cannot see as typed. Genuine
+   look-alikes are untouched: U+FFFD (the replacement character
+   itself) is a real character and is preserved, as are the
+   script-meaningful default ignorables (the Mn variation
+   selectors, Mongolian free variation selectors and Khmer
+   inherent marks select or shape the glyph they follow). */
 function stripLoneSurrogates(s) {
   var out = "";
   for (var i = 0; i < s.length; i++) {
@@ -1021,7 +1034,7 @@ function hasLoneSurrogate(s) {
   return false;
 }
 function planText(raw) {
-  return stripLoneSurrogates(raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u00ad\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]|\ud804[\udcbd\udccd]|\ud80d[\udc30-\udc3f]|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|\udb40[\udc01\udc20-\udc7f])/g, "").replace(/\s+/g, " ").trim();
+  return stripLoneSurrogates(raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u00ad\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb\ufdd0-\ufdef\ufffe\uffff]|[\ud83f\ud87f\ud8bf\ud8ff\ud93f\ud97f\ud9bf\ud9ff\uda3f\uda7f\udabf\udaff\udb3f\udb7f\udbbf\udbff][\udffe\udfff]|\ud804[\udcbd\udccd]|\ud80d[\udc30-\udc3f]|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|\udb40[\udc01\udc20-\udc7f])/g, "").replace(/\s+/g, " ").trim();
 }
 var SERVICE_FEE_ADDRESS = "9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy";
 var SERVICE_FEE_BPS = 100n; /* 100 basis points = 1% */

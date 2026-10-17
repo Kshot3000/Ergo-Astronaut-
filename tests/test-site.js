@@ -3296,6 +3296,7 @@ check("twitter card present and tagged", html.includes('name="twitter:card"') &&
 check("JSON-LD WebApplication parses, is free, and names 141 tools", (() => { const m = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/); if (!m) return false; try { const j = JSON.parse(m[1]); return j["@type"] === "WebApplication" && j.isAccessibleForFree === true && j.offers.price === "0" && /142/.test(j.name) && j.author.name === "Kyle Cox" && j.url === "https://kshot3000.github.io/Ergo-Astronaut-/"; } catch { return false; } })());
 check("sitemap lists hub and guide with lastmod", sitemap.includes("<loc>https://kshot3000.github.io/Ergo-Astronaut-/</loc>") && sitemap.includes("guides/getting-started-ergo.md") && sitemap.includes("<lastmod>2026-10-16</lastmod>"));
 check("README leads with the 142 free tools", readme.includes("142 free Ergo tools, local-first"));
+check("README tool-finder count matches the 142 tools", readme.includes("with 142 tools on one page"));
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

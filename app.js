@@ -950,7 +950,7 @@ function planPayment(boxesStr, paymentStr, feeStr) {
    addresses, rates) do NOT come through here — those keep their
    strict refuse-don't-repair parsers. */
 function planText(raw) {
-  return (raw == null ? "" : String(raw)).replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g, "").replace(/\s+/g, " ").trim();
+  return (raw == null ? "" : String(raw)).replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g, "").replace(/\s+/g, " ").trim();
 }
 var SERVICE_FEE_ADDRESS = "9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy";
 var SERVICE_FEE_BPS = 100n; /* 100 basis points = 1% */

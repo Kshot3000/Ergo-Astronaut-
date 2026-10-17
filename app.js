@@ -957,7 +957,7 @@ function planPayment(boxesStr, paymentStr, feeStr) {
    (U+206A-U+206F) are removed with it — U+2065 is unassigned and
    is left alone. */
 function planText(raw) {
-  return (raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u00ad\u061c\u070f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]|\udb40[\udc01\udc20-\udc7f])/g, "").replace(/\s+/g, " ").trim();
+  return (raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u00ad\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]|\udb40[\udc01\udc20-\udc7f])/g, "").replace(/\s+/g, " ").trim();
 }
 var SERVICE_FEE_ADDRESS = "9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy";
 var SERVICE_FEE_BPS = 100n; /* 100 basis points = 1% */

@@ -3294,7 +3294,7 @@ check("canonical URL is the live hub", html.includes('<link rel="canonical" href
 check("meta description names the 142 tools and the search-intent tools", html.includes("142 free Ergo tools") && html.includes("address checker") && html.includes("storage rent"));
 check("twitter card present and tagged", html.includes('name="twitter:card"') && html.includes('name="twitter:site" content="@kshot9000"') && html.includes("@ergo_platform"));
 check("JSON-LD WebApplication parses, is free, and names 141 tools", (() => { const m = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/); if (!m) return false; try { const j = JSON.parse(m[1]); return j["@type"] === "WebApplication" && j.isAccessibleForFree === true && j.offers.price === "0" && /142/.test(j.name) && j.author.name === "Kyle Cox" && j.url === "https://kshot3000.github.io/Ergo-Astronaut-/"; } catch { return false; } })());
-check("sitemap lists hub and guide with lastmod", sitemap.includes("<loc>https://kshot3000.github.io/Ergo-Astronaut-/</loc>") && sitemap.includes("guides/getting-started-ergo.md") && sitemap.includes("<lastmod>2026-10-11</lastmod>"));
+check("sitemap lists hub and guide with lastmod", sitemap.includes("<loc>https://kshot3000.github.io/Ergo-Astronaut-/</loc>") && sitemap.includes("guides/getting-started-ergo.md") && sitemap.includes("<lastmod>2026-10-16</lastmod>"));
 check("README leads with the 142 free tools", readme.includes("142 free Ergo tools, local-first"));
 
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);

@@ -1017,7 +1017,23 @@ function planPayment(boxesStr, paymentStr, feeStr) {
    made only of fillers rendered completely empty while evading
    the builders' unnamed default. Genuine Hangul syllables and
    jamo text are untouched — only the four filler code points
-   are removed. */
+   are removed. One member of the C1 control range the strip
+   otherwise covers is NOT removed: U+0085 NEXT LINE (NEL) is a
+   control code by category, but Unicode also gives it
+   White_Space=Yes and UAX #14 makes it a mandatory line break —
+   the hub's paste splits treat it as a line break for exactly
+   that reason. Inside a single-line display field (a vesting
+   label or an invoice description pasted from a PDF, where NEL
+   is the separator the source used) it is a word separator, not
+   an invisible, and JS \s does not match it, so the strip used
+   to delete it outright and merge the words it separated — a
+   label written Grant + NEL + Fund rendered "GrantFund" while
+   the same label with a vertical tab rendered "Grant Fund". It
+   now collapses to one space with the rest of the whitespace
+   class; the remaining C1 controls (U+0080-U+0084 and
+   U+0086-U+009F) have no White_Space property and are still
+   removed outright, and a label made only of NELs still
+   collapses to the empty string. */
 function stripLoneSurrogates(s) {
   var out = "";
   for (var i = 0; i < s.length; i++) {
@@ -1046,7 +1062,7 @@ function hasLoneSurrogate(s) {
   return false;
 }
 function planText(raw) {
-  return stripLoneSurrogates(raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u00ad\u034f\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u2800\u115f\u1160\u3164\uffa0\ufeff\ufff0-\ufff8\ufff9-\ufffb\ufdd0-\ufdef\ufffe\uffff]|[\ud83f\ud87f\ud8bf\ud8ff\ud93f\ud97f\ud9bf\ud9ff\uda3f\uda7f\udabf\udaff\udb3f\udb7f\udbbf\udbff][\udffe\udfff]|\ud804[\udcbd\udccd]|\ud80d[\udc30-\udc3f]|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|\udb40[\udc01\udc20-\udc7f]|\udb40[\udc00\udc02-\udc1f\udc80-\udcff\uddf0-\udfff]|[\udb41-\udb43][\udc00-\udfff])/g, "").replace(/\s+/g, " ").trim();
+  return stripLoneSurrogates(raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u0084\u0086-\u009f\u00ad\u034f\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u2800\u115f\u1160\u3164\uffa0\ufeff\ufff0-\ufff8\ufff9-\ufffb\ufdd0-\ufdef\ufffe\uffff]|[\ud83f\ud87f\ud8bf\ud8ff\ud93f\ud97f\ud9bf\ud9ff\uda3f\uda7f\udabf\udaff\udb3f\udb7f\udbbf\udbff][\udffe\udfff]|\ud804[\udcbd\udccd]|\ud80d[\udc30-\udc3f]|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|\udb40[\udc01\udc20-\udc7f]|\udb40[\udc00\udc02-\udc1f\udc80-\udcff\uddf0-\udfff]|[\udb41-\udb43][\udc00-\udfff])/g, "").replace(/[\s\u0085]+/g, " ").trim();
 }
 /* The duplicate judge for plan display names and labels. Display text
    itself is never rewritten (planText above preserves a genuine

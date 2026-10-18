@@ -8946,6 +8946,102 @@ function encodeSigmaConstant(spec) {
   }
   return fail("Unknown register kind \"" + boundedEcho(kind) + "\" — use one of: " + SIGMA_SPEC_KINDS + ".");
 }
+/* ---------- Builder form text parsers (tools 17 and 30) ----------
+   The pure builders above judge every list count before checking
+   any entry, but their FORM parsers used to live inline in the DOM
+   handlers, where they parsed every pasted entry first — the
+   count-after-loop class at the wiring layer: the box form split
+   and shape-checked all 200,000 lines of an over-cap token paste
+   before buildErgoBox ever saw the list (refusing it, after
+   ~430 ms, by naming token line 200,000), and the transaction form
+   split, regex-matched and extension-mapped its way through
+   200,000 inputs / output token lines for a refusal the counts
+   alone decide. These parsers are pure and exported so the rule
+   holds here too: every count — input lines, data-input lines,
+   output blocks, one input's extension entries, one output's
+   token and register lines, box token lines — is judged BEFORE
+   any entry of that list is parsed, against the same bounds and
+   with the same refusal texts the builders themselves use, so an
+   over-cap paste meets the builder's own message from its count.
+   In-bound parsing is byte-for-byte the old inline parsing, and
+   field validation stays the builders' job. The box form's
+   register field is the one cleared site: the form only splits
+   and trims it (no per-entry parsing), and buildErgoBox judges
+   its count (6) before its own encode loop. */
+function parseBoxBuildTokens(text) {
+  var fail = function (reason) { return { valid: false, reason: reason, tokens: null }; };
+  var lines = (text == null ? "" : String(text)).split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  if (lines.length > 10000) return fail("A box carries at most 10,000 tokens — " + lines.length + " were given. The count is the one tool 15's parser accepts when it reads a box back, so a longer list could never be read back.");
+  var tokens = [];
+  for (var i = 0; i < lines.length; i++) {
+    var parts = lines[i].split(/[\s,]+/).filter(function (p) { return p !== ""; });
+    if (parts.length !== 2) return fail("Token line " + (i + 1) + " must be exactly: a 64-character token ID, a space, then the raw amount.");
+    tokens.push({ tokenId: parts[0], amount: parts[1] });
+  }
+  return { valid: true, reason: null, tokens: tokens };
+}
+function parseTxBuildInputs(text) {
+  var fail = function (reason) { return { valid: false, reason: reason, inputs: null }; };
+  var lines = (text == null ? "" : String(text)).split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  if (lines.length > 10000) return fail("A transaction spends at least one input box — give between 1 and 10,000 inputs.");
+  var inputs = [];
+  for (var li = 0; li < lines.length; li++) {
+    var parts = lines[li].split(/\s+/);
+    var inp = { boxId: parts[0], proofHex: null, extension: [] };
+    if (parts.length > 1 && parts[1] !== "-") inp.proofHex = parts[1];
+    if (parts.length > 2) {
+      var extParts = parts.slice(2).join(" ").split(";").map(function (e) { return e.trim(); }).filter(function (e) { return e !== ""; });
+      if (extParts.length > 10000) return fail("Input " + (li + 1) + ": the context extension is a list of key / constant entries.");
+      inp.extension = extParts.map(function (e) {
+        var eq = e.indexOf("=");
+        return { key: eq < 0 ? e : e.slice(0, eq).trim(), value: eq < 0 ? "" : e.slice(eq + 1).trim() };
+      });
+    }
+    inputs.push(inp);
+  }
+  return { valid: true, reason: null, inputs: inputs };
+}
+function parseTxBuildDataInputs(text) {
+  var fail = function (reason) { return { valid: false, reason: reason, dataInputs: null }; };
+  var lines = (text == null ? "" : String(text)).split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  if (lines.length > 10000) return fail("Data inputs are a list of box IDs (boxes the scripts read but do not spend).");
+  return { valid: true, reason: null, dataInputs: lines };
+}
+function parseTxBuildOutputs(text) {
+  var fail = function (reason) { return { valid: false, reason: reason, outputs: null }; };
+  var blocks = (text == null ? "" : String(text)).split(/\n\s*\n/).map(function (b) { return b.trim(); }).filter(function (b) { return b !== ""; });
+  if (blocks.length > 10000) return fail("A transaction creates at least one output box — give between 1 and 10,000 outputs.");
+  var outputs = [];
+  for (var bi = 0; bi < blocks.length; bi++) {
+    var blockLines = blocks[bi].split(/\n+/);
+    /* This output's token and register counts are judged from a
+       key-only scan of its lines before any line's value is split
+       or stored — the builder judges the same counts (10,000 and
+       6) before its own loops, and the form now does the same. */
+    var tokenCount = 0, registerCount = 0;
+    for (var ci = 0; ci < blockLines.length; ci++) {
+      var cm = blockLines[ci].trim().match(/^([a-z]+)\s*:/);
+      if (!cm) continue;
+      if (cm[1] === "token") tokenCount++;
+      else if (cm[1] === "register") registerCount++;
+    }
+    if (tokenCount > 10000) return fail("Output " + (bi + 1) + ": tokens are a list of token ID / amount pairs.");
+    if (registerCount > 6) return fail("Output " + (bi + 1) + ": a box carries at most the six non-mandatory registers R4–R9.");
+    var o = { valueNano: "", ergoTree: "", creationHeight: "", tokens: [], registers: [] };
+    blockLines.forEach(function (line) {
+      var m = line.trim().match(/^([a-z]+)\s*:\s*(.*)$/);
+      if (!m) return;
+      var k = m[1].toLowerCase(), v = m[2].trim();
+      if (k === "value") o.valueNano = v;
+      else if (k === "tree") o.ergoTree = v;
+      else if (k === "height") o.creationHeight = v;
+      else if (k === "token") { var tp = v.split(/\s+/); o.tokens.push({ tokenId: tp[0] || "", amount: tp[1] || "" }); }
+      else if (k === "register") o.registers.push(v);
+    });
+    outputs.push(o);
+  }
+  return { valid: true, reason: null, outputs: outputs };
+}
 function buildErgoBox(fields) {
   var fail = function (reason) {
     return { valid: false, reason: reason, boxHex: null, boxId: null, byteLength: null, registers: null };
@@ -17817,7 +17913,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, MERKLE_PROOF_MAX_LEVELS, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, SIGMA_TYPE_MAX_DEPTH, SIGMA_COLLECTION_MAX_COUNT, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, boundedEcho, planText, planNameKey, stripLoneSurrogates, hasLoneSurrogate, txIndexTarget, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, TX_SET_MAX_LINES, HEADER_SET_MAX_LINES, VOTE_TALLY_MAX_HEADERS, DIFFCALC_MAX_LINES, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, MERKLE_PROOF_MAX_LEVELS, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, SIGMA_TYPE_MAX_DEPTH, SIGMA_COLLECTION_MAX_COUNT, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, parseBoxBuildTokens, parseTxBuildInputs, parseTxBuildDataInputs, parseTxBuildOutputs, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, boundedEcho, planText, planNameKey, stripLoneSurrogates, hasLoneSurrogate, txIndexTarget, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, TX_SET_MAX_LINES, HEADER_SET_MAX_LINES, VOTE_TALLY_MAX_HEADERS, DIFFCALC_MAX_LINES, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {
@@ -19760,40 +19856,25 @@ if (typeof document !== "undefined") {
     document.getElementById("txbuild-calc").addEventListener("submit", function (ev) {
       ev.preventDefault();
       var out = document.getElementById("txbuild-result");
-      var parseInputs = function (text) {
-        return text.split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).map(function (line) {
-          var parts = line.split(/\s+/);
-          var inp = { boxId: parts[0], proofHex: null, extension: [] };
-          if (parts.length > 1 && parts[1] !== "-") inp.proofHex = parts[1];
-          if (parts.length > 2) {
-            inp.extension = parts.slice(2).join(" ").split(";").map(function (e) { return e.trim(); }).filter(function (e) { return e !== ""; }).map(function (e) {
-              var eq = e.indexOf("=");
-              return { key: eq < 0 ? e : e.slice(0, eq).trim(), value: eq < 0 ? "" : e.slice(eq + 1).trim() };
-            });
-          }
-          return inp;
-        });
-      };
-      var parseOutputs = function (text) {
-        return text.split(/\n\s*\n/).map(function (b) { return b.trim(); }).filter(function (b) { return b !== ""; }).map(function (block) {
-          var o = { valueNano: "", ergoTree: "", creationHeight: "", tokens: [], registers: [] };
-          block.split(/\n+/).forEach(function (line) {
-            var m = line.trim().match(/^([a-z]+)\s*:\s*(.*)$/);
-            if (!m) return;
-            var k = m[1].toLowerCase(), v = m[2].trim();
-            if (k === "value") o.valueNano = v;
-            else if (k === "tree") o.ergoTree = v;
-            else if (k === "height") o.creationHeight = v;
-            else if (k === "token") { var tp = v.split(/\s+/); o.tokens.push({ tokenId: tp[0] || "", amount: tp[1] || "" }); }
-            else if (k === "register") o.registers.push(v);
-          });
-          return o;
-        });
-      };
+      var parsedInputs = parseTxBuildInputs(document.getElementById("txbuild-inputs").value);
+      if (!parsedInputs.valid) {
+        out.textContent = "✗ " + parsedInputs.reason;
+        return;
+      }
+      var parsedDataInputs = parseTxBuildDataInputs(document.getElementById("txbuild-datainputs").value);
+      if (!parsedDataInputs.valid) {
+        out.textContent = "✗ " + parsedDataInputs.reason;
+        return;
+      }
+      var parsedOutputs = parseTxBuildOutputs(document.getElementById("txbuild-outputs").value);
+      if (!parsedOutputs.valid) {
+        out.textContent = "✗ " + parsedOutputs.reason;
+        return;
+      }
       var res = buildErgoTransaction({
-        inputs: parseInputs(document.getElementById("txbuild-inputs").value),
-        dataInputs: document.getElementById("txbuild-datainputs").value.split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }),
-        outputs: parseOutputs(document.getElementById("txbuild-outputs").value)
+        inputs: parsedInputs.inputs,
+        dataInputs: parsedDataInputs.dataInputs,
+        outputs: parsedOutputs.outputs
       });
       if (!res.valid) {
         out.textContent = "✗ " + res.reason;
@@ -20982,22 +21063,17 @@ if (typeof document !== "undefined") {
     document.getElementById("boxbuild-calc").addEventListener("submit", function (ev) {
       ev.preventDefault();
       var out = document.getElementById("boxbuild-result");
-      var tokenLines = document.getElementById("boxbuild-tokens").value.split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
-      var tokens = [];
-      for (var i = 0; i < tokenLines.length; i++) {
-        var parts = tokenLines[i].split(/[\s,]+/).filter(function (p) { return p !== ""; });
-        if (parts.length !== 2) {
-          out.textContent = "✗ Token line " + (i + 1) + " must be exactly: a 64-character token ID, a space, then the raw amount.";
-          return;
-        }
-        tokens.push({ tokenId: parts[0], amount: parts[1] });
+      var parsedTokens = parseBoxBuildTokens(document.getElementById("boxbuild-tokens").value);
+      if (!parsedTokens.valid) {
+        out.textContent = "✗ " + parsedTokens.reason;
+        return;
       }
       var registers = document.getElementById("boxbuild-registers").value.split(/\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
       var res = buildErgoBox({
         valueNano: document.getElementById("boxbuild-value").value,
         ergoTree: document.getElementById("boxbuild-tree").value,
         creationHeight: document.getElementById("boxbuild-height").value,
-        tokens: tokens,
+        tokens: parsedTokens.tokens,
         registers: registers,
         transactionId: document.getElementById("boxbuild-txid").value,
         index: document.getElementById("boxbuild-index").value

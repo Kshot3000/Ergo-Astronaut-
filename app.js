@@ -112,6 +112,25 @@ function base58Decode(str) {
   return Uint8Array.from(zeros.concat(bytes));
 }
 
+/* ---------- Whitespace convention for every cleaner in this file ---------- */
+/* U+0085 NEXT LINE (NEL) is Unicode White_Space=Yes and a UAX #14
+   mandatory line break, but it is the ONE White_Space character that
+   JavaScript's own whitespace machinery misses: String.prototype.trim
+   and the \s class cover exactly the same set (verified over the whole
+   BMP: zero differences) and NEL is in neither. The hub therefore
+   writes every whitespace removal as [\s\u0085]: the paste splits treat
+   NEL as a line break, planText collapses it to one space, the hex
+   cleaners strip it like any other formatting whitespace, and every
+   edge trim in this file is .replace(/^[\s\u0085]+|[\s\u0085]+$/g, "")
+   — a NEL-aware trim, identical to the built-in trim on any input
+   without a NEL.
+   A single-field paste carrying a trailing NEL (PDF and legacy exports
+   terminate lines with it) is accepted exactly like a space-padded
+   one. An INTERIOR NEL still refuses an amount or an address — the
+   anchored digit/Base58 patterns never match it, so two values are
+   never merged into one — and inside a multi-line list it remains a
+   line break, per the split rule. */
+
 /* ---------- Ergo address checker ---------- */
 /* Layout: [prefix byte][content][4-byte checksum]
    prefix = network (high nibble: 0x0 mainnet, 0x1 testnet) + type (low nibble:
@@ -121,7 +140,7 @@ function checkErgoAddress(raw) {
   var fail = function (reason) {
     return { valid: false, reason: reason, network: null, type: null, typeCode: null, prefix: null };
   };
-  var addr = typeof raw === "string" ? raw.trim() : "";
+  var addr = typeof raw === "string" ? raw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   if (!addr) return fail("No address entered.");
   if (/\s/.test(addr)) return fail("Address contains spaces — an Ergo address is one unbroken string.");
   var decoded = base58Decode(addr);
@@ -176,8 +195,8 @@ function base58Encode(bytes) {
    This builds an address from a PUBLIC key only — never a private key
    or seed phrase; construction proves nothing about who owns the key. */
 function p2pkAddressFromPublicKey(pubkeyHex, networkStr) {
-  var s = (pubkeyHex == null ? "" : String(pubkeyHex)).trim().toLowerCase();
-  var net = (networkStr == null ? "" : String(networkStr)).trim().toLowerCase();
+  var s = (pubkeyHex == null ? "" : String(pubkeyHex)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
+  var net = (networkStr == null ? "" : String(networkStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (net !== "mainnet" && net !== "testnet") return null;
   if (!/^[0-9a-f]{66}$/.test(s)) return null;
   if (s.slice(0, 2) !== "02" && s.slice(0, 2) !== "03") return null;
@@ -210,9 +229,9 @@ function buildP2PKTree(pubkeyHex, networkStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, treeHex: null, publicKey: null, network: null, address: null, p2shAddress: null };
   };
-  var net = (networkStr == null ? "" : String(networkStr)).trim().toLowerCase();
+  var net = (networkStr == null ? "" : String(networkStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (net !== "mainnet" && net !== "testnet") return fail("Unknown network — pick mainnet or testnet. The ErgoTree itself is the same on both; only the addresses derived from it differ.");
-  var s = (pubkeyHex == null ? "" : String(pubkeyHex)).trim().toLowerCase();
+  var s = (pubkeyHex == null ? "" : String(pubkeyHex)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (s.indexOf("0x") === 0) s = s.slice(2);
   if (!/^[0-9a-f]{66}$/.test(s)) return fail("Enter a compressed public key as 66 hex characters (33 bytes) starting 02 or 03 — public keys only: never enter a private key or seed phrase anywhere, including here.");
   if (s.slice(0, 2) !== "02" && s.slice(0, 2) !== "03") return fail("That is not a compressed public key: a compressed secp256k1 key is 33 bytes and starts 02 or 03 (this starts " + s.slice(0, 2) + "). An uncompressed key (65 bytes, starting 04) is not what Ergo P2PK scripts carry.");
@@ -232,7 +251,7 @@ function buildP2PKTree(pubkeyHex, networkStr) {
 /* ---------- ERG <-> nanoERG converter (exact BigInt) ---------- */
 var NANO_PER_ERG = 1000000000n;
 function ergToNano(ergStr) {
-  var s = (ergStr == null ? "" : String(ergStr)).trim();
+  var s = (ergStr == null ? "" : String(ergStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 50) return null; /* judged from length before the BigInt parse below: decimal parsing is superlinear, and no ERG amount needs 50 characters (the whole supply is 8 integer digits) */
   if (!/^\d+(\.\d{1,9})?$/.test(s)) return null;
   var parts = s.split(".");
@@ -240,7 +259,7 @@ function ergToNano(ergStr) {
   return nano.toString();
 }
 function nanoToErg(nanoStr) {
-  var s = (nanoStr == null ? "" : String(nanoStr)).trim();
+  var s = (nanoStr == null ? "" : String(nanoStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 100) return null; /* judged from length before the BigInt parse — but the bound must span what the hub itself produces, not just the whole supply's 17 digits: ergToNano accepts a 50-character ERG amount, which is a nanoERG string of up to 59 digits, and the builders compose those amounts (sums over up to 20 entries, period multiples up to 48, group-buy quantities up to 20,000,000 units, a babel covered amount up to its 100-digit price cap) reaching past 60 digits, so the old 50-character bound — copied from ergToNano, whose input is ERG, not nanoERG — left valid plans showing "null ERG" for amounts past 41 ERG digits. 100 is the bound the hub's other nano-scale parsers already judge by (token raw amounts, the babel price), and a 100-digit parse is trivial while an oversize string is still refused before any parse */
   if (!/^\d+$/.test(s)) return null;
   var nano = BigInt(s);
@@ -260,7 +279,7 @@ function nanoToErg(nanoStr) {
 var STORAGE_FEE_FACTOR_NANO_PER_BYTE = 1250000n;
 var STORAGE_PERIOD_BLOCKS = 1051200;
 function storageRentNano(sizeStr) {
-  var s = (sizeStr == null ? "" : String(sizeStr)).trim();
+  var s = (sizeStr == null ? "" : String(sizeStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 20) return null; /* a byte size is a u64 at most — judged from length before the BigInt parse */
   if (!/^\d+$/.test(s)) return null;
   var bytes = BigInt(s);
@@ -306,7 +325,7 @@ function analyzeStorageRent(sizeStr, ergStr) {
 var MIN_VALUE_PER_BYTE_NANO = 360n;
 var SAFE_USER_MIN_BOX_NANO = 1000000n;
 function minBoxValueNano(sizeStr) {
-  var s = (sizeStr == null ? "" : String(sizeStr)).trim();
+  var s = (sizeStr == null ? "" : String(sizeStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 20) return null; /* a byte size is a u64 at most — judged from length before the BigInt parse, the same bound storageRentNano (tool 3) judges a size by */
   if (!/^\d+$/.test(s)) return null;
   var bytes = BigInt(s);
@@ -339,7 +358,7 @@ function analyzeMinBoxValue(sizeStr, ergStr) {
 var BLOCKS_PER_DAY = 720;
 var HASHRATE_UNITS = { "H/s": 1, "kH/s": 1e3, "MH/s": 1e6, "GH/s": 1e9, "TH/s": 1e12, "PH/s": 1e15 };
 function hashrateToHps(amountStr, unit) {
-  var s = (amountStr == null ? "" : String(amountStr)).trim();
+  var s = (amountStr == null ? "" : String(amountStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+(\.\d+)?$/.test(s)) return null;
   if (!Object.prototype.hasOwnProperty.call(HASHRATE_UNITS, unit)) return null;
   var hps = Number(s) * HASHRATE_UNITS[unit];
@@ -377,14 +396,14 @@ function fmtEstimate(x) {
    cap of 18 covers every real token and catches typos. */
 var TOKEN_MAX_DECIMALS = 18;
 function parseTokenDecimals(decStr) {
-  var s = (decStr == null ? "" : String(decStr)).trim();
+  var s = (decStr == null ? "" : String(decStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d{1,2}$/.test(s)) return null;
   var d = Number(s);
   return d <= TOKEN_MAX_DECIMALS ? d : null;
 }
 function tokenRawToDisplay(rawStr, decStr) {
   var d = parseTokenDecimals(decStr);
-  var s = (rawStr == null ? "" : String(rawStr)).trim();
+  var s = (rawStr == null ? "" : String(rawStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 100) return null; /* judged from length before the BigInt parse: on-chain token amounts are u64 (20 digits at most) */
   if (d === null || !/^\d+$/.test(s)) return null;
   var raw = BigInt(s);
@@ -396,7 +415,7 @@ function tokenRawToDisplay(rawStr, decStr) {
 }
 function tokenDisplayToRaw(displayStr, decStr) {
   var d = parseTokenDecimals(decStr);
-  var s = (displayStr == null ? "" : String(displayStr)).trim();
+  var s = (displayStr == null ? "" : String(displayStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 100) return null; /* same length-first bound as tokenRawToDisplay */
   if (d === null || !/^\d+(\.\d+)?$/.test(s)) return null;
   var parts = s.split(".");
@@ -417,7 +436,7 @@ function tokenDisplayToRaw(displayStr, decStr) {
    BigInt maths for the heights; the days figure is an approximation
    from the block target, because real block intervals vary. */
 function parseChainHeight(heightStr) {
-  var s = (heightStr == null ? "" : String(heightStr)).trim();
+  var s = (heightStr == null ? "" : String(heightStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 20) return null; /* a chain height is a u32-scale count — judged from length before callers BigInt it */
   if (!/^\d+$/.test(s)) return null;
   return s;
@@ -684,11 +703,11 @@ function buildEip4Registers(nameStr, descStr, decStr, typeStr) {
      rather than silently repaired. Valid surrogate pairs (astral
      characters) encode normally. */
   if (hasLoneSurrogate(name) || hasLoneSurrogate(desc)) return null;
-  var dec = (decStr == null ? "" : String(decStr)).trim();
+  var dec = (decStr == null ? "" : String(decStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(dec)) return null;
   if (dec.length > 1 && dec.charAt(0) === "0") return null;
   if (dec.length > 3) return null;
-  var type = (typeStr == null ? "" : String(typeStr)).trim().toLowerCase();
+  var type = (typeStr == null ? "" : String(typeStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   var asset = null;
   if (type !== "") {
     asset = EIP4_ASSET_TYPES[type] || null;
@@ -707,7 +726,7 @@ function buildEip4Registers(nameStr, descStr, decStr, typeStr) {
 }
 function decodeEip4Registers(r4Str, r5Str, r6Str, r7Str) {
   var inputs = [r4Str, r5Str, r6Str, r7Str].map(function (x) {
-    return (x == null ? "" : String(x)).replace(/\s+/g, "");
+    return (x == null ? "" : String(x)).replace(/[\s\u0085]+/g, "");
   });
   if (inputs.every(function (x) { return x === ""; })) return null;
   var out = {
@@ -790,7 +809,7 @@ function decodeEip4Registers(r4Str, r5Str, r6Str, r7Str) {
    a payment address — Ergo's spendable address types are 1-3. */
 var ADH_TYPE_CODE = 4;
 function adhDataBytes(dataStr, modeStr) {
-  var mode = (modeStr == null ? "" : String(modeStr)).trim().toLowerCase();
+  var mode = (modeStr == null ? "" : String(modeStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (mode === "text") {
     var text = dataStr == null ? "" : String(dataStr);
     if (text === "") return null;
@@ -803,7 +822,7 @@ function adhDataBytes(dataStr, modeStr) {
     return utf8Bytes(text);
   }
   if (mode === "hex") {
-    var cleaned = (dataStr == null ? "" : String(dataStr)).replace(/\s+/g, "");
+    var cleaned = (dataStr == null ? "" : String(dataStr)).replace(/[\s\u0085]+/g, "");
     if (cleaned.toLowerCase().indexOf("0x") === 0) cleaned = cleaned.slice(2);
     if (cleaned === "") return null;
     return hexToBytes(cleaned);
@@ -811,7 +830,7 @@ function adhDataBytes(dataStr, modeStr) {
   return null;
 }
 function buildAdhRepresentation(dataStr, modeStr, networkStr) {
-  var net = (networkStr == null ? "" : String(networkStr)).trim().toLowerCase();
+  var net = (networkStr == null ? "" : String(networkStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (net !== "mainnet" && net !== "testnet") return null;
   var bytes = adhDataBytes(dataStr, modeStr);
   if (!bytes || bytes.length === 0) return null;
@@ -839,7 +858,7 @@ function buildAdhRepresentation(dataStr, modeStr, networkStr) {
   return out;
 }
 function decodeAdhRepresentation(raw) {
-  var str = typeof raw === "string" ? raw.trim() : "";
+  var str = typeof raw === "string" ? raw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   if (!str || /\s/.test(str)) return null;
   var decoded = base58Decode(str);
   if (!decoded || decoded.length !== 37) return null;
@@ -876,7 +895,7 @@ function decodeAdhRepresentation(raw) {
    change box that small is impractical and may fail size-based
    minimums for its serialized size. */
 function parseBoxList(boxesStr) {
-  var s = (boxesStr == null ? "" : String(boxesStr)).trim();
+  var s = (boxesStr == null ? "" : String(boxesStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!s) return null;
   var parts = s.split(/[\s,\u0085]+/).filter(function (p) { return p !== ""; });
   if (parts.length === 0 || parts.length > 1000) return null;
@@ -1062,7 +1081,7 @@ function hasLoneSurrogate(s) {
   return false;
 }
 function planText(raw) {
-  return stripLoneSurrogates(raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u0084\u0086-\u009f\u00ad\u034f\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u2800\u115f\u1160\u3164\uffa0\ufeff\ufff0-\ufff8\ufff9-\ufffb\ufdd0-\ufdef\ufffe\uffff]|[\ud83f\ud87f\ud8bf\ud8ff\ud93f\ud97f\ud9bf\ud9ff\uda3f\uda7f\udabf\udaff\udb3f\udb7f\udbbf\udbff][\udffe\udfff]|\ud804[\udcbd\udccd]|\ud80d[\udc30-\udc3f]|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|\udb40[\udc01\udc20-\udc7f]|\udb40[\udc00\udc02-\udc1f\udc80-\udcff\uddf0-\udfff]|[\udb41-\udb43][\udc00-\udfff])/g, "").replace(/[\s\u0085]+/g, " ").trim();
+  return stripLoneSurrogates(raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u0084\u0086-\u009f\u00ad\u034f\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u2800\u115f\u1160\u3164\uffa0\ufeff\ufff0-\ufff8\ufff9-\ufffb\ufdd0-\ufdef\ufffe\uffff]|[\ud83f\ud87f\ud8bf\ud8ff\ud93f\ud97f\ud9bf\ud9ff\uda3f\uda7f\udabf\udaff\udb3f\udb7f\udbbf\udbff][\udffe\udfff]|\ud804[\udcbd\udccd]|\ud80d[\udc30-\udc3f]|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|\udb40[\udc01\udc20-\udc7f]|\udb40[\udc00\udc02-\udc1f\udc80-\udcff\uddf0-\udfff]|[\udb41-\udb43][\udc00-\udfff])/g, "").replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
 }
 /* The duplicate judge for plan display names and labels. Display text
    itself is never rewritten (planText above preserves a genuine
@@ -1098,7 +1117,7 @@ function buildErgoInvoice(sellerRaw, itemStr, minerFeeStr, descriptionRaw) {
   };
   var check = checkErgoAddress(sellerRaw);
   if (!check.valid) return fail("The seller address is refused: " + check.reason);
-  var seller = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var seller = typeof sellerRaw === "string" ? sellerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var item = ergToNano(itemStr);
   if (item === null || BigInt(item) <= 0n) return fail("The item amount must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
   var miner = ergToNano(minerFeeStr);
@@ -1188,19 +1207,19 @@ function buildSplitPayment(potStr, recipientsRaw, minerFeeStr) {
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > SPLIT_MAX_RECIPIENTS) return fail("This builder takes at most " + SPLIT_MAX_RECIPIENTS + " recipients (you listed " + listedCount + ") — a transaction with more outputs than that belongs in a dedicated wallet flow, not a copyable plan.");
   var entries = [];
   var seen = {};
   var network = null;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — address, shares (e.g. an address followed by \", 2\").");
-    var addr = parts[0].trim();
-    var shareStr = parts[1].trim();
+    var addr = parts[0].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var shareStr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (!/^\d+$/.test(shareStr)) return fail("Line " + lineNo + " is refused: shares must be a whole number of parts (no decimals, no percent signs) — use 2 and 1 for a two-to-one split, not 66.7 and 33.3.");
     if (shareStr.length > 100) return fail("Line " + lineNo + " is refused: shares are judged from their length before they are parsed — at most 100 digits, far beyond the 1,000,000-part cap (7 digits).");
     var share = BigInt(shareStr);
@@ -1314,7 +1333,7 @@ function buildMilestonePlan(sellerRaw, contractStr, milestonesRaw, minerFeeStr) 
   };
   var check = checkErgoAddress(sellerRaw);
   if (!check.valid) return fail("The seller address is refused: " + check.reason);
-  var seller = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var seller = typeof sellerRaw === "string" ? sellerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var contract = ergToNano(contractStr);
   if (contract === null || BigInt(contract) <= 0n) return fail("The contract amount must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
   var miner = ergToNano(minerFeeStr);
@@ -1325,13 +1344,13 @@ function buildMilestonePlan(sellerRaw, contractStr, milestonesRaw, minerFeeStr) 
   var entries = [];
   var seenLabels = Object.create(null);
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — milestone name, shares (e.g. \"Design, 1\").");
     var label = planText(parts[0]);
-    var shareStr = parts[1].trim();
+    var shareStr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (label === "") return fail("Line " + lineNo + " is refused: give the milestone a name before the comma, so the plan says what each payment is for.");
     if (label.length > MILESTONE_MAX_LABEL_CHARS) return fail("Line " + lineNo + "'s name is " + label.length + " characters — keep milestone names to " + MILESTONE_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
     var labelKey = planNameKey(label);
@@ -1456,21 +1475,21 @@ function buildPayrollPlan(entriesRaw, minerFeeStr) {
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > PAYROLL_MAX_EMPLOYEES) return fail("This builder takes at most " + PAYROLL_MAX_EMPLOYEES + " employees (you listed " + listedCount + ") — a payroll with more outputs than that belongs in a dedicated wallet flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = Object.create(null);
   var network = null;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, amount in ERG (e.g. \"Ada, an address, 2.5\").");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
-    var amountStr = parts[2].trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var amountStr = parts[2].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the employee a name before the first comma, so the plan says who each payment is for.");
     if (name.length > PAYROLL_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + PAYROLL_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -1559,10 +1578,10 @@ function buildSaleSplitPlan(sellerRaw, creatorRaw, itemRaw, priceStr, royaltyPct
   };
   var sellerCheck = checkErgoAddress(sellerRaw);
   if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
-  var seller = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var seller = typeof sellerRaw === "string" ? sellerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var creatorCheck = checkErgoAddress(creatorRaw);
   if (!creatorCheck.valid) return fail("The creator address is refused: " + creatorCheck.reason);
-  var creator = typeof creatorRaw === "string" ? creatorRaw.trim() : "";
+  var creator = typeof creatorRaw === "string" ? creatorRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   if (creatorCheck.network !== sellerCheck.network) return fail("The creator address is " + creatorCheck.network + " but the seller is " + sellerCheck.network + " — one transaction lives on one network, so both addresses must match.");
   var item = planText((itemRaw == null ? "" : String(itemRaw)));
   if (item.length > SALESPLIT_MAX_ITEM_CHARS) return fail("The item name is " + item.length + " characters — keep it to " + SALESPLIT_MAX_ITEM_CHARS + " or fewer so the plan stays a single copyable block.");
@@ -1574,7 +1593,7 @@ function buildSaleSplitPlan(sellerRaw, creatorRaw, itemRaw, priceStr, royaltyPct
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   /* Royalty percent -> basis points, exactly: at most 2 decimals. */
-  var pctStr = (royaltyPctStr == null ? "" : String(royaltyPctStr)).trim();
+  var pctStr = (royaltyPctStr == null ? "" : String(royaltyPctStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   var pctMatch = pctStr.match(/^(\d+)(?:\.(\d{1,2}))?$/);
   if (!pctMatch) return fail("The royalty must be a percent with at most 2 decimal places (e.g. 5 or 2.5) — no sign, no commas, no percent sign.");
   var royaltyBps = BigInt(pctMatch[1]) * 100n + BigInt((pctMatch[2] || "").padEnd(2, "0"));
@@ -1671,7 +1690,7 @@ function buildVestingPlan(beneficiaryRaw, labelRaw, totalStr, periodsStr, cliffS
   };
   var benCheck = checkErgoAddress(beneficiaryRaw);
   if (!benCheck.valid) return fail("The beneficiary address is refused: " + benCheck.reason);
-  var beneficiary = typeof beneficiaryRaw === "string" ? beneficiaryRaw.trim() : "";
+  var beneficiary = typeof beneficiaryRaw === "string" ? beneficiaryRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > VESTING_MAX_LABEL_CHARS) return fail("The plan name is " + label.length + " characters — keep it to " + VESTING_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed vesting plan)";
@@ -1682,12 +1701,12 @@ function buildVestingPlan(beneficiaryRaw, labelRaw, totalStr, periodsStr, cliffS
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   /* Periods and cliff are whole counts — plain digits only. */
-  var periodsTxt = (periodsStr == null ? "" : String(periodsStr)).trim();
+  var periodsTxt = (periodsStr == null ? "" : String(periodsStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(periodsTxt)) return fail("The period count must be a whole number of periods (e.g. 12) — no decimals, no sign.");
   var periodCount = parseInt(periodsTxt, 10);
   if (periodCount < 2) return fail("A vesting schedule needs at least 2 periods — for a single payment, build a plain invoice with tool 112 instead.");
   if (periodCount > VESTING_MAX_PERIODS) return fail("This builder takes at most " + VESTING_MAX_PERIODS + " periods (you asked for " + periodCount + ") — a longer schedule belongs in a dedicated vesting contract, not a copyable plan.");
-  var cliffTxt = (cliffStr == null ? "" : String(cliffStr)).trim();
+  var cliffTxt = (cliffStr == null ? "" : String(cliffStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (cliffTxt === "") cliffTxt = "0";
   if (!/^\d+$/.test(cliffTxt)) return fail("The cliff must be a whole number of periods (e.g. 0, 1, 3) — no decimals, no sign.");
   var cliffPeriods = parseInt(cliffTxt, 10);
@@ -1798,7 +1817,7 @@ function buildSubscriptionPlan(recipientRaw, labelRaw, amountStr, periodsStr, mi
   };
   var recCheck = checkErgoAddress(recipientRaw);
   if (!recCheck.valid) return fail("The recipient address is refused: " + recCheck.reason);
-  var recipient = typeof recipientRaw === "string" ? recipientRaw.trim() : "";
+  var recipient = typeof recipientRaw === "string" ? recipientRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > SUBSCRIPTION_MAX_LABEL_CHARS) return fail("The plan name is " + label.length + " characters — keep it to " + SUBSCRIPTION_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed recurring payment plan)";
@@ -1809,7 +1828,7 @@ function buildSubscriptionPlan(recipientRaw, labelRaw, amountStr, periodsStr, mi
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   /* Periods are a whole count — plain digits only. */
-  var periodsTxt = (periodsStr == null ? "" : String(periodsStr)).trim();
+  var periodsTxt = (periodsStr == null ? "" : String(periodsStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(periodsTxt)) return fail("The period count must be a whole number of periods (e.g. 12) — no decimals, no sign.");
   var periodCount = parseInt(periodsTxt, 10);
   if (periodCount < 2) return fail("A recurring plan needs at least 2 periods — for a single payment, build a plain invoice with tool 112 instead.");
@@ -1905,7 +1924,7 @@ function buildLoanPlan(lenderRaw, labelRaw, principalStr, rateStr, periodsStr, m
   };
   var lenCheck = checkErgoAddress(lenderRaw);
   if (!lenCheck.valid) return fail("The lender address is refused: " + lenCheck.reason);
-  var lender = typeof lenderRaw === "string" ? lenderRaw.trim() : "";
+  var lender = typeof lenderRaw === "string" ? lenderRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > LOAN_MAX_LABEL_CHARS) return fail("The loan name is " + label.length + " characters — keep it to " + LOAN_MAX_LABEL_CHARS + " or fewer so the schedule stays a single copyable block.");
   if (label === "") label = "(unnamed loan)";
@@ -1916,11 +1935,11 @@ function buildLoanPlan(lenderRaw, labelRaw, principalStr, rateStr, periodsStr, m
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
   /* Rate and periods are whole counts — plain digits only. */
-  var rateTxt = (rateStr == null ? "" : String(rateStr)).trim();
+  var rateTxt = (rateStr == null ? "" : String(rateStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(rateTxt)) return fail("The per-period interest rate must be a whole number of basis points (e.g. 100 = 1% per period) — no decimals, no sign.");
   var rateBps = parseInt(rateTxt, 10);
   if (rateBps > LOAN_MAX_RATE_BPS) return fail("The per-period rate is " + rateBps + " basis points — this builder takes at most " + LOAN_MAX_RATE_BPS + " (100% per period).");
-  var periodsTxt = (periodsStr == null ? "" : String(periodsStr)).trim();
+  var periodsTxt = (periodsStr == null ? "" : String(periodsStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(periodsTxt)) return fail("The period count must be a whole number of periods (e.g. 12) — no decimals, no sign.");
   var periodCount = parseInt(periodsTxt, 10);
   if (periodCount < 1) return fail("A loan schedule needs at least 1 period.");
@@ -2052,7 +2071,7 @@ function buildSavingsPlan(addressRaw, labelRaw, targetStr, periodsStr, minerFeeS
   };
   var lenCheck = checkErgoAddress(addressRaw);
   if (!lenCheck.valid) return fail("The savings address is refused: " + lenCheck.reason);
-  var savingsAddress = typeof addressRaw === "string" ? addressRaw.trim() : "";
+  var savingsAddress = typeof addressRaw === "string" ? addressRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > SAVINGS_MAX_LABEL_CHARS) return fail("The goal name is " + label.length + " characters — keep it to " + SAVINGS_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed savings goal)";
@@ -2062,7 +2081,7 @@ function buildSavingsPlan(addressRaw, labelRaw, targetStr, periodsStr, minerFeeS
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var periodsTxt = (periodsStr == null ? "" : String(periodsStr)).trim();
+  var periodsTxt = (periodsStr == null ? "" : String(periodsStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(periodsTxt)) return fail("The period count must be a whole number of periods (e.g. 12) — no decimals, no sign.");
   var periodCount = parseInt(periodsTxt, 10);
   if (periodCount < 1) return fail("A savings plan needs at least 1 period.");
@@ -2189,21 +2208,21 @@ function buildRewardPlan(poolStr, entriesRaw, minerFeeStr) {
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > REWARD_MAX_STAKERS) return fail("This builder takes at most " + REWARD_MAX_STAKERS + " stakers (you listed " + listedCount + ") — a distribution with more outputs than that belongs in a dedicated pool flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = Object.create(null);
   var network = null;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, stake in ERG (e.g. \"Ada, an address, 50\").");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
-    var stakeStr = parts[2].trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var stakeStr = parts[2].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the staker a name before the first comma, so the plan says who each reward is for.");
     if (name.length > REWARD_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + REWARD_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -2350,7 +2369,7 @@ function buildCrowdfundPlan(creatorRaw, labelRaw, goalStr, entriesRaw, minerFeeS
   };
   var creatorCheck = checkErgoAddress(creatorRaw);
   if (!creatorCheck.valid) return fail("The creator address is refused: " + creatorCheck.reason);
-  var creatorAddress = typeof creatorRaw === "string" ? creatorRaw.trim() : "";
+  var creatorAddress = typeof creatorRaw === "string" ? creatorRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > CROWDFUND_MAX_LABEL_CHARS) return fail("The campaign name is " + label.length + " characters — keep it to " + CROWDFUND_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed campaign)";
@@ -2368,21 +2387,21 @@ function buildCrowdfundPlan(creatorRaw, labelRaw, goalStr, entriesRaw, minerFeeS
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > CROWDFUND_MAX_BACKERS) return fail("This builder takes at most " + CROWDFUND_MAX_BACKERS + " backers (you listed " + listedCount + ") — a campaign with more backers than that belongs in a dedicated crowdfunding contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = Object.create(null);
   var network = creatorCheck.network;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, pledge in ERG (e.g. \"Ada, an address, 50\").");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
-    var pledgeStr = parts[2].trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var pledgeStr = parts[2].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the backer a name before the first comma, so the plan says who each pledge is from.");
     if (name.length > CROWDFUND_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + CROWDFUND_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -2574,7 +2593,7 @@ function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
   };
   var sellerCheck = checkErgoAddress(sellerRaw);
   if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
-  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > AUCTION_MAX_LABEL_CHARS) return fail("The item name is " + label.length + " characters — keep it to " + AUCTION_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed item)";
@@ -2592,21 +2611,21 @@ function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > AUCTION_MAX_BIDDERS) return fail("This builder takes at most " + AUCTION_MAX_BIDDERS + " bidders (you listed " + listedCount + ") — an auction with more bidders than that belongs in a dedicated auction contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = Object.create(null);
   var network = sellerCheck.network;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, bid in ERG (e.g. \"Ada, an address, 50\").");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
-    var bidStr = parts[2].trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var bidStr = parts[2].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the bidder a name before the first comma, so the plan says who each bid is from.");
     if (name.length > AUCTION_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + AUCTION_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -2780,7 +2799,7 @@ function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
    typed in. It fetches nothing, signs nothing, sends nothing. */
 var ESCROW_MAX_LABEL_CHARS = 60;
 function parseEscrowSplitBps(splitStr) {
-  var s = (splitStr == null ? "" : String(splitStr)).trim();
+  var s = (splitStr == null ? "" : String(splitStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 100) return null; /* judged from length before the BigInt parse — a percent needs 6 characters at most */
   if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
   var dot = s.indexOf(".");
@@ -2803,8 +2822,8 @@ function buildEscrowPlan(buyerRaw, sellerRaw, labelRaw, depositStr, outcomeStr, 
   if (!buyerCheck.valid) return fail("The buyer address is refused: " + buyerCheck.reason);
   var sellerCheck = checkErgoAddress(sellerRaw);
   if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
-  var buyerAddress = typeof buyerRaw === "string" ? buyerRaw.trim() : "";
-  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var buyerAddress = typeof buyerRaw === "string" ? buyerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
+  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   if (buyerAddress === sellerAddress) return fail("The buyer and seller are the same address — an escrow settles a deal between two different parties, so a deposit to yourself has nothing to release, refund or split.");
   if (buyerCheck.network !== sellerCheck.network) return fail("The buyer is on " + buyerCheck.network + " but the seller is on " + sellerCheck.network + " — one escrow lives on one network, so both addresses must match.");
   var network = buyerCheck.network;
@@ -2977,21 +2996,21 @@ function buildGroupExpensePlan(labelRaw, entriesRaw, minerFeeStr) {
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > GROUPXP_MAX_PEOPLE) return fail("This builder takes at most " + GROUPXP_MAX_PEOPLE + " people (you listed " + listedCount + ") — a settlement with more people than that belongs in a dedicated group flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = Object.create(null);
   var network = null;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, amount they already paid in ERG (e.g. \"Ada, an address, 50\").");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
-    var paidStr = parts[2].trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var paidStr = parts[2].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the person a name before the first comma, so the plan says who each balance belongs to.");
     if (name.length > GROUPXP_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + GROUPXP_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -3177,20 +3196,20 @@ function buildRoscaPlan(labelRaw, membersRaw, contributionStr, minerFeeStr) {
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > ROSCA_MAX_MEMBERS) return fail("This builder takes at most " + ROSCA_MAX_MEMBERS + " members (you listed " + listedCount + ") — a circle with more members than that belongs in a dedicated group flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = Object.create(null);
   var network = null;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — name, address (e.g. \"Ada, an address\"). The contribution is the same for everyone and goes in its own field.");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the member a name before the comma, so the plan says whose payout round each round is.");
     if (name.length > ROSCA_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + ROSCA_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -3339,7 +3358,7 @@ function buildWaterfallPlan(labelRaw, tiersRaw, revenueStr, minerFeeStr) {
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > WATERFALL_MAX_TIERS) return fail("This builder takes at most " + WATERFALL_MAX_TIERS + " tiers (you listed " + listedCount + ") — a waterfall with more tiers than that belongs in a dedicated contract flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
@@ -3348,14 +3367,14 @@ function buildWaterfallPlan(labelRaw, tiersRaw, revenueStr, minerFeeStr) {
   var restCount = 0;
   var restIndex = -1;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, cap (e.g. \"Ops, an address, 10\"), with the last tier's cap written as the word rest.");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
-    var capRaw = parts[2].replace(/\s+/g, " ").trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var capRaw = parts[2].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the tier a name before the first comma, so the plan says who each tier pays.");
     if (name.length > WATERFALL_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + WATERFALL_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -3487,7 +3506,7 @@ var PRIZESPLIT_MAX_WINNERS = 12;
 var PRIZESPLIT_MAX_NAME_CHARS = 40;
 var PRIZESPLIT_MAX_LABEL_CHARS = 60;
 function parsePrizePercentBps(raw) {
-  var s = (raw == null ? "" : String(raw)).trim();
+  var s = (raw == null ? "" : String(raw)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 100) return null; /* judged from length before the BigInt parse — a percent needs 6 characters at most */
   var m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(s);
   if (!m) return null;
@@ -3521,7 +3540,7 @@ function buildPrizeSplitPlan(labelRaw, winnersRaw, poolStr, minerFeeStr) {
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > PRIZESPLIT_MAX_WINNERS) return fail("This builder takes at most " + PRIZESPLIT_MAX_WINNERS + " places (you listed " + listedCount + ") — a prize table with more places than that belongs in a dedicated contract flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
@@ -3529,14 +3548,14 @@ function buildPrizeSplitPlan(labelRaw, winnersRaw, poolStr, minerFeeStr) {
   var network = null;
   var shareTotalBps = 0n;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, percent (e.g. \"First place, an address, 50\").");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
-    var pctRaw = parts[2].replace(/\s+/g, " ").trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var pctRaw = parts[2].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the place a name before the first comma, so the plan says who each share pays.");
     if (name.length > PRIZESPLIT_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + PRIZESPLIT_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -3693,7 +3712,7 @@ function buildLoanSyndicatePlan(labelRaw, borrowerRaw, lendersRaw, repaymentStr,
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > SYNDICATE_MAX_LENDERS) return fail("This builder takes at most " + SYNDICATE_MAX_LENDERS + " lenders (you listed " + listedCount + ") — a syndicate with more lenders than that belongs in a dedicated contract flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
@@ -3701,14 +3720,14 @@ function buildLoanSyndicatePlan(labelRaw, borrowerRaw, lendersRaw, repaymentStr,
   var network = null;
   var totalFundedNano = 0n;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, amount funded in ERG (e.g. \"Alice, an address, 60\").");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
-    var amtRaw = parts[2].replace(/\s+/g, " ").trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var amtRaw = parts[2].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the lender a name before the first comma, so the plan says who funded what.");
     if (name.length > SYNDICATE_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + SYNDICATE_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -3726,7 +3745,7 @@ function buildLoanSyndicatePlan(labelRaw, borrowerRaw, lendersRaw, repaymentStr,
     entries.push({ name: name, address: addr, network: check.network, type: check.type, line: lineNo, fundedNano: BigInt(funded) });
   }
   if (entries.length < 2) return fail("A syndicate needs at least two lenders — a loan from one lender is a plain loan, which tool 119 schedules and this builder does not fee.");
-  var borrower = (borrowerRaw == null ? "" : String(borrowerRaw)).trim();
+  var borrower = (borrowerRaw == null ? "" : String(borrowerRaw)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   var bcheck = checkErgoAddress(borrower);
   if (!bcheck.valid) return fail("The borrower's address is refused: " + bcheck.reason);
   if (bcheck.network !== network) return fail("The borrower is a " + bcheck.network + " address but the lenders are " + network + " — one syndicate lives on one network, so all addresses must match.");
@@ -3860,13 +3879,13 @@ function buildTieredCommissionPlan(labelRaw, sellerRaw, agentRaw, bracketsRaw, s
   var prevCapNano = 0n;
   var restCount = 0;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — cap in ERG (or the word rest), rate percent (e.g. \"100, 5\").");
-    var capRaw = parts[0].replace(/\s+/g, " ").trim();
-    var rateRaw = parts[1].replace(/\s+/g, " ").trim();
+    var capRaw = parts[0].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var rateRaw = parts[1].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     var isRest = /^rest$/i.test(capRaw);
     var capNano = null;
     if (isRest) { restCount++; }
@@ -3885,10 +3904,10 @@ function buildTieredCommissionPlan(labelRaw, sellerRaw, agentRaw, bracketsRaw, s
   if (entries.length < 2) return fail("A tiered commission needs at least two brackets — a single flat rate is a plain royalty split, which tool 116 builds and this builder does not fee.");
   if (entries.length > TIERCOMM_MAX_BRACKETS) return fail("This builder takes at most " + TIERCOMM_MAX_BRACKETS + " brackets (you listed " + entries.length + ") — a commission table with more brackets than that belongs in a dedicated contract flow, not a copyable plan.");
   if (restCount !== 1 || !entries[entries.length - 1].isRest) return fail("The last bracket must be the word rest, and it must be the only rest bracket — without an uncapped final bracket, sales above the highest cap would earn no commission and the plan would silently drop them.");
-  var seller = (sellerRaw == null ? "" : String(sellerRaw)).trim();
+  var seller = (sellerRaw == null ? "" : String(sellerRaw)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   var scheck = checkErgoAddress(seller);
   if (!scheck.valid) return fail("The seller's address is refused: " + scheck.reason);
-  var agent = (agentRaw == null ? "" : String(agentRaw)).trim();
+  var agent = (agentRaw == null ? "" : String(agentRaw)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   var acheck = checkErgoAddress(agent);
   if (!acheck.valid) return fail("The agent's address is refused: " + acheck.reason);
   if (acheck.network !== scheck.network) return fail("The agent is a " + acheck.network + " address but the seller is " + scheck.network + " — one commission plan lives on one network, so both addresses must match.");
@@ -4023,7 +4042,7 @@ function buildCascadingRoyaltyPlan(labelRaw, sellerRaw, recipientsRaw, priceStr,
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var seller = (sellerRaw == null ? "" : String(sellerRaw)).trim();
+  var seller = (sellerRaw == null ? "" : String(sellerRaw)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   var scheck = checkErgoAddress(seller);
   if (!scheck.valid) return fail("The seller's address is refused: " + scheck.reason);
   var network = scheck.network;
@@ -4035,20 +4054,20 @@ function buildCascadingRoyaltyPlan(labelRaw, sellerRaw, recipientsRaw, priceStr,
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > CASROY_MAX_RECIPIENTS) return fail("This builder takes at most " + CASROY_MAX_RECIPIENTS + " recipients (you listed " + listedCount + ") — a royalty chain longer than that belongs in a dedicated contract flow, not a copyable plan.");
   var entries = [];
   var seenNames = Object.create(null);
   var seenAddrs = {};
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, percent of the remainder (e.g. \"Alice, 9f…, 5\").");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
-    var rateRaw = parts[2].replace(/\s+/g, " ").trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var rateRaw = parts[2].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " has no name — every royalty recipient needs a name so the plan can be checked against your records.");
     if (name.length > CASROY_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + CASROY_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -4178,7 +4197,7 @@ function buildDutchAuctionPlan(labelRaw, sellerRaw, startStr, floorStr, stepsStr
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > DUTCH_MAX_LABEL_CHARS) return fail("The item name is " + label.length + " characters — keep it to " + DUTCH_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed item)";
-  var seller = (sellerRaw == null ? "" : String(sellerRaw)).trim();
+  var seller = (sellerRaw == null ? "" : String(sellerRaw)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   var scheck = checkErgoAddress(seller);
   if (!scheck.valid) return fail("The seller's address is refused: " + scheck.reason);
   var network = scheck.network;
@@ -4192,12 +4211,12 @@ function buildDutchAuctionPlan(labelRaw, sellerRaw, startStr, floorStr, stepsStr
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var stepsTxt = (stepsStr == null ? "" : String(stepsStr)).trim();
+  var stepsTxt = (stepsStr == null ? "" : String(stepsStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(stepsTxt)) return fail("The step count must be a whole number of steps (e.g. 6) — no decimals, no sign.");
   var stepCount = parseInt(stepsTxt, 10);
   if (stepCount < 2) return fail("A Dutch auction needs at least 2 steps — with one step there is no descent to plan, just a fixed price (tool 112 builds that invoice).");
   if (stepCount > DUTCH_MAX_STEPS) return fail("This builder takes at most " + DUTCH_MAX_STEPS + " steps (you asked for " + stepCount + ") — a longer descent belongs in a dedicated auction contract, not a copyable plan.");
-  var saleTxt = (saleStepStr == null ? "" : String(saleStepStr)).trim();
+  var saleTxt = (saleStepStr == null ? "" : String(saleStepStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(saleTxt)) return fail("The sale step must be a whole step number from 0 to " + stepCount + " — no decimals, no sign.");
   var saleStep = parseInt(saleTxt, 10);
   if (saleStep > stepCount) return fail("The sale step (" + saleStep + ") is past the last step (" + stepCount + ") — the price reaches the floor at step " + stepCount + " and falls no further.");
@@ -4300,7 +4319,7 @@ function buildVickreyPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
   };
   var sellerCheck = checkErgoAddress(sellerRaw);
   if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
-  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > VICKREY_MAX_LABEL_CHARS) return fail("The item name is " + label.length + " characters — keep it to " + VICKREY_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed item)";
@@ -4318,21 +4337,21 @@ function buildVickreyPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > VICKREY_MAX_BIDDERS) return fail("This builder takes at most " + VICKREY_MAX_BIDDERS + " bidders (you listed " + listedCount + ") — an auction with more bidders than that belongs in a dedicated auction contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = Object.create(null);
   var network = sellerCheck.network;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, bid in ERG (e.g. \"Ada, an address, 50\").");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
-    var bidStr = parts[2].trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var bidStr = parts[2].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the bidder a name before the first comma, so the plan says who each bid is from.");
     if (name.length > VICKREY_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + VICKREY_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -4554,7 +4573,7 @@ function buildLaunchpadPlan(projectRaw, labelRaw, capStr, entriesRaw, minerFeeSt
   };
   var projectCheck = checkErgoAddress(projectRaw);
   if (!projectCheck.valid) return fail("The project address is refused: " + projectCheck.reason);
-  var projectAddress = typeof projectRaw === "string" ? projectRaw.trim() : "";
+  var projectAddress = typeof projectRaw === "string" ? projectRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > LAUNCHPAD_MAX_LABEL_CHARS) return fail("The sale name is " + label.length + " characters — keep it to " + LAUNCHPAD_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed sale)";
@@ -4572,21 +4591,21 @@ function buildLaunchpadPlan(projectRaw, labelRaw, capStr, entriesRaw, minerFeeSt
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > LAUNCHPAD_MAX_SUBSCRIBERS) return fail("This builder takes at most " + LAUNCHPAD_MAX_SUBSCRIBERS + " subscribers (you listed " + listedCount + ") — a sale with more subscribers than that belongs in a dedicated launchpad contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = Object.create(null);
   var network = projectCheck.network;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, pledge in ERG (e.g. \"Ada, an address, 50\").");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
-    var pledgeStr = parts[2].trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var pledgeStr = parts[2].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the subscriber a name before the first comma, so the plan says who each pledge is from.");
     if (name.length > LAUNCHPAD_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + LAUNCHPAD_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -4772,7 +4791,7 @@ function buildReverseAuctionPlan(buyerRaw, labelRaw, budgetStr, entriesRaw, mine
   };
   var buyerCheck = checkErgoAddress(buyerRaw);
   if (!buyerCheck.valid) return fail("The buyer address is refused: " + buyerCheck.reason);
-  var buyerAddress = typeof buyerRaw === "string" ? buyerRaw.trim() : "";
+  var buyerAddress = typeof buyerRaw === "string" ? buyerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > REVAUCTION_MAX_LABEL_CHARS) return fail("The job name is " + label.length + " characters — keep it to " + REVAUCTION_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
   if (label === "") label = "(unnamed job)";
@@ -4791,21 +4810,21 @@ function buildReverseAuctionPlan(buyerRaw, labelRaw, budgetStr, entriesRaw, mine
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > REVAUCTION_MAX_BIDDERS) return fail("This builder takes at most " + REVAUCTION_MAX_BIDDERS + " bidders (you listed " + listedCount + ") — a procurement with more bidders than that belongs in a dedicated procurement contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
   var seenNames = Object.create(null);
   var network = buyerCheck.network;
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, bid in ERG (e.g. \"Ada, an address, 50\").");
     var name = planText(parts[0]);
-    var addr = parts[1].trim();
-    var bidStr = parts[2].trim();
+    var addr = parts[1].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var bidStr = parts[2].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the provider a name before the first comma, so the plan says who each bid is from.");
     if (name.length > REVAUCTION_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + REVAUCTION_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -5009,10 +5028,10 @@ function buildFactoringPlan(sellerRaw, factorRaw, labelRaw, faceStr, advancePctS
   };
   var sellerCheck = checkErgoAddress(sellerRaw);
   if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
-  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var factorCheck = checkErgoAddress(factorRaw);
   if (!factorCheck.valid) return fail("The factor address is refused: " + factorCheck.reason);
-  var factorAddress = typeof factorRaw === "string" ? factorRaw.trim() : "";
+  var factorAddress = typeof factorRaw === "string" ? factorRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   if (factorCheck.network !== sellerCheck.network) return fail("The factor is a " + factorCheck.network + " address but the seller is " + sellerCheck.network + " — one factoring plan lives on one network, so every address must match.");
   if (factorAddress === sellerAddress) return fail("The seller and the factor are the same address — factoring is a sale of the receivable to someone else, so the two sides must differ.");
   var network = sellerCheck.network;
@@ -5147,10 +5166,10 @@ function buildClaimPlan(claimantRaw, insurerRaw, labelRaw, claimStr, deductibleS
   };
   var claimantCheck = checkErgoAddress(claimantRaw);
   if (!claimantCheck.valid) return fail("The claimant address is refused: " + claimantCheck.reason);
-  var claimantAddress = typeof claimantRaw === "string" ? claimantRaw.trim() : "";
+  var claimantAddress = typeof claimantRaw === "string" ? claimantRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var insurerCheck = checkErgoAddress(insurerRaw);
   if (!insurerCheck.valid) return fail("The insurer address is refused: " + insurerCheck.reason);
-  var insurerAddress = typeof insurerRaw === "string" ? insurerRaw.trim() : "";
+  var insurerAddress = typeof insurerRaw === "string" ? insurerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   if (insurerCheck.network !== claimantCheck.network) return fail("The insurer is a " + insurerCheck.network + " address but the claimant is " + claimantCheck.network + " — one claim settlement lives on one network, so every address must match.");
   if (insurerAddress === claimantAddress) return fail("The claimant and the insurer are the same address — a claim is settled between two different sides, so the two addresses must differ.");
   var network = claimantCheck.network;
@@ -5288,10 +5307,10 @@ function buildDepositPlan(tenantRaw, landlordRaw, labelRaw, depositStr, deductio
   };
   var tenantCheck = checkErgoAddress(tenantRaw);
   if (!tenantCheck.valid) return fail("The tenant address is refused: " + tenantCheck.reason);
-  var tenantAddress = typeof tenantRaw === "string" ? tenantRaw.trim() : "";
+  var tenantAddress = typeof tenantRaw === "string" ? tenantRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var landlordCheck = checkErgoAddress(landlordRaw);
   if (!landlordCheck.valid) return fail("The landlord address is refused: " + landlordCheck.reason);
-  var landlordAddress = typeof landlordRaw === "string" ? landlordRaw.trim() : "";
+  var landlordAddress = typeof landlordRaw === "string" ? landlordRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   if (landlordCheck.network !== tenantCheck.network) return fail("The landlord is a " + landlordCheck.network + " address but the tenant is " + tenantCheck.network + " — one deposit settlement lives on one network, so every address must match.");
   if (landlordAddress === tenantAddress) return fail("The tenant and the landlord are the same address — a deposit is settled between two different sides, so the two addresses must differ.");
   var network = tenantCheck.network;
@@ -5308,13 +5327,13 @@ function buildDepositPlan(tenantRaw, landlordRaw, labelRaw, depositStr, deductio
   var entries = [];
   var seenNames = Object.create(null);
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — name, amount (e.g. \"Cleaning, 40\").");
     var name = planText(parts[0]);
-    var amtRaw = parts[1].replace(/\s+/g, " ").trim();
+    var amtRaw = parts[1].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the deduction a name before the comma, so the plan says what each deduction is for.");
     if (name.length > DEPOSIT_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + DEPOSIT_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -5476,7 +5495,7 @@ var MATCH_MAX_NAME_CHARS = 40;
 var MATCH_MAX_LABEL_CHARS = 60;
 var MATCH_MAX_BPS = 100000n; /* 1000% — a 10:1 match is the ceiling */
 function parseMatchBps(percentStr) {
-  var s = (percentStr == null ? "" : String(percentStr)).trim();
+  var s = (percentStr == null ? "" : String(percentStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 100) return null; /* judged from length before the BigInt parse — a percent needs 6 characters at most */
   if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
   var dot = s.indexOf(".");
@@ -5492,10 +5511,10 @@ function buildMatchPlan(charityRaw, matcherRaw, labelRaw, percentStr, capStr, do
   };
   var charityCheck = checkErgoAddress(charityRaw);
   if (!charityCheck.valid) return fail("The charity address is refused: " + charityCheck.reason);
-  var charityAddress = typeof charityRaw === "string" ? charityRaw.trim() : "";
+  var charityAddress = typeof charityRaw === "string" ? charityRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var matcherCheck = checkErgoAddress(matcherRaw);
   if (!matcherCheck.valid) return fail("The matcher address is refused: " + matcherCheck.reason);
-  var matcherAddress = typeof matcherRaw === "string" ? matcherRaw.trim() : "";
+  var matcherAddress = typeof matcherRaw === "string" ? matcherRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   if (matcherCheck.network !== charityCheck.network) return fail("The matcher is a " + matcherCheck.network + " address but the charity is " + charityCheck.network + " — one matching campaign lives on one network, so every address must match.");
   if (matcherAddress === charityAddress) return fail("The charity and the matcher are the same address — a match is pledged by a different side from the one that receives it, so the two addresses must differ.");
   var network = charityCheck.network;
@@ -5514,13 +5533,13 @@ function buildMatchPlan(charityRaw, matcherRaw, labelRaw, percentStr, capStr, do
   var entries = [];
   var seenNames = Object.create(null);
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 2) return fail("Line " + lineNo + " is refused: use exactly one comma — name, amount (e.g. \"Alice, 100\").");
     var name = planText(parts[0]);
-    var amtRaw = parts[1].replace(/\s+/g, " ").trim();
+    var amtRaw = parts[1].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the donor a name before the comma, so the plan says whose gift unlocked each part of the match.");
     if (name.length > MATCH_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + MATCH_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -5701,7 +5720,7 @@ var GROUPBUY_MAX_QTY = 1000000n;
 var GROUPBUY_MAX_THRESHOLD = 1000000000n;
 var GROUPBUY_MAX_BPS = 9999n; /* a discount stays below 100% — 100% off is free, not a sale */
 function parseGroupBuyBps(percentStr) {
-  var s = (percentStr == null ? "" : String(percentStr)).trim();
+  var s = (percentStr == null ? "" : String(percentStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 100) return null; /* judged from length before the BigInt parse — a percent needs 6 characters at most */
   if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
   var dot = s.indexOf(".");
@@ -5712,7 +5731,7 @@ function parseGroupBuyBps(percentStr) {
   return bps;
 }
 function parseGroupBuyCount(countStr, max) {
-  var s = (countStr == null ? "" : String(countStr)).trim();
+  var s = (countStr == null ? "" : String(countStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 100) return null; /* judged from length before the BigInt parse — every plan cap is 7 digits at most */
   if (!/^\d+$/.test(s)) return null;
   var v = BigInt(s);
@@ -5725,7 +5744,7 @@ function buildGroupBuyPlan(sellerRaw, labelRaw, unitPriceStr, discountPercentStr
   };
   var sellerCheck = checkErgoAddress(sellerRaw);
   if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
-  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var network = sellerCheck.network;
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > GROUPBUY_MAX_LABEL_CHARS) return fail("The item name is " + label.length + " characters — keep it to " + GROUPBUY_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
@@ -5748,20 +5767,20 @@ function buildGroupBuyPlan(sellerRaw, labelRaw, unitPriceStr, discountPercentStr
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > GROUPBUY_MAX_BUYERS) return fail("This builder takes at most " + GROUPBUY_MAX_BUYERS + " buyers (you listed " + listedCount + ") — a larger group belongs in a dedicated storefront flow, not a copyable plan.");
   var entries = [];
   var seenNames = Object.create(null);
   var seenAddresses = {};
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, quantity (e.g. \"Alice, 9f…, 3\").");
     var name = planText(parts[0]);
-    var addrRaw = parts[1].replace(/\s+/g, " ").trim();
-    var qtyRaw = parts[2].replace(/\s+/g, " ").trim();
+    var addrRaw = parts[1].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var qtyRaw = parts[2].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the buyer a name before the first comma, so the plan says who ordered each quantity.");
     if (name.length > GROUPBUY_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + GROUPBUY_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -5946,7 +5965,7 @@ function buildGiftFundPlan(sellerRaw, labelRaw, priceStr, contributorsRaw, miner
   };
   var sellerCheck = checkErgoAddress(sellerRaw);
   if (!sellerCheck.valid) return fail("The seller address is refused: " + sellerCheck.reason);
-  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.trim() : "";
+  var sellerAddress = typeof sellerRaw === "string" ? sellerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var network = sellerCheck.network;
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > GIFTFUND_MAX_LABEL_CHARS) return fail("The gift name is " + label.length + " characters — keep it to " + GIFTFUND_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
@@ -5965,20 +5984,20 @@ function buildGiftFundPlan(sellerRaw, labelRaw, priceStr, contributorsRaw, miner
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > GIFTFUND_MAX_CONTRIBUTORS) return fail("This builder takes at most " + GIFTFUND_MAX_CONTRIBUTORS + " contributors (you listed " + listedCount + ") — a larger group belongs in a dedicated registry flow, not a copyable plan.");
   var entries = [];
   var seenNames = Object.create(null);
   var seenAddresses = {};
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, contribution in ERG (e.g. \"Alice, 9f…, 25\").");
     var name = planText(parts[0]);
-    var addrRaw = parts[1].replace(/\s+/g, " ").trim();
-    var amtRaw = parts[2].replace(/\s+/g, " ").trim();
+    var addrRaw = parts[1].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var amtRaw = parts[2].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the contributor a name before the first comma, so the plan says who chipped in each amount.");
     if (name.length > GIFTFUND_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + GIFTFUND_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -6168,7 +6187,7 @@ function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersR
   };
   var payerCheck = checkErgoAddress(payerRaw);
   if (!payerCheck.valid) return fail("The payer address is refused: " + payerCheck.reason);
-  var payerAddress = typeof payerRaw === "string" ? payerRaw.trim() : "";
+  var payerAddress = typeof payerRaw === "string" ? payerRaw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   var network = payerCheck.network;
   var label = planText((labelRaw == null ? "" : String(labelRaw)));
   if (label.length > DIVIDEND_MAX_LABEL_CHARS) return fail("The distribution name is " + label.length + " characters — keep it to " + DIVIDEND_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
@@ -6179,7 +6198,7 @@ function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersR
   var pool = ergToNano(poolStr);
   if (pool === null || BigInt(pool) <= 0n) return fail("The dividend pool must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit) — an empty pool distributes nothing.");
   var poolNano = BigInt(pool);
-  var pctRaw = (withholdingStr == null ? "" : String(withholdingStr)).trim();
+  var pctRaw = (withholdingStr == null ? "" : String(withholdingStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^[0-9]+$/.test(pctRaw)) return fail("The withholding percent must be a whole number from 0 to 100 (e.g. \"10\" for 10%) — fractional percents are refused so the withholding stays exact to the nanoERG.");
   if (pctRaw.length > 100) return fail("The withholding percent is refused: it is judged from its length before it is parsed — at most 100 digits, far beyond the 100% maximum (3 digits).");
   var pct = BigInt(pctRaw);
@@ -6192,20 +6211,20 @@ function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersR
      for every listed line. The count is the entries the loop
      would build, so the refusal below is the loop's own. */
   var listedCount = 0;
-  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
+  for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") listedCount++;
   if (listedCount > DIVIDEND_MAX_HOLDERS) return fail("This builder takes at most " + DIVIDEND_MAX_HOLDERS + " holders (you listed " + listedCount + ") — a larger register belongs in a dedicated distribution flow, not a copyable plan.");
   var entries = [];
   var seenNames = Object.create(null);
   var seenAddresses = {};
   for (var li = 0; li < rawLines.length; li++) {
-    var line = rawLines[li].trim();
+    var line = rawLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (line === "") continue;
     var lineNo = li + 1;
     var parts = line.split(",");
     if (parts.length !== 3) return fail("Line " + lineNo + " is refused: use exactly two commas — name, address, shares (e.g. \"Alice, 9f…, 300\").");
     var name = planText(parts[0]);
-    var addrRaw = parts[1].replace(/\s+/g, " ").trim();
-    var sharesRaw = parts[2].replace(/\s+/g, " ").trim();
+    var addrRaw = parts[1].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+    var sharesRaw = parts[2].replace(/[\s\u0085]+/g, " ").replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (name === "") return fail("Line " + lineNo + " is refused: give the holder a name before the first comma, so the plan says who receives each payout.");
     if (name.length > DIVIDEND_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + DIVIDEND_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
     var nameKey = planNameKey(name);
@@ -6355,7 +6374,7 @@ var ERGOTREE_SIZE_FLAG = 0x08;
 var ERGOTREE_SEGREGATION_FLAG = 0x10;
 var P2SH_HASH_BYTES = 24;
 function hexToBytes(hexStr) {
-  var s = (hexStr == null ? "" : String(hexStr)).trim().toLowerCase();
+  var s = (hexStr == null ? "" : String(hexStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (s.indexOf("0x") === 0) s = s.slice(2);
   if (s.length === 0 || s.length % 2 !== 0 || !/^[0-9a-f]+$/.test(s)) return null;
   var out = new Uint8Array(s.length / 2);
@@ -6393,7 +6412,7 @@ function analyzeErgoTree(treeHex, networkStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, header: null, version: null, sizeFlag: false, segregated: false, declaredSize: null, propositionLength: null, isP2PK: false, publicKey: null, address: null, p2shAddress: null, network: null };
   };
-  var net = (networkStr == null ? "" : String(networkStr)).trim().toLowerCase();
+  var net = (networkStr == null ? "" : String(networkStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (net !== "mainnet" && net !== "testnet") return fail("Unknown network — an ErgoTree carries no network of its own, so pick mainnet or testnet; the same script has a different address on each.");
   var network = net === "mainnet" ? "Mainnet" : "Testnet";
   var bytes = hexToBytes(treeHex);
@@ -6612,9 +6631,9 @@ function buildErgoTreeGuard(keysStr, modeStr, kStr, networkStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, network: null, mode: null, kind: null, k: null, keyCount: 0, keys: [], ergoTree: null, propositionHex: null, treeBytes: null, p2shAddress: null, p2sAddress: null, verdict: null };
   };
-  var net = (networkStr == null ? "" : String(networkStr)).trim().toLowerCase();
+  var net = (networkStr == null ? "" : String(networkStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (net !== "mainnet" && net !== "testnet") return fail("Unknown network — pick mainnet or testnet. The ErgoTree itself is the same on both; only the addresses derived from it differ.");
-  var mode = (modeStr == null ? "" : String(modeStr)).trim().toLowerCase();
+  var mode = (modeStr == null ? "" : String(modeStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (mode !== "single" && mode !== "all" && mode !== "any" && mode !== "threshold") return fail("Unknown spending rule — pick single key, all of the keys, any one key, or a k-of-n threshold.");
   var tokens = (keysStr == null ? "" : String(keysStr)).split(/[\s,;\u0085]+/).filter(function (t) { return t.length > 0; });
   if (tokens.length === 0) return fail("Enter at least one compressed public key (66 hex characters starting 02 or 03), one per line — public keys only: never enter a private key or seed phrase anywhere, including here. Tools 8 and 32 read a key out of an address and check a key, and every signer's wallet shows its own public key.");
@@ -6638,7 +6657,7 @@ function buildErgoTreeGuard(keysStr, modeStr, kStr, networkStr) {
   if ((mode === "all" || mode === "any") && count < 2) return fail("An " + (mode === "all" ? "all-of" : "any-of") + " guard needs at least two keys — with one key there is nothing to combine; use the single-key rule (or tool 19) instead.");
   if (mode === "threshold") {
     if (count < 2) return fail("A k-of-n threshold needs at least two keys — with one key there is no quorum to set; use the single-key rule instead.");
-    var ks = (kStr == null ? "" : String(kStr)).trim();
+    var ks = (kStr == null ? "" : String(kStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (!/^\d+$/.test(ks)) return fail("Enter the threshold k as a whole number — how many of the " + count + " keys must sign together (1 to " + count + ").");
     k = parseInt(ks, 10);
     if (k < 1 || k > count) return fail("A threshold of " + k + "-of-" + count + " can never be the guard it claims to be — a threshold needs 1 <= k <= the number of keys (" + count + ").");
@@ -6837,7 +6856,7 @@ function replaceErgoTreeConstant(treeHex, indexStr, valueSpec, networkStr) {
   }
   if (offset >= bytes.length) return fail("The constants section consumes the whole tree — there is no proposition template after the " + count + " constants, and a segregated tree is a template plus its constants, so these bytes do not parse as one.");
   var templateStart = offset;
-  var idxText = indexStr == null ? "" : String(indexStr).trim();
+  var idxText = indexStr == null ? "" : String(indexStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(idxText)) return fail("Give the placeholder number of the constant to replace — a whole number, 0 for the first constant (tool 93 lists them by number). Got \"" + boundedEcho(indexStr == null ? "" : String(indexStr)) + "\".");
   var sigIdx = idxText.replace(/^0+/, "");
   if (sigIdx.length > 20) return fail("This tree segregates " + count + " constant(s), numbered 0 to " + (count - 1) + " — there is no constant with " + sigIdx.length + " digits to replace.");
@@ -6933,12 +6952,12 @@ function buildSegregatedTree(templateHex, constantsText, sizeMode, networkStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, network: null, header: null, sizeFlag: false, declaredSize: null, constantCount: null, constants: null, sectionByteLength: null, templateHex: null, templateByteLength: null, treeHex: null, byteLength: null, p2sAddress: null, verdict: null };
   };
-  var net = (networkStr == null ? "" : String(networkStr)).trim().toLowerCase();
+  var net = (networkStr == null ? "" : String(networkStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (net !== "mainnet" && net !== "testnet") return fail("Unknown network — pick mainnet or testnet. The ErgoTree itself is the same on both; only the addresses derived from it differ.");
-  var templateBytes = hexToBytes(templateHex == null ? "" : String(templateHex).trim().toLowerCase());
+  var templateBytes = hexToBytes(templateHex == null ? "" : String(templateHex).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase());
   if (!templateBytes) return fail("Give the proposition template as hex — the bytes tool 93 hands back from a segregated tree, or any proposition bytes you want carried as the template. A template is never empty: a segregated tree is constants plus the script that refers to them.");
   if (templateBytes.length > 100000) return fail("Implausible template (" + templateBytes.length + " bytes) — proposition templates are scripts, not data blobs.");
-  var lines = String(constantsText == null ? "" : constantsText).split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = String(constantsText == null ? "" : constantsText).split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("Give at least one constant, one per line — a segregated tree with no constants is not a segregated tree (tool 93 refuses to read one back, and so does the reference). For a tree with its constants inline, tools 10/16/19/92 build it directly.");
   if (lines.length > 10000) return fail("Implausible constant count (" + lines.length + ") — a template's constants are its parameters, not a data table.");
   var constants = [];
@@ -6951,7 +6970,7 @@ function buildSegregatedTree(templateHex, constantsText, sizeMode, networkStr) {
   }
   var countBytes = writeVlqBig(BigInt(lines.length));
   var section = countBytes.concat(sectionBody);
-  var sizeFlag = String(sizeMode == null ? "" : sizeMode).trim().toLowerCase().indexOf("size") === 0;
+  var sizeFlag = String(sizeMode == null ? "" : sizeMode).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase().indexOf("size") === 0;
   var header = 0x10 | (sizeFlag ? 0x08 : 0x00);
   var bodyLength = section.length + templateBytes.length;
   var head = [header];
@@ -7055,7 +7074,7 @@ function analyzeMerkle(leavesText, indexText, expectedText) {
   var fail = function (reason) {
     return { valid: false, reason: reason, leafCount: null, leafHashes: null, rootHex: null, proofIndex: null, proofLevels: null, proofText: null, proofChecksOut: false, expectedRoot: null, matchesExpected: null, verdict: null };
   };
-  var lines = String(leavesText == null ? "" : leavesText).split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = String(leavesText == null ? "" : leavesText).split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("Give at least one leaf, one per line, as hex — for a block's transactions root each leaf is one transaction's 32-byte ID. An empty tree is not built here: the reference root for zero leaves is 32 zero bytes (and the genesis blocks' special empty root is Blake2b-256 of nothing, 0e5751c0…).");
   if (lines.length > 10000) return fail("Implausible leaf count (" + lines.length + ") — a Merkle tree over a pasted list is a checking tool, not a block builder.");
   var datas = [];
@@ -7064,7 +7083,7 @@ function analyzeMerkle(leavesText, indexText, expectedText) {
     if (!b) return fail("Leaf " + (i + 1) + " is not valid hex (even length, hex characters only): \"" + lines[i].slice(0, 48) + "\".");
     datas.push(b);
   }
-  var idxStr = String(indexText == null ? "" : indexText).trim();
+  var idxStr = String(indexText == null ? "" : indexText).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   var idx = 0;
   if (idxStr !== "") {
     if (!/^[0-9]+$/.test(idxStr)) return fail("The leaf number to prove must be a whole number, 1 for the first leaf.");
@@ -7078,7 +7097,7 @@ function analyzeMerkle(leavesText, indexText, expectedText) {
   var levels = merkleProofLevels(tree, idx);
   var folded = bytesToHex(foldMerkleProof(datas[idx], levels));
   if (folded !== rootHex) return fail("Internal check failed: the proof folded back up does not reproduce the tree root — refusing to show it rather than risk a bad proof.");
-  var expected = String(expectedText == null ? "" : expectedText).trim().toLowerCase();
+  var expected = String(expectedText == null ? "" : expectedText).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   var expectedRoot = null, matchesExpected = null;
   if (expected !== "") {
     var eb = hexToBytes(expected);
@@ -7115,11 +7134,11 @@ function verifyMerkleProof(leafText, levelsText, rootText) {
   var fail = function (reason) {
     return { valid: false, reason: reason, verified: false, computedRootHex: null, leafHashHex: null, levelCount: null, verdict: null };
   };
-  var leaf = hexToBytes(leafText == null ? "" : String(leafText).trim());
+  var leaf = hexToBytes(leafText == null ? "" : String(leafText).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
   if (!leaf) return fail("Give the leaf data as hex — for a block proof that is the transaction's 32-byte ID, exactly as it was a leaf of the tree.");
-  var rootBytes = hexToBytes(rootText == null ? "" : String(rootText).trim());
+  var rootBytes = hexToBytes(rootText == null ? "" : String(rootText).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
   if (!rootBytes || rootBytes.length !== 32) return fail("Give the expected root as exactly 32 bytes of hex (64 characters) — a Merkle root is one Blake2b-256 digest.");
-  var lines = String(levelsText == null ? "" : levelsText).split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = String(levelsText == null ? "" : levelsText).split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("Give at least one proof level, one per line: \"L <sibling hash hex>\" when the proven node sits on the left, \"R <sibling hash hex>\" when it sits on the right, or EMPTY for a level whose sibling is the tree's empty slot.");
   if (lines.length > MERKLE_PROOF_MAX_LEVELS) return fail("Implausible proof length (" + lines.length + " levels) — a proof carries one level per doubling of the tree, so " + MERKLE_PROOF_MAX_LEVELS + " levels already span a tree of 2^64 leaves and no real proof comes close; check the paste is a single proof, one level per line.");
   var levels = [];
@@ -7174,7 +7193,7 @@ function decodeErgoAddress(raw) {
   var check = checkErgoAddress(raw);
   out.network = check.network; out.type = check.type; out.typeCode = check.typeCode; out.prefix = check.prefix;
   if (!check.valid) { out.reason = check.reason; return out; }
-  var decoded = base58Decode(String(raw).trim());
+  var decoded = base58Decode(String(raw).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
   var content = decoded.subarray(1, decoded.length - 4);
   out.valid = true;
   out.reason = check.reason;
@@ -7335,7 +7354,7 @@ function convertAddressNetwork(raw) {
   var out = { valid: false, reason: null, network: null, type: null, typeCode: null, converted: null, convertedNetwork: null, contentHex: null };
   out.network = check.network; out.type = check.type; out.typeCode = check.typeCode;
   if (!check.valid) { out.reason = check.reason; return out; }
-  var decoded = base58Decode(String(raw).trim());
+  var decoded = base58Decode(String(raw).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
   var content = decoded.subarray(1, decoded.length - 4);
   var newPrefix = (check.network === "Mainnet" ? 0x10 : 0x00) | check.typeCode;
   out.converted = addressFromContent(newPrefix, content);
@@ -7380,7 +7399,7 @@ function summarizeAddressSet(addressesText) {
   var fail = function (reason) {
     return { valid: false, reason: reason, entries: null, invalid: null, lineCount: null, validCount: null, distinctCount: null, duplicateCount: null, invalidCount: null, mainnetCount: null, testnetCount: null, p2pkCount: null, p2shCount: null, p2sCount: null, mixedNetworks: null, crossNetworkPairs: null, verdict: null };
   };
-  var lines = (addressesText == null ? "" : String(addressesText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (addressesText == null ? "" : String(addressesText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste at least one Ergo address, one address per line — a payout list, an address-book export, or the addresses tool 31 derives. This summarizes the addresses you paste; it fetches nothing and says nothing about any address's balance.");
   if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool summarizes at most 100 addresses at a time, so a pasted list stays reviewable line by line.");
   var entries = [];
@@ -7932,7 +7951,7 @@ function convertAddressListNetwork(addressesText, targetStr) {
    ERG to pay out, which the explorer page also shows. Exact BigInt
    maths throughout. */
 function parseBabelPrice(priceStr) {
-  var s = (priceStr == null ? "" : String(priceStr)).trim();
+  var s = (priceStr == null ? "" : String(priceStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s.length > 100) return null; /* judged from length before the BigInt parse — a nanoERG price is 17 digits at most */
   if (!/^\d+$/.test(s)) return null;
   return BigInt(s) > 0n ? s : null;
@@ -7978,10 +7997,10 @@ function analyzeBabelFee(feeStr, priceStr, decStr) {
    box IDs exactly under this page's own Blake2b-256 — and cross-checked
    with an independent Python (hashlib) build on 2026-10-07. */
 function analyzeBoxId(boxHex, expectedStr) {
-  var cleaned = boxHex == null ? "" : String(boxHex).replace(/\s+/g, "");
+  var cleaned = boxHex == null ? "" : String(boxHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   if (!bytes) return null;
-  var expected = expectedStr == null ? "" : String(expectedStr).trim().toLowerCase();
+  var expected = expectedStr == null ? "" : String(expectedStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (expected.indexOf("0x") === 0) expected = expected.slice(2);
   if (expected !== "" && !/^[0-9a-f]{64}$/.test(expected)) return null;
   var id = bytesToHex(blake2b256(bytes));
@@ -8013,7 +8032,7 @@ function utf8Bytes(str) {
   return out;
 }
 function analyzeBlake2b(inputStr, modeStr, expectedStr) {
-  var mode = (modeStr == null ? "" : String(modeStr)).trim().toLowerCase();
+  var mode = (modeStr == null ? "" : String(modeStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (mode !== "hex" && mode !== "text") return null;
   var bytes;
   if (mode === "text") {
@@ -8025,7 +8044,7 @@ function analyzeBlake2b(inputStr, modeStr, expectedStr) {
     if (hasLoneSurrogate(inputStr == null ? "" : String(inputStr))) return null;
     bytes = utf8Bytes(inputStr == null ? "" : String(inputStr));
   } else {
-    var cleaned = (inputStr == null ? "" : String(inputStr)).replace(/\s+/g, "");
+    var cleaned = (inputStr == null ? "" : String(inputStr)).replace(/[\s\u0085]+/g, "");
     if (cleaned === "" || cleaned.toLowerCase() === "0x") {
       bytes = new Uint8Array(0);
     } else {
@@ -8033,7 +8052,7 @@ function analyzeBlake2b(inputStr, modeStr, expectedStr) {
       if (!bytes) return null;
     }
   }
-  var expected = expectedStr == null ? "" : String(expectedStr).trim().toLowerCase();
+  var expected = expectedStr == null ? "" : String(expectedStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (expected.indexOf("0x") === 0) expected = expected.slice(2);
   if (expected !== "" && !/^[0-9a-f]{64}$/.test(expected)) return null;
   var digest = bytesToHex(blake2b256(bytes));
@@ -8062,11 +8081,11 @@ function analyzeBlake2b(inputStr, modeStr, expectedStr) {
    coding, including the classic 00eb1523…06647 vector and Kyle's
    own address bytes round-tripping exactly. */
 function analyzeBase58(inputStr, directionStr) {
-  var direction = (directionStr == null ? "" : String(directionStr)).trim().toLowerCase();
+  var direction = (directionStr == null ? "" : String(directionStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (direction !== "encode" && direction !== "decode") return null;
   var input = inputStr == null ? "" : String(inputStr);
   if (direction === "encode") {
-    var cleaned = input.replace(/\s+/g, "");
+    var cleaned = input.replace(/[\s\u0085]+/g, "");
     if (cleaned === "" || cleaned.toLowerCase() === "0x") {
       return { direction: direction, byteLength: 0, encoded: "", hex: "" };
     }
@@ -8075,7 +8094,7 @@ function analyzeBase58(inputStr, directionStr) {
     if (bytes.length > MAX_BASE58_BYTES) return null;
     return { direction: direction, byteLength: bytes.length, encoded: base58Encode(bytes), hex: bytesToHex(bytes) };
   }
-  var trimmed = input.trim();
+  var trimmed = input.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (/\s/.test(trimmed)) return null;
   if (trimmed === "") return { direction: direction, byteLength: 0, encoded: "", hex: "" };
   var decoded = base58Decode(trimmed);
@@ -8103,9 +8122,9 @@ function analyzeBase58(inputStr, directionStr) {
    fleet-sdk's published vlq.spec vectors and an independent
    Python build before coding. */
 function analyzeVlq(inputStr, directionStr) {
-  var direction = (directionStr == null ? "" : String(directionStr)).trim().toLowerCase();
+  var direction = (directionStr == null ? "" : String(directionStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (direction !== "encode" && direction !== "decode") return null;
-  var input = inputStr == null ? "" : String(inputStr).trim();
+  var input = inputStr == null ? "" : String(inputStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (direction === "encode") {
     if (!/^[0-9]+$/.test(input)) return null;
     if (input.length > 100) return null; /* judged from length before the BigInt parse: decimal parsing is superlinear (400k digits took ~5.4 s), and no VLQ in Ergo exceeds a u64's 20 digits */
@@ -8113,7 +8132,7 @@ function analyzeVlq(inputStr, directionStr) {
     var encBytes = writeVlqBig(value);
     return { direction: direction, value: value.toString(), hex: bytesToHex(Uint8Array.from(encBytes)), byteLength: encBytes.length };
   }
-  var bytes = hexToBytes(input.replace(/\s+/g, ""));
+  var bytes = hexToBytes(input.replace(/[\s\u0085]+/g, ""));
   if (!bytes || bytes.length === 0) return null;
   var read = readVlqBig(bytes, 0);
   if (!read || read.length !== bytes.length) return null;
@@ -8146,11 +8165,11 @@ function analyzeVlq(inputStr, directionStr) {
    number. Verified against fleet-sdk's published zigZag spec
    vectors and an independent Python build before coding. */
 function analyzeZigZag(inputStr, directionStr, widthStr) {
-  var direction = (directionStr == null ? "" : String(directionStr)).trim().toLowerCase();
+  var direction = (directionStr == null ? "" : String(directionStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (direction !== "encode" && direction !== "decode") return null;
-  var width = (widthStr == null ? "" : String(widthStr)).trim();
+  var width = (widthStr == null ? "" : String(widthStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (width !== "64" && width !== "32") return null;
-  var input = inputStr == null ? "" : String(inputStr).trim();
+  var input = inputStr == null ? "" : String(inputStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   var min = width === "64" ? -9223372036854775808n : -2147483648n;
   var max = width === "64" ? 9223372036854775807n : 2147483647n;
   if (direction === "encode") {
@@ -8162,7 +8181,7 @@ function analyzeZigZag(inputStr, directionStr, widthStr) {
     var encBytes = writeVlqBig(unsigned);
     return { direction: direction, width: width, value: value.toString(), unsigned: unsigned.toString(), hex: bytesToHex(Uint8Array.from(encBytes)), byteLength: encBytes.length };
   }
-  var bytes = hexToBytes(input.replace(/\s+/g, ""));
+  var bytes = hexToBytes(input.replace(/[\s\u0085]+/g, ""));
   if (!bytes || bytes.length === 0) return null;
   var read = readVlqBig(bytes, 0);
   if (!read || read.length !== bytes.length) return null;
@@ -8432,7 +8451,7 @@ function parseErgoBox(boxHex) {
   var fail = function (reason) {
     return { valid: false, reason: reason, boxId: null, byteLength: null, valueNano: null, valueErg: null, ergoTree: null, creationHeight: null, tokens: null, registers: null, transactionId: null, index: null };
   };
-  var cleaned = boxHex == null ? "" : String(boxHex).replace(/\s+/g, "");
+  var cleaned = boxHex == null ? "" : String(boxHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   if (!bytes) return fail("Enter the box's full serialized bytes as hex (an even number of 0-9/a-f characters, with or without a 0x prefix) — SDKs and node APIs produce them, and explorers link them from a box's page.");
   var pos = 0;
@@ -8558,7 +8577,7 @@ function parseErgoTransaction(txHex) {
   var fail = function (reason) {
     return { valid: false, reason: reason, txId: null, byteLength: null, signed: null, inputs: null, dataInputs: null, tokenIds: null, outputs: null, totalOutputNano: null, totalOutputErg: null, tokenTotals: null };
   };
-  var cleaned = txHex == null ? "" : String(txHex).replace(/\s+/g, "");
+  var cleaned = txHex == null ? "" : String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   if (!bytes) return fail("Enter the transaction's full serialized bytes as hex (an even number of 0-9/a-f characters, with or without a 0x prefix) — SDKs and node APIs produce them, and explorers link them from a transaction's page.");
   var pos = 0;
@@ -8788,7 +8807,7 @@ function decodeSigmaConstant(constHex) {
   var fail = function (reason) {
     return { valid: false, reason: reason, type: null, value: null, byteLength: null, rawHex: null };
   };
-  var cleaned = constHex == null ? "" : String(constHex).replace(/\s+/g, "");
+  var cleaned = constHex == null ? "" : String(constHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   if (!bytes) return fail("Enter one Sigma constant as hex (an even number of 0-9/a-f characters, with or without a 0x prefix) — explorers and node APIs show a box's registers in exactly this form.");
   var typeParsed = parseSigmaType(bytes, 0);
@@ -8874,11 +8893,11 @@ function bigIntToSigmaBytes(v) {
 var SIGMA_SPEC_KINDS = "bool:true|false, byte:<-128..127>, short:<-32768..32767>, int:<-2147483648..2147483647>, long:<integer>, bigint:<integer>, group:<66 hex chars>, dlog:<66 hex chars>, bytes:<hex>, ints:<n,n,...>, longs:<n,n,...>";
 function encodeSigmaConstant(spec) {
   var fail = function (reason) { return { valid: false, reason: reason }; };
-  var s = spec == null ? "" : String(spec).trim();
+  var s = spec == null ? "" : String(spec).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   var colon = s.indexOf(":");
   if (colon < 1) return fail("Register spec \"" + boundedEcho(s) + "\" is not in kind:value form — use one of: " + SIGMA_SPEC_KINDS + ".");
-  var kind = s.slice(0, colon).trim().toLowerCase();
-  var val = s.slice(colon + 1).trim();
+  var kind = s.slice(0, colon).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
+  var val = s.slice(colon + 1).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   var intStr = function (x) { return x.length <= 100 && /^-?\d+$/.test(x); }; /* judged from length before any BigInt parse — the widest kind here, a 256-bit bigint, needs at most 79 characters with its sign */
   var ranged = function (x, lo, hi) { return intStr(x) && BigInt(x) >= lo && BigInt(x) <= hi; };
   var done = function (typeByte, data, typeName, value) {
@@ -8930,7 +8949,7 @@ function encodeSigmaConstant(spec) {
     return done(14, writeVlqBig(BigInt(cb.length)).concat(Array.from(cb)), "Coll[SByte]", "0x" + bytesToHex(cb));
   }
   if (kind === "ints" || kind === "longs") {
-    var parts = val === "" ? [] : val.split(",").map(function (p) { return p.trim(); });
+    var parts = val === "" ? [] : val.split(",").map(function (p) { return p.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); });
     /* The element count is judged before any element is parsed:
        past SIGMA_COLLECTION_MAX_COUNT elements the constant could
        never be read back by this hub's own decoder, so it is refused
@@ -8986,7 +9005,7 @@ function encodeSigmaConstant(spec) {
    its count (6) before its own encode loop. */
 function parseBoxBuildTokens(text) {
   var fail = function (reason) { return { valid: false, reason: reason, tokens: null }; };
-  var lines = (text == null ? "" : String(text)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (text == null ? "" : String(text)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
   if (lines.length > 10000) return fail("A box carries at most 10,000 tokens — " + lines.length + " were given. The count is the one tool 15's parser accepts when it reads a box back, so a longer list could never be read back.");
   var tokens = [];
   for (var i = 0; i < lines.length; i++) {
@@ -8998,7 +9017,7 @@ function parseBoxBuildTokens(text) {
 }
 function parseTxBuildInputs(text) {
   var fail = function (reason) { return { valid: false, reason: reason, inputs: null }; };
-  var lines = (text == null ? "" : String(text)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (text == null ? "" : String(text)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
   if (lines.length > 10000) return fail("A transaction spends at least one input box — give between 1 and 10,000 inputs.");
   var inputs = [];
   for (var li = 0; li < lines.length; li++) {
@@ -9006,11 +9025,11 @@ function parseTxBuildInputs(text) {
     var inp = { boxId: parts[0], proofHex: null, extension: [] };
     if (parts.length > 1 && parts[1] !== "-") inp.proofHex = parts[1];
     if (parts.length > 2) {
-      var extParts = parts.slice(2).join(" ").split(";").map(function (e) { return e.trim(); }).filter(function (e) { return e !== ""; });
+      var extParts = parts.slice(2).join(" ").split(";").map(function (e) { return e.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (e) { return e !== ""; });
       if (extParts.length > 10000) return fail("Input " + (li + 1) + ": the context extension is a list of key / constant entries.");
       inp.extension = extParts.map(function (e) {
         var eq = e.indexOf("=");
-        return { key: eq < 0 ? e : e.slice(0, eq).trim(), value: eq < 0 ? "" : e.slice(eq + 1).trim() };
+        return { key: eq < 0 ? e : e.slice(0, eq).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""), value: eq < 0 ? "" : e.slice(eq + 1).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") };
       });
     }
     inputs.push(inp);
@@ -9019,7 +9038,7 @@ function parseTxBuildInputs(text) {
 }
 function parseTxBuildDataInputs(text) {
   var fail = function (reason) { return { valid: false, reason: reason, dataInputs: null }; };
-  var lines = (text == null ? "" : String(text)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (text == null ? "" : String(text)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
   if (lines.length > 10000) return fail("Data inputs are a list of box IDs (boxes the scripts read but do not spend).");
   return { valid: true, reason: null, dataInputs: lines };
 }
@@ -9037,7 +9056,7 @@ function parseTxBuildOutputs(text) {
      otherwise arrived as ONE line and was refused whole, and here
      two outputs joined only by such a break silently merged into a
      single valid block. */
-  var blocks = (text == null ? "" : String(text)).replace(/\r\n|\r|\u000b|\u000c|\u0085|\u2028|\u2029/g, "\n").split(/\n\s*\n/).map(function (b) { return b.trim(); }).filter(function (b) { return b !== ""; });
+  var blocks = (text == null ? "" : String(text)).replace(/\r\n|\r|\u000b|\u000c|\u0085|\u2028|\u2029/g, "\n").split(/\n\s*\n/).map(function (b) { return b.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (b) { return b !== ""; });
   if (blocks.length > 10000) return fail("A transaction creates at least one output box — give between 1 and 10,000 outputs.");
   var outputs = [];
   for (var bi = 0; bi < blocks.length; bi++) {
@@ -9048,7 +9067,7 @@ function parseTxBuildOutputs(text) {
        6) before its own loops, and the form now does the same. */
     var tokenCount = 0, registerCount = 0;
     for (var ci = 0; ci < blockLines.length; ci++) {
-      var cm = blockLines[ci].trim().match(/^([a-z]+)\s*:/);
+      var cm = blockLines[ci].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").match(/^([a-z]+)\s*:/);
       if (!cm) continue;
       if (cm[1] === "token") tokenCount++;
       else if (cm[1] === "register") registerCount++;
@@ -9057,9 +9076,9 @@ function parseTxBuildOutputs(text) {
     if (registerCount > 6) return fail("Output " + (bi + 1) + ": a box carries at most the six non-mandatory registers R4–R9.");
     var o = { valueNano: "", ergoTree: "", creationHeight: "", tokens: [], registers: [] };
     blockLines.forEach(function (line) {
-      var m = line.trim().match(/^([a-z]+)\s*:\s*(.*)$/);
+      var m = line.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").match(/^([a-z]+)\s*:\s*(.*)$/);
       if (!m) return;
-      var k = m[1].toLowerCase(), v = m[2].trim();
+      var k = m[1].toLowerCase(), v = m[2].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
       if (k === "value") o.valueNano = v;
       else if (k === "tree") o.ergoTree = v;
       else if (k === "height") o.creationHeight = v;
@@ -9075,14 +9094,14 @@ function buildErgoBox(fields) {
     return { valid: false, reason: reason, boxHex: null, boxId: null, byteLength: null, registers: null };
   };
   if (!fields) return fail("No fields supplied.");
-  var digits = function (x) { return typeof x === "string" && x.trim().length <= 100 && /^\d+$/.test(x.trim()); }; /* judged from length before any BigInt parse — every field checked here is at most a signed 64-bit integer (19 digits) */
+  var digits = function (x) { return typeof x === "string" && x.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").length <= 100 && /^\d+$/.test(x.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "")); }; /* judged from length before any BigInt parse — every field checked here is at most a signed 64-bit integer (19 digits) */
   if (!digits(fields.valueNano)) return fail("Enter the box value as a whole number of nanoERG (digits only — tool 1 converts ERG to nanoERG).");
-  var value = BigInt(fields.valueNano.trim());
+  var value = BigInt(fields.valueNano.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
   if (value < 1n || value > 9223372036854775807n) return fail("A box value is a positive signed 64-bit amount of nanoERG (1 to 9,223,372,036,854,775,807) — and a spendable box must also clear the minimum-value rule in tool 5.");
   var treeBytes = hexToBytes(fields.ergoTree);
   if (!treeBytes) return fail("Enter the guarding script's ErgoTree as hex (an even number of 0-9/a-f characters, with or without a 0x prefix) — tool 15 shows the tree of any existing box, and tools 8 and 11 produce trees from keys and addresses.");
   if (!digits(fields.creationHeight)) return fail("Enter the creation height as a whole block number (digits only). It is normally the height of the block the creating transaction is mined in.");
-  var height = Number(fields.creationHeight.trim());
+  var height = Number(fields.creationHeight.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
   if (!Number.isSafeInteger(height) || height > 4294967295) return fail("A creation height is an unsigned 32-bit block number (0 to 4,294,967,295).");
   var tokens = fields.tokens || [];
   /* The token count is judged BEFORE the loop below, against the
@@ -9097,7 +9116,7 @@ function buildErgoBox(fields) {
     var idBytes = hexToBytes(tokens[t] && tokens[t].tokenId);
     if (!idBytes || idBytes.length !== 32) return fail("Token " + (t + 1) + ": a token ID is 32 bytes, 64 hex characters — got \"" + boundedEcho(tokens[t] && tokens[t].tokenId) + "\".");
     if (!digits(tokens[t].amount)) return fail("Token " + (t + 1) + ": enter the amount as a whole raw integer (digits only — tool 6 converts display amounts to raw).");
-    var amt = BigInt(tokens[t].amount.trim());
+    var amt = BigInt(tokens[t].amount.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
     if (amt < 1n || amt > 9223372036854775807n) return fail("Token " + (t + 1) + ": a token amount is a positive signed 64-bit raw integer.");
     tokenBytes.push({ id: idBytes, amount: amt });
   }
@@ -9112,7 +9131,7 @@ function buildErgoBox(fields) {
   var txBytes = hexToBytes(fields.transactionId);
   if (!txBytes || txBytes.length !== 32) return fail("Enter the creating transaction's ID as 32 bytes, 64 hex characters. It is part of the serialization — a different ID makes a different box with a different box ID.");
   if (!digits(fields.index)) return fail("Enter the output index as a whole number (the box's position among the creating transaction's outputs, starting at 0).");
-  var index = Number(fields.index.trim());
+  var index = Number(fields.index.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
   if (!Number.isSafeInteger(index) || index > 65535) return fail("An output index is an unsigned 16-bit number (0 to 65,535).");
   var bytes = [];
   var push = function (arr) { for (var i = 0; i < arr.length; i++) bytes.push(arr[i]); };
@@ -9188,7 +9207,7 @@ function buildErgoBox(fields) {
    this tool makes), broadcasts or spends anything. */
 function sigmaConstantBytes(entry) {
   var fail = function (reason) { return { valid: false, reason: reason }; };
-  var s = entry == null ? "" : String(entry).trim();
+  var s = entry == null ? "" : String(entry).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (s === "") return fail("an empty entry — give a typed spec like long:100 (tool 18's forms) or one Sigma constant as hex exactly as tool 15 shows it.");
   var colon = s.indexOf(":");
   if (colon > 0 && /^[a-zA-Z]+$/.test(s.slice(0, colon))) {
@@ -9207,8 +9226,8 @@ function buildErgoTransaction(fields) {
     return { valid: false, reason: reason, txHex: null, txId: null, byteLength: null, signed: null, tokenIds: null, outputs: null, totalOutputNano: null, totalOutputErg: null };
   };
   if (!fields) return fail("No fields supplied.");
-  var digits = function (x) { return typeof x === "string" && x.trim().length <= 100 && /^\d+$/.test(x.trim()); }; /* judged from length before any BigInt parse — every field checked here is at most a signed 64-bit integer (19 digits) */
-  var hexId = function (x) { var b = hexToBytes(x == null ? "" : String(x).trim().toLowerCase()); return b && b.length === 32 ? b : null; };
+  var digits = function (x) { return typeof x === "string" && x.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").length <= 100 && /^\d+$/.test(x.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "")); }; /* judged from length before any BigInt parse — every field checked here is at most a signed 64-bit integer (19 digits) */
+  var hexId = function (x) { var b = hexToBytes(x == null ? "" : String(x).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase()); return b && b.length === 32 ? b : null; };
   /* --- inputs --- */
   var inFields = fields.inputs || [];
   if (!Array.isArray(inFields) || inFields.length < 1 || inFields.length > 10000) return fail("A transaction spends at least one input box — give between 1 and 10,000 inputs.");
@@ -9218,8 +9237,8 @@ function buildErgoTransaction(fields) {
     var inId = hexId(inf.boxId);
     if (!inId) return fail("Input " + (i + 1) + ": a box ID is 32 bytes, 64 hex characters — got \"" + boundedEcho(inf.boxId) + "\".");
     var proofBytes = null;
-    if (inf.proofHex != null && String(inf.proofHex).trim() !== "") {
-      proofBytes = hexToBytes(String(inf.proofHex).trim().toLowerCase());
+    if (inf.proofHex != null && String(inf.proofHex).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") {
+      proofBytes = hexToBytes(String(inf.proofHex).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase());
       if (!proofBytes) return fail("Input " + (i + 1) + ": the spending proof must be hex (an even number of 0-9/a-f characters) — leave it empty for an unsigned input.");
     }
     var extFields = inf.extension || [];
@@ -9229,7 +9248,7 @@ function buildErgoTransaction(fields) {
     for (var e = 0; e < extFields.length; e++) {
       var ef = extFields[e] || {};
       if (!digits(ef.key == null ? "" : String(ef.key))) return fail("Input " + (i + 1) + ", extension entry " + (e + 1) + ": the key is a whole number (digits only).");
-      var keyNum = Number(String(ef.key).trim());
+      var keyNum = Number(String(ef.key).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
       if (!Number.isSafeInteger(keyNum) || keyNum > 4294967295) return fail("Input " + (i + 1) + ", extension entry " + (e + 1) + ": a context extension key is an unsigned 32-bit number (0 to 4,294,967,295).");
       if (seenKeys[keyNum]) return fail("Input " + (i + 1) + ": extension key " + keyNum + " is given twice — one key holds one constant, so the duplicate is refused rather than merged.");
       seenKeys[keyNum] = true;
@@ -9259,12 +9278,12 @@ function buildErgoTransaction(fields) {
     var of = outFields[o] || {};
     var oWhat = "Output " + (o + 1);
     if (!digits(of.valueNano)) return fail(oWhat + ": enter the value as a whole number of nanoERG (digits only — tool 1 converts ERG to nanoERG).");
-    var oValue = BigInt(String(of.valueNano).trim());
+    var oValue = BigInt(String(of.valueNano).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
     if (oValue < 1n || oValue > 9223372036854775807n) return fail(oWhat + ": a box value is a positive signed 64-bit amount of nanoERG (1 to 9,223,372,036,854,775,807) — and a spendable box must also clear the minimum-value rule in tool 5.");
     var oTree = hexToBytes(of.ergoTree == null ? "" : String(of.ergoTree));
     if (!oTree) return fail(oWhat + ": enter the guarding script's ErgoTree as hex (an even number of 0-9/a-f characters, with or without a 0x prefix) — tools 19, 16 and 11 produce trees from keys, scripts and addresses.");
     if (!digits(of.creationHeight)) return fail(oWhat + ": enter the creation height as a whole block number (digits only). It is normally the height of the block the transaction is mined in.");
-    var oHeight = Number(String(of.creationHeight).trim());
+    var oHeight = Number(String(of.creationHeight).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
     if (!Number.isSafeInteger(oHeight) || oHeight > 4294967295) return fail(oWhat + ": a creation height is an unsigned 32-bit block number (0 to 4,294,967,295).");
     var tkFields = of.tokens || [];
     if (!Array.isArray(tkFields) || tkFields.length > 10000) return fail(oWhat + ": tokens are a list of token ID / amount pairs.");
@@ -9274,7 +9293,7 @@ function buildErgoTransaction(fields) {
       var tkId = hexId(tf.tokenId);
       if (!tkId) return fail(oWhat + ", token " + (t + 1) + ": a token ID is 32 bytes, 64 hex characters — got \"" + boundedEcho(tf.tokenId) + "\".");
       if (!digits(tf.amount)) return fail(oWhat + ", token " + (t + 1) + ": enter the amount as a whole raw integer (digits only — tool 6 converts display amounts to raw).");
-      var tkAmt = BigInt(String(tf.amount).trim());
+      var tkAmt = BigInt(String(tf.amount).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
       if (tkAmt < 1n || tkAmt > 9223372036854775807n) return fail(oWhat + ", token " + (t + 1) + ": a token amount is a positive signed 64-bit raw integer.");
       var tkHex = bytesToHex(tkId);
       if (!(tkHex in tokenIndex)) { tokenIndex[tkHex] = tokenIds.length; tokenIds.push(tkHex); }
@@ -9582,7 +9601,7 @@ function hdChildKey(parent, index) {
   }
 }
 function parseHdIndex(str, what) {
-  var s = (str == null ? "" : String(str)).trim();
+  var s = (str == null ? "" : String(str)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^(0|[1-9][0-9]*)$/.test(s)) return { error: what + " must be a whole number — got \"" + boundedEcho(s) + "\"." };
   var v = Number(s);
   if (!Number.isSafeInteger(v) || v > 2147483647) return { error: what + " must be between 0 and 2147483647 (the BIP32 index space is 31 bits plus the hardened flag)." };
@@ -9590,7 +9609,7 @@ function parseHdIndex(str, what) {
 }
 function deriveHdAddresses(seedHex, accountStr, changeStr, countStr) {
   var fail = function (reason) { return { valid: false, reason: reason, rows: [] }; };
-  var s = (seedHex == null ? "" : String(seedHex)).trim().toLowerCase().replace(/^0x/, "");
+  var s = (seedHex == null ? "" : String(seedHex)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase().replace(/^0x/, "");
   if (!/^[0-9a-f]+$/.test(s) || s.length % 2 !== 0) return fail("The seed must be hex — an even number of 0-9/a-f characters. A BIP39 seed is 64 bytes (128 hex characters); the words themselves are not a seed, and this tool deliberately takes no mnemonic: converting words to a seed is a wallet's job, on a device you trust.");
   var seedBytes = hexToBytes(s);
   if (seedBytes === null || seedBytes.length < 16 || seedBytes.length > 64) return fail("The seed must be 16 to 64 bytes (32 to 128 hex characters) — the BIP32 seed length range. A standard BIP39 seed is 64 bytes.");
@@ -9671,7 +9690,7 @@ function inspectPublicKey(pubkeyHex) {
   var fail = function (reason) {
     return { valid: false, reason: reason, publicKey: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
   };
-  var s = (pubkeyHex == null ? "" : String(pubkeyHex)).trim().toLowerCase();
+  var s = (pubkeyHex == null ? "" : String(pubkeyHex)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (s.indexOf("0x") === 0) s = s.slice(2);
   if (!/^[0-9a-f]{66}$/.test(s)) return fail("Enter a compressed public key as 66 hex characters (33 bytes) starting 02 or 03 — public keys only: never enter a private key or seed phrase anywhere, including here. An uncompressed key (65 bytes, starting 04) is not the form Ergo P2PK scripts carry; compressing it is just its x-coordinate plus a 02/03 prefix for its y's parity, which this tool reads rather than writes.");
   var prefix = parseInt(s.slice(0, 2), 16);
@@ -9790,7 +9809,7 @@ function calculateGroupElement(keyAHex, keyBHex, operationStr, scalarStr) {
   }
   var scalar = null, scalarReduced = null, k = null;
   if (op === "Multiply (k * A)") {
-    var ks = (scalarStr == null ? "" : String(scalarStr)).trim();
+    var ks = (scalarStr == null ? "" : String(scalarStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (!/^-?[0-9]+$/.test(ks)) return fail("The scalar k must be a whole number written in decimal (digits, with an optional leading minus) — got \"" + boundedEcho(ks) + "\". It is an ordinary public exponent of the kind a script carries; a private key or seed is never entered anywhere, including here.");
     if (ks.replace("-", "").length > 1000) return fail("The scalar k is capped at 1000 digits — more than enough for any exponent a script carries (the group order itself has 78). Nothing was computed.");
     k = BigInt(ks);
@@ -9869,7 +9888,7 @@ function aggregatePublicKeys(keysText) {
   var fail = function (reason) {
     return { valid: false, reason: reason, count: null, distinctCount: null, duplicates: null, keys: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
   };
-  var lines = (keysText == null ? "" : String(keysText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (keysText == null ? "" : String(keysText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste at least one compressed public key as hex, one key per line — the 33-byte keys (starting 02 or 03) that tools 8, 19 and 32 work with, from an address, a script or an explorer. This sums the keys you paste; it fetches nothing and proves no ownership of any of them.");
   if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool aggregates at most 100 keys at a time, so a pasted list stays reviewable line by line.");
   var keys = [];
@@ -9947,7 +9966,7 @@ function aggregateWeightedPublicKeys(termsText) {
   var fail = function (reason) {
     return { valid: false, reason: reason, count: null, distinctCount: null, duplicates: null, terms: null, zeroCount: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
   };
-  var lines = (termsText == null ? "" : String(termsText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (termsText == null ? "" : String(termsText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste at least one weighted term, one per line, written as a whole-number coefficient, a space, then a compressed public key in hex — for example \"2 0279be…f81798\". This computes the weighted sum of the terms you paste; it fetches nothing and proves no ownership of any key.");
   if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool sums at most 100 weighted terms at a time, so a pasted list stays reviewable line by line.");
   var terms = [];
@@ -10147,7 +10166,7 @@ function scalePublicKeyList(keysText, scalarText) {
   var fail = function (reason) {
     return { valid: false, reason: reason, count: null, distinctCount: null, duplicates: null, scalar: null, scalarReduced: null, zeroScalar: null, terms: null, plainInfinity: null, plainCompressed: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
   };
-  var ks = (scalarText == null ? "" : String(scalarText)).trim();
+  var ks = (scalarText == null ? "" : String(scalarText)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^-?[0-9]+$/.test(ks)) return fail("The coefficient \"" + boundedEcho(ks) + "\" is not a whole number written in decimal (digits, with an optional leading minus) — write the one number the whole list is scaled by, for example \"3\" or \"-1\". Coefficients are ordinary public exponents of the kind a script carries; a private key or seed is never entered anywhere, including here.");
   if (ks.replace("-", "").length > 1000) return fail("The coefficient is capped at 1000 digits — more than enough for any exponent a script carries (the group order itself has 78).");
   var k = BigInt(ks);
@@ -10239,7 +10258,7 @@ function shiftPublicKeyList(keysText, shiftText) {
   var fail = function (reason) {
     return { valid: false, reason: reason, count: null, distinctCount: null, duplicates: null, shift: null, terms: null, plainInfinity: null, plainCompressed: null, shiftMultipleInfinity: null, shiftMultipleCompressed: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
   };
-  var iq = inspectPublicKey(shiftText == null ? "" : String(shiftText).trim());
+  var iq = inspectPublicKey(shiftText == null ? "" : String(shiftText).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
   if (!iq.valid) return fail("The shift key is not a public key tool 32 would accept — " + iq.reason + " Paste the one compressed key (33 bytes, starting 02 or 03) that is added to every key on the list. A shift is a public key, never a private key or seed.");
   var agg = aggregatePublicKeys(keysText);
   if (!agg.valid) return fail(agg.reason);
@@ -10527,7 +10546,7 @@ function verifySigmaProof(pubkeyHex, commitmentHex, challengeStr, responseStr) {
     return { valid: false, reason: reason, verified: null, pubkey: null, commitment: null, challenge: null, challengeReduced: null, response: null, responseReduced: null, epInfinity: null, epCompressed: null, lhsInfinity: null, lhsCompressed: null, lhsX: null, lhsY: null, rhsInfinity: null, rhsCompressed: null, mainnet: null, testnet: null };
   };
   function parseScalar(str, label) {
-    var s = (str == null ? "" : String(str)).trim();
+    var s = (str == null ? "" : String(str)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (!/^-?[0-9]+$/.test(s)) return { ok: false, reason: "The " + label + " must be a whole number written in decimal (digits, with an optional leading minus) — got \"" + boundedEcho(s) + "\". It is a public proof value of the kind a Sigma proof carries in the open; a private key, a nonce or a seed is never entered anywhere, including here." };
     if (s.replace("-", "").length > 1000) return { ok: false, reason: "The " + label + " is capped at 1000 digits — more than enough for any proof value (the group order itself has 78). Nothing was computed." };
     var v = BigInt(s);
@@ -10629,11 +10648,11 @@ function summarizeBoxSet(boxesText, currentHeightStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, boxes: null, boxCount: null, totalNano: null, totalErg: null, totalBytes: null, minTotalNano: null, minTotalErg: null, allMeetMinimum: null, belowMinimum: null, tokenTotals: null, distinctTokens: null, currentHeight: null, eligibleCount: null, eligibleNano: null, eligibleErg: null };
   };
-  var lines = (boxesText == null ? "" : String(boxesText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (boxesText == null ? "" : String(boxesText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste at least one full serialized box as hex, one box per line — SDKs and node APIs produce the bytes, and explorers link them from a box's page. This summarizes the boxes you paste; it fetches nothing and is not a live wallet balance.");
   if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool summarizes at most 100 boxes at a time, so a pasted set stays reviewable line by line.");
   var current = null;
-  var heightGiven = !(currentHeightStr == null || String(currentHeightStr).trim() === "");
+  var heightGiven = !(currentHeightStr == null || String(currentHeightStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") === "");
   if (heightGiven) {
     var parsedHeight = parseChainHeight(currentHeightStr);
     if (parsedHeight === null) return fail("The current height must be a whole number of blocks (digits only) — it is the height on the box's explorer page or your node's status. Leave it blank to summarize without the storage-rent eligibility figures.");
@@ -10739,7 +10758,7 @@ function analyzeTxFee(txHex, boxesText) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail("The transaction bytes do not parse: " + tx.reason);
-  var lines = (boxesText == null ? "" : String(boxesText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (boxesText == null ? "" : String(boxesText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste the transaction's input boxes too, one full serialized box per line — a transaction's bytes carry its outputs but never its input values, so the fee and the balance can only be checked against the boxes it spends (explorers link each input's box from the transaction's page; tool 15 reads one box at a time).");
   if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool checks at most 100 input boxes at a time, so a pasted set stays reviewable line by line.");
   var byId = {};
@@ -10847,7 +10866,7 @@ function planTokenPayment(boxesText, paymentStr, feeStr, tokensText) {
   var payNano = BigInt(payment);
   var feeNano = BigInt(fee);
   if (payNano <= 0n || feeNano < 0n) return fail("The payment must be above zero and the fee zero or above — a plan to pay nothing, or to be paid by the fee, is not a payment plan.");
-  var lines = (boxesText == null ? "" : String(boxesText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (boxesText == null ? "" : String(boxesText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste the boxes the payment may spend, one full serialized box per line (the bytes tool 15 reads — explorers link each box from an address's page). Token needs live inside specific boxes, so a plan over values alone cannot say which boxes carry them.");
   if (lines.length > 100) return fail("That is " + lines.length + " lines — this planner takes at most 100 boxes at a time, so a pasted set stays reviewable line by line.");
   var boxes = [];
@@ -10861,7 +10880,7 @@ function planTokenPayment(boxesText, paymentStr, feeStr, tokensText) {
   }
   var requirements = [];
   var reqSeen = {};
-  var tokLines = (tokensText == null ? "" : String(tokensText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var tokLines = (tokensText == null ? "" : String(tokensText)).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
   if (tokLines.length > 100) return fail("That is " + tokLines.length + " token lines — at most 100 token requirements at a time.");
   for (var r = 0; r < tokLines.length; r++) {
     var parts = tokLines[r].split(/[\s\u0085]+/);
@@ -11152,8 +11171,8 @@ function compareTxSigning(beforeHex, afterHex) {
   if (!before.valid) return fail("The BEFORE transaction does not parse: " + before.reason);
   var after = parseErgoTransaction(afterHex);
   if (!after.valid) return fail("The AFTER transaction does not parse: " + after.reason);
-  var bBytes = hexToBytes(beforeHex == null ? "" : String(beforeHex).replace(/\s+/g, ""));
-  var aBytes = hexToBytes(afterHex == null ? "" : String(afterHex).replace(/\s+/g, ""));
+  var bBytes = hexToBytes(beforeHex == null ? "" : String(beforeHex).replace(/[\s\u0085]+/g, ""));
+  var aBytes = hexToBytes(afterHex == null ? "" : String(afterHex).replace(/[\s\u0085]+/g, ""));
   var identicalBytes = !!(bBytes && aBytes && bBytes.length === aBytes.length && bBytes.every(function (x, i) { return x === aBytes[i]; }));
   var n = Math.max(before.inputs.length, after.inputs.length);
   var inputs = [];
@@ -11251,8 +11270,8 @@ function compareErgoBoxes(aHex, bHex) {
   if (!a.valid) return fail("The FIRST box does not parse: " + a.reason);
   var b = parseErgoBox(bHex);
   if (!b.valid) return fail("The SECOND box does not parse: " + b.reason);
-  var aBytes = hexToBytes(aHex == null ? "" : String(aHex).replace(/\s+/g, ""));
-  var bBytes = hexToBytes(bHex == null ? "" : String(bHex).replace(/\s+/g, ""));
+  var aBytes = hexToBytes(aHex == null ? "" : String(aHex).replace(/[\s\u0085]+/g, ""));
+  var bBytes = hexToBytes(bHex == null ? "" : String(bHex).replace(/[\s\u0085]+/g, ""));
   var identicalBytes = !!(aBytes && bBytes && aBytes.length === bBytes.length && aBytes.every(function (x, i) { return x === bBytes[i]; }));
   var changedFields = [];
   var valueSame = a.valueNano === b.valueNano;
@@ -11473,8 +11492,8 @@ function compareTransactions(aHex, bHex) {
   if (!a.valid) return fail("The FIRST transaction does not parse: " + a.reason);
   var b = parseErgoTransaction(bHex);
   if (!b.valid) return fail("The SECOND transaction does not parse: " + b.reason);
-  var aBytes = hexToBytes(aHex == null ? "" : String(aHex).replace(/\s+/g, ""));
-  var bBytes = hexToBytes(bHex == null ? "" : String(bHex).replace(/\s+/g, ""));
+  var aBytes = hexToBytes(aHex == null ? "" : String(aHex).replace(/[\s\u0085]+/g, ""));
+  var bBytes = hexToBytes(bHex == null ? "" : String(bHex).replace(/[\s\u0085]+/g, ""));
   var identicalBytes = !!(aBytes && bBytes && aBytes.length === bBytes.length && aBytes.every(function (x, i) { return x === bBytes[i]; }));
   var sameTxId = a.txId === b.txId;
   /* set-style diff for the two bare ID lists */
@@ -11721,7 +11740,7 @@ function convertTxJson(direction, text) {
     return { valid: false, reason: reason, direction: direction, txHex: null, json: null, txId: null, byteLength: null, inputCount: null, dataInputCount: null, outputCount: null, totalOutputNano: null, totalOutputErg: null, tokenIds: null, idMismatch: false, claimedId: null };
   };
   if (direction !== "json-to-bytes" && direction !== "bytes-to-json") return fail("Pick a direction: JSON to bytes, or bytes to JSON.");
-  var raw = text == null ? "" : String(text).trim();
+  var raw = text == null ? "" : String(text).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (raw === "") return fail(direction === "json-to-bytes" ? "Paste one unsigned transaction in the EIP-12 / fleet JSON form (a single JSON object with inputs and outputs)." : "Paste one unsigned transaction's serialized bytes as hex (tools 29 and 30 work in the same bytes).");
   if (direction === "bytes-to-json") {
     var parsed = parseErgoTransaction(raw);
@@ -11766,7 +11785,7 @@ function convertTxJson(direction, text) {
   try { doc = JSON.parse(raw); } catch (err) { return fail("That is not valid JSON (" + err.message + ") — paste a single JSON object, exactly as a wallet, fleet-sdk or a dApp connector emits it."); }
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) return fail("The JSON must be a single object with \"inputs\" and \"outputs\" — an array or a bare value is not a transaction in this dialect.");
   var amountStr = function (x, what) {
-    if (typeof x === "string" && /^\d+$/.test(x.trim())) return x.trim();
+    if (typeof x === "string" && /^\d+$/.test(x.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""))) return x.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
     if (typeof x === "number" && Number.isSafeInteger(x) && x >= 0) return String(x);
     return null;
   };
@@ -11785,7 +11804,7 @@ function convertTxJson(direction, text) {
     if (typeof jin !== "object" || Array.isArray(jin)) return fail(iWhat + " is not an object — each input is {boxId, extension?}.");
     if (jin.proofBytes != null && String(jin.proofBytes) !== "") return fail(iWhat + " carries proofBytes — this dialect is the unsigned form, which has no place for spending proofs, so a signed JSON transaction is refused rather than have its proofs dropped silently. Tool 30 builds signed bytes from pasted proofs.");
     if (jin.spendingProof != null) return fail(iWhat + " carries a spendingProof — this dialect is the unsigned EIP-12 / fleet form, which has no place for proofs, so the transaction is refused rather than have its proofs dropped silently. Tool 30 builds signed bytes from pasted proofs.");
-    if (typeof jin.boxId !== "string" || !/^[0-9a-fA-F]{64}$/.test(jin.boxId.trim())) return fail(iWhat + ": a box ID is 64 hex characters — got \"" + boundedEcho(jin.boxId) + "\".");
+    if (typeof jin.boxId !== "string" || !/^[0-9a-fA-F]{64}$/.test(jin.boxId.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""))) return fail(iWhat + ": a box ID is 64 hex characters — got \"" + boundedEcho(jin.boxId) + "\".");
     var extList = [];
     if (jin.extension != null) {
       if (typeof jin.extension !== "object" || Array.isArray(jin.extension)) return fail(iWhat + ": \"extension\" maps numeric-string keys to Sigma constants in hex, e.g. {\"0\": \"0e02cafe\"}.");
@@ -11797,7 +11816,7 @@ function convertTxJson(direction, text) {
         extList.push({ key: eKeys[e], value: jin.extension[eKeys[e]] });
       }
     }
-    inFields.push({ boxId: jin.boxId.trim().toLowerCase(), proofHex: null, extension: extList });
+    inFields.push({ boxId: jin.boxId.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase(), proofHex: null, extension: extList });
   }
   var diFields = [];
   if (doc.dataInputs != null) {
@@ -11806,8 +11825,8 @@ function convertTxJson(direction, text) {
     for (var d = 0; d < doc.dataInputs.length; d++) {
       var jdi = doc.dataInputs[d];
       var diId = typeof jdi === "string" ? jdi : (jdi && typeof jdi === "object" ? jdi.boxId : null);
-      if (typeof diId !== "string" || !/^[0-9a-fA-F]{64}$/.test(diId.trim())) return fail("Data input " + (d + 1) + ": a box ID is 64 hex characters — each data input is {boxId: \"…\"}.");
-      diFields.push(diId.trim().toLowerCase());
+      if (typeof diId !== "string" || !/^[0-9a-fA-F]{64}$/.test(diId.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""))) return fail("Data input " + (d + 1) + ": a box ID is 64 hex characters — each data input is {boxId: \"…\"}.");
+      diFields.push(diId.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase());
     }
   }
   if (!Array.isArray(doc.outputs)) return fail("The JSON carries no \"outputs\" list — each output is {value, ergoTree, creationHeight, assets?, additionalRegisters?}.");
@@ -11819,7 +11838,7 @@ function convertTxJson(direction, text) {
     if (typeof jout !== "object" || Array.isArray(jout)) return fail(oWhat + " is not an object — each output is {value, ergoTree, creationHeight, assets?, additionalRegisters?}.");
     var oVal = amountStr(jout.value, oWhat);
     if (oVal === null) return fail(oWhat + ": \"value\" is the box value in nanoERG as a decimal string (a safe-integer number is also accepted) — got " + boundedEcho(JSON.stringify(jout.value)) + ", and an amount is never rounded to fit.");
-    if (typeof jout.ergoTree !== "string" || !/^(0x)?[0-9a-fA-F]+$/.test(jout.ergoTree.trim()) || jout.ergoTree.replace(/^0x/, "").length % 2 !== 0) return fail(oWhat + ": \"ergoTree\" is the guarding script as hex (an even number of 0-9/a-f characters).");
+    if (typeof jout.ergoTree !== "string" || !/^(0x)?[0-9a-fA-F]+$/.test(jout.ergoTree.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "")) || jout.ergoTree.replace(/^0x/, "").length % 2 !== 0) return fail(oWhat + ": \"ergoTree\" is the guarding script as hex (an even number of 0-9/a-f characters).");
     var oHeight = amountStr(jout.creationHeight, oWhat);
     if (oHeight === null) return fail(oWhat + ": \"creationHeight\" is a whole block number (a number, or digits as a string).");
     var oTokens = [];
@@ -11828,10 +11847,10 @@ function convertTxJson(direction, text) {
       if (jout.assets.length > 10000) return fail(oWhat + " lists " + jout.assets.length + " assets — at most 10,000 assets ride in one output (tool 30's builder cap); the count is refused before any asset is checked.");
       for (var t = 0; t < jout.assets.length; t++) {
         var ja = jout.assets[t] || {};
-        if (typeof ja.tokenId !== "string" || !/^[0-9a-fA-F]{64}$/.test(ja.tokenId.trim())) return fail(oWhat + ", asset " + (t + 1) + ": a token ID is 64 hex characters.");
+        if (typeof ja.tokenId !== "string" || !/^[0-9a-fA-F]{64}$/.test(ja.tokenId.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""))) return fail(oWhat + ", asset " + (t + 1) + ": a token ID is 64 hex characters.");
         var aAmt = amountStr(ja.amount, oWhat);
         if (aAmt === null) return fail(oWhat + ", asset " + (t + 1) + ": \"amount\" is the raw token amount as a decimal string (a safe-integer number is also accepted) — never rounded to fit.");
-        oTokens.push({ tokenId: ja.tokenId.trim().toLowerCase(), amount: aAmt });
+        oTokens.push({ tokenId: ja.tokenId.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase(), amount: aAmt });
       }
     }
     var oRegs = [];
@@ -11857,11 +11876,11 @@ function convertTxJson(direction, text) {
       }
       oRegs = sorted.map(function (k) { return jout.additionalRegisters[k]; });
     }
-    outFields.push({ valueNano: oVal, ergoTree: jout.ergoTree.trim(), creationHeight: oHeight, tokens: oTokens, registers: oRegs });
+    outFields.push({ valueNano: oVal, ergoTree: jout.ergoTree.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""), creationHeight: oHeight, tokens: oTokens, registers: oRegs });
   }
   var built = buildErgoTransaction({ inputs: inFields, dataInputs: diFields, outputs: outFields });
   if (!built.valid) return fail("The JSON is well-formed, but the transaction it describes does not assemble (tool 30's builder): " + built.reason);
-  var claimed = typeof doc.id === "string" ? doc.id.trim().toLowerCase() : null;
+  var claimed = typeof doc.id === "string" ? doc.id.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase() : null;
   return {
     valid: true, reason: null, direction: direction,
     txHex: built.txHex, json: null, txId: built.txId,
@@ -11905,11 +11924,11 @@ function planTokenMint(firstInputId, nameStr, descStr, decStr, amountStr, typeSt
   var fail = function (reason) {
     return { valid: false, reason: reason, tokenId: null, name: null, description: null, decimals: null, assetType: null, amountRaw: null, displayAmount: null, registers: null, registerLines: null, boxbuildTokens: null, boxbuildRegisters: null, boxspecRegisters: null };
   };
-  var id = (firstInputId == null ? "" : String(firstInputId)).trim().toLowerCase();
+  var id = (firstInputId == null ? "" : String(firstInputId)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(id)) return fail("The first input's box ID is 64 hex characters — it becomes the token ID, so it has to be exact. Find it on the box itself (tools 15 and 33 show a box's ID) or as the first input of the minting transaction (tool 29).");
   var regs = buildEip4Registers(nameStr, descStr, decStr, typeStr);
   if (!regs) return fail("The metadata does not encode (tool 27's EIP-4 rules): the name must be non-empty, the decimals a whole number written without a leading zero (0–999), and the asset type one of the listed EIP-4 types.");
-  var amt = (amountStr == null ? "" : String(amountStr)).trim();
+  var amt = (amountStr == null ? "" : String(amountStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(amt)) return fail("The amount is the raw token amount as a whole decimal number — on-chain token amounts are integers; the decimals only shape how the amount is displayed.");
   if (amt.length > 100) return fail("The amount is refused: it is judged from its length before it is parsed — at most 100 digits, far beyond a signed 64-bit raw amount (at most 19 digits).");
   if (BigInt(amt) === 0n) return fail("The amount is zero — a mint that creates zero tokens creates nothing. Give the raw amount to issue (with " + regs.decimals + " decimals, raw 1 is the smallest displayable step).");
@@ -12084,9 +12103,9 @@ function mergeBoxSets(aText, bText) {
   if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
   var hexOf = function (text) {
     var map = {};
-    String(text).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
+    String(text).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
       var parsed = parseErgoBox(line);
-      if (parsed.valid) map[parsed.boxId] = line.replace(/\s+/g, "").toLowerCase();
+      if (parsed.valid) map[parsed.boxId] = line.replace(/[\s\u0085]+/g, "").toLowerCase();
     });
     return map;
   };
@@ -12165,9 +12184,9 @@ function intersectBoxSets(aText, bText) {
   if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
   var hexOf = function (text) {
     var map = {};
-    String(text).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
+    String(text).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
       var parsed = parseErgoBox(line);
-      if (parsed.valid) map[parsed.boxId] = line.replace(/\s+/g, "").toLowerCase();
+      if (parsed.valid) map[parsed.boxId] = line.replace(/[\s\u0085]+/g, "").toLowerCase();
     });
     return map;
   };
@@ -12254,9 +12273,9 @@ function xorBoxSets(aText, bText) {
   if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
   var hexOf = function (text) {
     var map = {};
-    String(text).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
+    String(text).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
       var parsed = parseErgoBox(line);
-      if (parsed.valid) map[parsed.boxId] = line.replace(/\s+/g, "").toLowerCase();
+      if (parsed.valid) map[parsed.boxId] = line.replace(/[\s\u0085]+/g, "").toLowerCase();
     });
     return map;
   };
@@ -12350,9 +12369,9 @@ function subtractBoxSets(aText, bText) {
   if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
   var hexOf = function (text) {
     var map = {};
-    String(text).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
+    String(text).split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
       var parsed = parseErgoBox(line);
-      if (parsed.valid) map[parsed.boxId] = line.replace(/\s+/g, "").toLowerCase();
+      if (parsed.valid) map[parsed.boxId] = line.replace(/[\s\u0085]+/g, "").toLowerCase();
     });
     return map;
   };
@@ -12420,7 +12439,7 @@ function extractUnsignedTx(txHex) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var cnt = readVlqBig(bytes, pos);
@@ -12491,16 +12510,16 @@ function attachTxProofs(txHex, proofsText) {
     var signedIdx = tx.inputs.filter(function (inp) { return inp.proofLength > 0; }).map(function (inp, i) { return tx.inputs.indexOf(inp) + 1; });
     return fail("This transaction already carries a spending proof (on input(s) " + signedIdx.join(", ") + ") — attaching here would silently replace proofs, which this tool does not do. Work from its unsigned form instead: tool 45 extracts it, and tool 40 compares a before/after pair.");
   }
-  var lines = (proofsText == null ? "" : String(proofsText)).split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (proofsText == null ? "" : String(proofsText)).split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
   if (lines.length !== tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), so paste exactly " + tx.inputs.length + " proof line(s) — one per input, in input order, each either the proof bytes as hex or a single dash (-) to leave that input unsigned. Got " + lines.length + " line(s); nothing was attached rather than guess which input a proof belongs to.");
   var wanted = [];
   for (var w = 0; w < lines.length; w++) {
     if (lines[w] === "-") { wanted.push(null); continue; }
-    var pb = hexToBytes(lines[w].replace(/\s+/g, ""));
+    var pb = hexToBytes(lines[w].replace(/[\s\u0085]+/g, ""));
     if (!pb || pb.length === 0) return fail("Proof line " + (w + 1) + " (for input " + (w + 1) + ") is not valid hex — a proof is bytes, pasted as an even number of 0-9/a-f characters, or a single dash (-) to leave that input unsigned. Nothing was attached.");
     wanted.push(bytesToHex(pb));
   }
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var cnt = readVlqBig(bytes, pos);
@@ -12651,13 +12670,13 @@ function extractTxOutputBox(txHex, indexStr) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
-  var raw = indexStr == null ? "" : String(indexStr).trim();
+  var raw = indexStr == null ? "" : String(indexStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(raw)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
   var judged = txIndexTarget(raw);
   if (judged.huge) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output with " + judged.digits + " digits to extract.");
   var target = judged.target;
   if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + judged.shown + " to extract.");
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong box."); };
@@ -12812,13 +12831,13 @@ function extractTxInputProof(txHex, indexStr) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
-  var raw = indexStr == null ? "" : String(indexStr).trim();
+  var raw = indexStr == null ? "" : String(indexStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(raw)) return fail("Enter the input number as a whole number — 1 is the transaction's first input, 2 its second, and so on. This transaction has " + tx.inputs.length + " input(s).");
   var judged = txIndexTarget(raw);
   if (judged.huge) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input with " + judged.digits + " digits to extract from.");
   var target = judged.target;
   if (target < 0 || target >= tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input " + judged.shown + " to extract from.");
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong proof."); };
@@ -12916,13 +12935,13 @@ function extractTxDataInput(txHex, indexStr) {
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
   if (tx.dataInputs.length === 0) return fail("This transaction has no data inputs — its scripts read no extra boxes, so there is no data input to extract. (Its " + tx.inputs.length + " ordinary input(s) are the boxes it spends; tool 48 lifts those inputs' proofs.)");
-  var raw = indexStr == null ? "" : String(indexStr).trim();
+  var raw = indexStr == null ? "" : String(indexStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(raw)) return fail("Enter the data-input number as a whole number — 1 is the transaction's first data input, 2 its second, and so on. This transaction has " + tx.dataInputs.length + " data input(s).");
   var judged = txIndexTarget(raw);
   if (judged.huge) return fail("This transaction has " + tx.dataInputs.length + " data input(s), numbered 1 to " + tx.dataInputs.length + " — there is no data input with " + judged.digits + " digits to extract from.");
   var target = judged.target;
   if (target < 0 || target >= tx.dataInputs.length) return fail("This transaction has " + tx.dataInputs.length + " data input(s), numbered 1 to " + tx.dataInputs.length + " — there is no data input " + judged.shown + " to extract from.");
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong box ID."); };
@@ -13023,14 +13042,14 @@ function extractTxToken(txHex, indexStr) {
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
   if (tx.tokenIds.length === 0) return fail("This transaction lists no distinct token IDs — its outputs hold no tokens, so there is no token to extract. (Its outputs carry " + tx.totalOutputErg + " ERG in total; tool 47 lifts an output out as a standalone box.)");
-  var raw = indexStr == null ? "" : String(indexStr).trim();
+  var raw = indexStr == null ? "" : String(indexStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(raw)) return fail("Enter the token number as a whole number — 1 is the first token ID in the transaction's distinct-token list, 2 its second, and so on. This transaction lists " + tx.tokenIds.length + " distinct token ID(s).");
   var judged = txIndexTarget(raw);
   if (judged.huge) return fail("This transaction lists " + tx.tokenIds.length + " distinct token ID(s), numbered 1 to " + tx.tokenIds.length + " — there is no token with " + judged.digits + " digits to extract from.");
   var target = judged.target;
   if (target < 0 || target >= tx.tokenIds.length) return fail("This transaction lists " + tx.tokenIds.length + " distinct token ID(s), numbered 1 to " + tx.tokenIds.length + " — there is no token " + judged.shown + " to extract from.");
   var tokenId = tx.tokenIds[target];
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong token ID."); };
@@ -13147,14 +13166,14 @@ function extractTxRegister(txHex, outputStr, registerStr) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
-  var rawOut = outputStr == null ? "" : String(outputStr).trim();
+  var rawOut = outputStr == null ? "" : String(outputStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(rawOut)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
   var judgedOut = txIndexTarget(rawOut);
   if (judgedOut.huge) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output with " + judgedOut.digits + " digits to extract a register from.");
   var target = judgedOut.target;
   if (target < 0 || target >= tx.outputs.length) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output " + judgedOut.shown + " to extract a register from.");
   rawOut = judgedOut.shown;
-  var regName = registerStr == null ? "" : String(registerStr).trim().toUpperCase();
+  var regName = registerStr == null ? "" : String(registerStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toUpperCase();
   if (!/^R[4-9]$/.test(regName)) return fail("Enter the register as R4, R5, R6, R7, R8 or R9 — those are a box's six non-mandatory registers (R0–R3 are the value, ErgoTree, creation height and box ID every box derives, not stored constants).");
   var out = tx.outputs[target];
   var names = out.registers.map(function (r) { return r.name; });
@@ -13162,7 +13181,7 @@ function extractTxRegister(txHex, outputStr, registerStr) {
   var reg = null;
   for (var ri = 0; ri < out.registers.length; ri++) if (out.registers[ri].name === regName) reg = out.registers[ri];
   if (!reg) return fail("Output " + (target + 1) + " of transaction " + tx.txId + " carries " + names.join(", ") + " — but no " + regName + ". Registers are written in order from R4 and a box may stop early, so a missing " + regName + " means the box simply holds nothing there; nothing was extracted rather than an invented value.");
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong register."); };
@@ -13327,14 +13346,14 @@ function extractTxExtension(txHex, inputStr, keyStr) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
-  var rawIn = inputStr == null ? "" : String(inputStr).trim();
+  var rawIn = inputStr == null ? "" : String(inputStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(rawIn)) return fail("Enter the input number as a whole number — 1 is the transaction's first input, 2 its second, and so on. This transaction has " + tx.inputs.length + " input(s).");
   var judgedIn = txIndexTarget(rawIn);
   if (judgedIn.huge) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input with " + judgedIn.digits + " digits to extract an extension entry from.");
   var target = judgedIn.target;
   if (target < 0 || target >= tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input " + judgedIn.shown + " to extract an extension entry from.");
   rawIn = judgedIn.shown;
-  var rawKey = keyStr == null ? "" : String(keyStr).trim();
+  var rawKey = keyStr == null ? "" : String(keyStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(rawKey) || Number(rawKey) > 255) return fail("Enter the extension key as a whole number from 0 to 255 — a context extension key is a single byte, written as its number (the keys tool 39 lists for each input).");
   var wantKey = Number(rawKey);
   var inp = tx.inputs[target];
@@ -13346,7 +13365,7 @@ function extractTxExtension(txHex, inputStr, keyStr) {
     if (inp.extension[ei].key === wantKey) { occurrences++; if (!entry) entry = inp.extension[ei]; }
   }
   if (!entry) return fail("Input " + (target + 1) + " of transaction " + tx.txId + " carries extension keys " + keys.join(", ") + " — but no key " + wantKey + ". A missing key means the input simply passes nothing under it; nothing was extracted rather than an invented value.");
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong extension entry."); };
@@ -13463,7 +13482,7 @@ function extractTxTree(txHex, outputStr, networkStr) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
-  var rawOut = outputStr == null ? "" : String(outputStr).trim();
+  var rawOut = outputStr == null ? "" : String(outputStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(rawOut)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
   var judgedOut = txIndexTarget(rawOut);
   if (judgedOut.huge) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output with " + judgedOut.digits + " digits to extract an ErgoTree from.");
@@ -13474,7 +13493,7 @@ function extractTxTree(txHex, outputStr, networkStr) {
   var treeHex = out.ergoTree;
   var info = analyzeErgoTree(treeHex, networkStr);
   if (!info.valid) return fail(info.reason);
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong ErgoTree."); };
@@ -13603,7 +13622,7 @@ function extractTxOutToken(txHex, outputStr, tokenStr) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
-  var rawOut = outputStr == null ? "" : String(outputStr).trim();
+  var rawOut = outputStr == null ? "" : String(outputStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(rawOut)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
   var judgedOut = txIndexTarget(rawOut);
   if (judgedOut.huge) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output with " + judgedOut.digits + " digits to extract a token from.");
@@ -13612,7 +13631,7 @@ function extractTxOutToken(txHex, outputStr, tokenStr) {
   rawOut = judgedOut.shown;
   var out = tx.outputs[target];
   if (out.tokens.length === 0) return fail("Output " + rawOut + " carries no tokens — it holds " + out.valueErg + " ERG only. (Tool 50 lifts a token out of the transaction's distinct-token list as a whole, with every output that carries it.)");
-  var rawTok = tokenStr == null ? "" : String(tokenStr).trim();
+  var rawTok = tokenStr == null ? "" : String(tokenStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(rawTok)) return fail("Enter the token number within this output as a whole number — 1 is the first token output " + rawOut + " carries, 2 its second, and so on. This output carries " + out.tokens.length + " token(s).");
   var judgedTok = txIndexTarget(rawTok);
   if (judgedTok.huge) return fail("Output " + rawOut + " carries " + out.tokens.length + " token(s), numbered 1 to " + out.tokens.length + " — there is no token with " + judgedTok.digits + " digits to extract from it.");
@@ -13622,7 +13641,7 @@ function extractTxOutToken(txHex, outputStr, tokenStr) {
   var chosen = out.tokens[tTarget];
   var distinctIndex = tx.tokenIds.indexOf(chosen.tokenId);
   if (distinctIndex < 0) return fail("Internal error: the chosen token is missing from the transaction's distinct-token list — nothing was shown rather than an unverified extraction.");
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong token."); };
@@ -13785,7 +13804,7 @@ function extractTxOutputRegisters(txHex, outputStr) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
-  var rawOut = outputStr == null ? "" : String(outputStr).trim();
+  var rawOut = outputStr == null ? "" : String(outputStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(rawOut)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
   var judgedOut = txIndexTarget(rawOut);
   if (judgedOut.huge) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output with " + judgedOut.digits + " digits to extract a register set from.");
@@ -13806,7 +13825,7 @@ function extractTxOutputRegisters(txHex, outputStr) {
   var sameSet = function (a, b) {
     return a.length === b.length && a.every(function (r, i) { return r.name === b[i].name && r.type === b[i].type && r.value === b[i].value && r.rawHex === b[i].rawHex; });
   };
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong register set."); };
@@ -13973,7 +13992,7 @@ function extractTxExtensionSet(txHex, inputStr) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
-  var rawIn = inputStr == null ? "" : String(inputStr).trim();
+  var rawIn = inputStr == null ? "" : String(inputStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(rawIn)) return fail("Enter the input number as a whole number — 1 is the transaction's first input, 2 its second, and so on. This transaction has " + tx.inputs.length + " input(s).");
   var judgedIn = txIndexTarget(rawIn);
   if (judgedIn.huge) return fail("This transaction has " + tx.inputs.length + " input(s), numbered 1 to " + tx.inputs.length + " — there is no input with " + judgedIn.digits + " digits to extract an extension set from.");
@@ -14000,7 +14019,7 @@ function extractTxExtensionSet(txHex, inputStr) {
     keyCount[en.key] = (keyCount[en.key] || 0) + 1;
     if (keyCount[en.key] === 2) duplicateKeys.push(en.key);
   });
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong extension set."); };
@@ -14121,7 +14140,7 @@ function extractTxOutputTokenSet(txHex, outputStr) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
-  var rawOut = outputStr == null ? "" : String(outputStr).trim();
+  var rawOut = outputStr == null ? "" : String(outputStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (!/^\d+$/.test(rawOut)) return fail("Enter the output number as a whole number — 1 is the transaction's first output, 2 its second, and so on. This transaction has " + tx.outputs.length + " output(s).");
   var judgedOut = txIndexTarget(rawOut);
   if (judgedOut.huge) return fail("This transaction has " + tx.outputs.length + " output(s), numbered 1 to " + tx.outputs.length + " — there is no output with " + judgedOut.digits + " digits to extract a token set from.");
@@ -14133,7 +14152,7 @@ function extractTxOutputTokenSet(txHex, outputStr) {
   var sameSet = function (a, b) {
     return a.length === b.length && a.every(function (t, i) { return t.tokenId === b[i].tokenId && t.amount === b[i].amount; });
   };
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong token set."); };
@@ -14304,7 +14323,7 @@ function extractTxDataInputSet(txHex) {
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
   if (tx.dataInputs.length === 0) return fail("This transaction has no data inputs — its scripts read no extra boxes, so there is no data-input set to extract. (Its " + tx.inputs.length + " ordinary input(s) are the boxes it spends; tool 56 lifts one input's context extension as a set, and tool 49 lifts a single data input when a transaction does carry them.)");
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong data-input set."); };
@@ -14422,7 +14441,7 @@ function extractTxInputSet(txHex) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong input set."); };
@@ -14562,7 +14581,7 @@ function extractTxOutputSet(txHex) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong output set."); };
@@ -14773,7 +14792,7 @@ function extractTxDistinctTokenSet(txHex) {
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail(tx.reason);
   if (tx.tokenIds.length === 0) return fail("This transaction lists no distinct token IDs — its outputs hold no tokens, so there is no distinct-token set to extract. (Its outputs carry " + tx.totalOutputErg + " ERG in total; tool 60 lifts the whole output set and tool 47 lifts an output out as a standalone box.)");
-  var cleaned = String(txHex).replace(/\s+/g, "");
+  var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   var pos = 0;
   var walkFail = function (what) { return fail("Internal error: " + what + " could not be re-walked — nothing was extracted rather than a wrong token set."); };
@@ -14933,7 +14952,7 @@ function summarizeTxSet(text) {
     return { valid: false, reason: reason, txCount: null, entries: null, totalInputs: null, totalDataInputs: null, totalOutputs: null, distinctInputCount: null, sharedInputs: null, distinctDataInputCount: null, totalOutputNano: null, totalOutputErg: null, totalBytes: null, minBytes: null, maxBytes: null, meanBytes: null, signedCount: null, unsignedCount: null, tokenEntryCount: null, distinctTokenCount: null, tokenTotals: null, mintingTxCount: null, mintedTokenIds: null };
   };
   if (typeof text !== "string") return fail("Paste the serialized transactions first — one complete transaction per line, exactly as tool 29 takes them.");
-  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (s) { return s !== ""; });
   if (lines.length < 2) return fail("A set summary needs at least two transactions — paste one complete serialized transaction per line. For a single transaction, tool 29 parses it on its own.");
   if (lines.length > TX_SET_MAX_LINES) return fail("That is " + lines.length + " lines — this tool summarizes at most " + TX_SET_MAX_LINES + " transactions at a time, so a pasted set stays reviewable line by line.");
   var seen = {};
@@ -15058,7 +15077,7 @@ function summarizeTxSet(text) {
 function parseTxSetSide(text, sideLabel) {
   var fail = function (reason) { return { valid: false, reason: reason, entries: null }; };
   if (typeof text !== "string") return fail("Paste the " + sideLabel + " set of serialized transactions first — one complete transaction per line, exactly as tool 29 takes them.");
-  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("The " + sideLabel + " set is empty — paste at least one complete serialized transaction, one per line.");
   if (lines.length > TX_SET_MAX_LINES) return fail("That is " + lines.length + " lines — a set here holds at most " + TX_SET_MAX_LINES + " transactions at a time, so a pasted set stays reviewable line by line.");
   var seen = {};
@@ -15163,7 +15182,7 @@ function compareTxSets(aText, bText) {
 function parseTxSetSideFull(text, sideLabel) {
   var fail = function (reason) { return { valid: false, reason: reason, entries: null }; };
   if (typeof text !== "string") return fail("Paste the " + sideLabel + " set of serialized transactions first — one complete transaction per line, exactly as tool 29 takes them.");
-  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("The " + sideLabel + " set is empty — paste at least one complete serialized transaction, one per line.");
   if (lines.length > TX_SET_MAX_LINES) return fail("That is " + lines.length + " lines — a set here holds at most " + TX_SET_MAX_LINES + " transactions at a time, so a pasted set stays reviewable line by line.");
   var seen = {};
@@ -15176,7 +15195,7 @@ function parseTxSetSideFull(text, sideLabel) {
     var reSum = 0n;
     tx.outputs.forEach(function (o) { reSum += BigInt(o.valueNano); });
     if (reSum.toString() !== tx.totalOutputNano) return fail("Internal error: transaction " + (i + 1) + "'s outputs re-sum to " + reSum.toString() + " nanoERG instead of the parser's " + tx.totalOutputNano + " — nothing was shown rather than an unverified merge.");
-    entries.push({ txId: tx.txId, totalOutputNano: tx.totalOutputNano, byteLength: tx.byteLength, inputBoxIds: tx.inputs.map(function (inp) { return inp.boxId; }), txHex: lines[i].replace(/\s+/g, "").toLowerCase() });
+    entries.push({ txId: tx.txId, totalOutputNano: tx.totalOutputNano, byteLength: tx.byteLength, inputBoxIds: tx.inputs.map(function (inp) { return inp.boxId; }), txHex: lines[i].replace(/[\s\u0085]+/g, "").toLowerCase() });
   }
   return { valid: true, reason: null, entries: entries };
 }
@@ -15695,9 +15714,9 @@ function encodeCompactBits(difficulty) {
 }
 
 function analyzeCompactBits(inputStr, directionStr) {
-  var direction = (directionStr == null ? "" : String(directionStr)).trim().toLowerCase();
+  var direction = (directionStr == null ? "" : String(directionStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   if (direction !== "encode" && direction !== "decode") return null;
-  var input = inputStr == null ? "" : String(inputStr).trim();
+  var input = inputStr == null ? "" : String(inputStr).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
   if (input.length > 100) return null; /* judged from length before the BigInt parses below — a difficulty has 78 digits at most, an nBits value 10 */
   if (direction === "decode") {
     var n = null;
@@ -15839,7 +15858,7 @@ function analyzeNextDifficulty(inputStr) {
     return { valid: false, reason: reason, mode: null, targetHeight: null, epochLength: null, boundaryHeights: null, parentDifficulty: null, predictive: null, predictiveUncompressed: null, perEpoch: null, fallback: null, limitedPredictive: null, classic: null, average: null, uncompressed: null, clampedPredictive: null, clampedFinal: null, difficulty: null, nBits: null, nBitsHex: null, target: null, targetHex: null, nextEpochStart: null };
   };
   if (typeof inputStr !== "string") return fail("Paste the epoch-boundary blocks first — one per line as height, timestamp (milliseconds), difficulty.");
-  var lines = inputStr.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = inputStr.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (s) { return s !== ""; });
   if (lines.length === 0) return fail("Paste the epoch-boundary blocks first — one per line as height, timestamp (milliseconds), difficulty.");
   /* The line count is judged BEFORE the parse loop below, like every
      other pasted list on this hub — this was the one list with no
@@ -16085,7 +16104,7 @@ function tallyHeaderVotes(text) {
     return { valid: false, reason: reason, headerCount: null, entries: null, minHeight: null, maxHeight: null, headersWithVotes: null, tallies: null, softForkCount: null, unknownCount: null, noneCount: null, totalVoteBytes: null, approvedChanges: null, softForkApproved: null };
   };
   if (typeof text !== "string") return fail("Paste the serialized block headers first — one complete header per line, exactly as tool 62 takes them.");
-  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (s) { return s !== ""; });
   if (lines.length < 2) return fail("A tally needs at least two headers — paste one complete serialized header per line. For a single header, tool 71 decodes its ballot on its own.");
   if (lines.length > VOTE_TALLY_MAX_HEADERS) return fail("That is " + lines.length + " lines — this tally counts at most " + VOTE_TALLY_MAX_HEADERS + " headers at a time (a voting epoch is 1,024), so a pasted set stays reviewable.");
   var seen = {};
@@ -16169,7 +16188,7 @@ function summarizeHeaderSet(text) {
     return { valid: false, reason: reason, headerCount: null, entries: null, minHeight: null, maxHeight: null, heightSpan: null, distinctHeights: null, missingHeights: null, forkHeights: null, versions: null, totalDifficulty: null, minDifficulty: null, maxDifficulty: null, meanDifficulty: null, earliestTimestampMs: null, latestTimestampMs: null, timestampSpanMs: null, adjacentPairs: null, linkedPairs: null, timestampRegressions: null, endpointMeanIntervalMs: null };
   };
   if (typeof text !== "string") return fail("Paste the serialized block headers first — one complete header per line, exactly as tool 62 takes them.");
-  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (s) { return s !== ""; });
   if (lines.length < 2) return fail("A set summary needs at least two headers — paste one complete serialized header per line. For a single header, tool 62 inspects it on its own.");
   if (lines.length > HEADER_SET_MAX_LINES) return fail("That is " + lines.length + " lines — this tool summarizes at most " + HEADER_SET_MAX_LINES + " headers at a time, so a pasted set stays reviewable line by line.");
   var seen = {};
@@ -16288,11 +16307,11 @@ function extractHeaderField(headerHex, fieldKey) {
   var fail = function (reason) {
     return { valid: false, reason: reason, headerId: null, height: null, version: null, field: null, fieldLabel: null, present: null, value: null, detail: null };
   };
-  var key = typeof fieldKey === "string" ? fieldKey.trim() : "";
+  var key = typeof fieldKey === "string" ? fieldKey.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") : "";
   if (!Object.prototype.hasOwnProperty.call(HEADER_FIELD_LABELS, key)) return fail("Pick the field to extract — one of: " + Object.keys(HEADER_FIELD_LABELS).join(", ") + ".");
   var h = inspectBlockHeader(headerHex, "");
   if (!h.valid) return fail("The header does not inspect: " + h.reason);
-  var cleaned = String(headerHex).replace(/\s+/g, "").toLowerCase();
+  var cleaned = String(headerHex).replace(/[\s\u0085]+/g, "").toLowerCase();
   var rebuilt = buildBlockHeader({
     version: String(h.version), parentId: h.parentId, adProofsRoot: h.adProofsRoot,
     transactionsRoot: h.transactionsRoot, stateRoot: h.stateRoot, timestampMs: h.timestampMs,
@@ -16381,7 +16400,7 @@ function analyzeHeaderSize(headerHex) {
   };
   var h = inspectBlockHeader(headerHex, "");
   if (!h.valid) return fail("The header does not inspect: " + h.reason);
-  var cleaned = String(headerHex).replace(/\s+/g, "").toLowerCase();
+  var cleaned = String(headerHex).replace(/[\s\u0085]+/g, "").toLowerCase();
   var rebuilt = buildBlockHeader({
     version: String(h.version), parentId: h.parentId, adProofsRoot: h.adProofsRoot,
     transactionsRoot: h.transactionsRoot, stateRoot: h.stateRoot, timestampMs: h.timestampMs,
@@ -16475,7 +16494,7 @@ function analyzeHeaderSize(headerHex) {
 function parseHeaderSetSide(text, sideLabel) {
   var fail = function (reason) { return { valid: false, reason: reason, entries: null }; };
   if (typeof text !== "string") return fail("Paste the " + sideLabel + " set of serialized block headers first — one complete header per line, exactly as tool 62 takes them.");
-  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("The " + sideLabel + " set is empty — paste at least one complete serialized header, one per line.");
   if (lines.length > HEADER_SET_MAX_LINES) return fail("That is " + lines.length + " lines — a set here holds at most " + HEADER_SET_MAX_LINES + " headers at a time, so a pasted set stays reviewable line by line.");
   var seen = {};
@@ -16574,7 +16593,7 @@ function compareHeaderSets(aText, bText) {
 function parseHeaderSetSideFull(text, sideLabel) {
   var fail = function (reason) { return { valid: false, reason: reason, entries: null }; };
   if (typeof text !== "string") return fail("Paste the " + sideLabel + " set of serialized block headers first — one complete header per line, exactly as tool 62 takes them.");
-  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029/).map(function (s) { return s.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("The " + sideLabel + " set is empty — paste at least one complete serialized header, one per line.");
   if (lines.length > HEADER_SET_MAX_LINES) return fail("That is " + lines.length + " lines — a set here holds at most " + HEADER_SET_MAX_LINES + " headers at a time, so a pasted set stays reviewable line by line.");
   var seen = {};
@@ -16585,7 +16604,7 @@ function parseHeaderSetSideFull(text, sideLabel) {
     if (seen[h.headerId]) return fail("Header " + (i + 1) + " of " + lines.length + " is the same header as header " + seen[h.headerId] + " (ID " + h.headerId + ") — a header counted twice would corrupt the merge, so duplicates inside one set are refused rather than merged.");
     seen[h.headerId] = i + 1;
     if (decodeCompactBits(h.nBits).toString() !== h.difficulty) return fail("Internal error: header " + (i + 1) + "'s difficulty does not re-decode from its own nBits — nothing was shown rather than an unverified merge.");
-    entries.push({ headerId: h.headerId, height: h.height, parentId: h.parentId, difficulty: h.difficulty, headerHex: lines[i].replace(/\s+/g, "").toLowerCase() });
+    entries.push({ headerId: h.headerId, height: h.height, parentId: h.parentId, difficulty: h.difficulty, headerHex: lines[i].replace(/[\s\u0085]+/g, "").toLowerCase() });
   }
   return { valid: true, reason: null, entries: entries };
 }
@@ -17068,11 +17087,11 @@ function inspectBlockHeader(headerHex, expectedStr) {
     return { valid: false, reason: reason, headerId: null, idMatches: null, expectedId: null, version: null, autolykosVersion: null, parentId: null, adProofsRoot: null, transactionsRoot: null, stateRoot: null, extensionRoot: null, timestampMs: null, timestampIso: null, nBits: null, nBitsHex: null, difficulty: null, height: null, votesHex: null, votes: null, unparsedHex: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null, byteLength: null, withoutPowLength: null, solutionLength: null };
   };
   if (typeof headerHex !== "string") return fail("Paste the serialized block header as hex first — the full header bytes, Autolykos solution included, exactly as a node serializes them.");
-  var cleaned = headerHex.replace(/\s+/g, "");
+  var cleaned = headerHex.replace(/[\s\u0085]+/g, "");
   if (cleaned === "" || !/^[0-9a-fA-F]+$/.test(cleaned) || cleaned.length % 2 !== 0) return fail("That is not even-length hex — a serialized block header is a whole number of bytes written as hex.");
   var expectedId = null;
-  if (typeof expectedStr === "string" && expectedStr.trim() !== "") {
-    var ex = expectedStr.replace(/\s+/g, "").toLowerCase();
+  if (typeof expectedStr === "string" && expectedStr.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") {
+    var ex = expectedStr.replace(/[\s\u0085]+/g, "").toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(ex)) return fail("An expected header ID is 64 hex characters (32 bytes) — check the value you pasted, or clear it to just recompute the ID.");
     expectedId = ex;
   }
@@ -17234,9 +17253,9 @@ function buildBlockHeader(fields) {
     return { valid: false, reason: reason, headerHex: null, headerId: null, version: null, autolykosVersion: null, timestampIso: null, difficulty: null, byteLength: null, withoutPowLength: null, solutionLength: null };
   };
   if (!fields || typeof fields !== "object") return fail("Fill in the header fields first — version, the four roots, timestamp, nBits, height, votes and the Autolykos solution values.");
-  var get = function (k) { var v = fields[k]; return v == null ? "" : String(v).trim(); };
+  var get = function (k) { var v = fields[k]; return v == null ? "" : String(v).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); };
   var hexField = function (k, chars, what) {
-    var v = get(k).replace(/\s+/g, "").toLowerCase();
+    var v = get(k).replace(/[\s\u0085]+/g, "").toLowerCase();
     if (!new RegExp("^[0-9a-f]{" + chars + "}$").test(v)) return null;
     return v;
   };
@@ -17262,7 +17281,7 @@ function buildBlockHeader(fields) {
   var height = BigInt(get("height"));
   if (height > 0xffffffffn) return fail("The height does not fit in 32 bits — the reference layout stores it as a u32.");
   var votesHex = hexField("votesHex", 6); if (votesHex === null) return fail("The miner votes must be exactly 6 hex characters (3 bytes).");
-  var unparsedHex = get("unparsedHex").replace(/\s+/g, "").toLowerCase();
+  var unparsedHex = get("unparsedHex").replace(/[\s\u0085]+/g, "").toLowerCase();
   if (version === 1) {
     if (unparsedHex !== "") return fail("Version 1 headers carry no extra-fields section — that length byte exists only on version 2 and up. Clear the extra-fields value or raise the version.");
   } else {
@@ -17361,8 +17380,8 @@ function compareBlockHeaders(aHex, bHex) {
   if (!a.valid) return fail("The FIRST header does not inspect: " + a.reason);
   var b = inspectBlockHeader(bHex, "");
   if (!b.valid) return fail("The SECOND header does not inspect: " + b.reason);
-  var aBytes = hexToBytes(String(aHex).replace(/\s+/g, ""));
-  var bBytes = hexToBytes(String(bHex).replace(/\s+/g, ""));
+  var aBytes = hexToBytes(String(aHex).replace(/[\s\u0085]+/g, ""));
+  var bBytes = hexToBytes(String(bHex).replace(/[\s\u0085]+/g, ""));
   var identicalBytes = !!(aBytes && bBytes && aBytes.length === bBytes.length && aBytes.every(function (x, i) { return x === bBytes[i]; }));
   var firstDiffOffset = null;
   var lim = Math.min(aBytes.length, bBytes.length);
@@ -17450,7 +17469,7 @@ function checkHeaderChain(text) {
     return { valid: false, reason: reason, verdict: null, count: null, entries: null, links: null, allLinked: null, allSequential: null, breaks: null, heightGaps: null, timestampRegressions: null, duplicates: null, firstHeaderId: null, lastHeaderId: null, firstHeight: null, lastHeight: null, totalHeightDelta: null, totalTimestampDeltaMs: null };
   };
   if (typeof text !== "string") return fail("Paste the serialized block headers first — one header per line, in chain order, each the full serialized bytes as hex.");
-  var lines = text.split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = text.split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste the serialized block headers first — one header per line, in chain order, each the full serialized bytes as hex.");
   if (lines.length === 1) return fail("A chain needs at least two headers — paste a second serialized header on the next line so there is a link to check. For a single header, tool 62 inspects it on its own.");
   if (lines.length > HEADER_SET_MAX_LINES) return fail("That is " + lines.length + " lines — this tool checks a chain of at most " + HEADER_SET_MAX_LINES + " headers at a time, so a pasted chain stays reviewable line by line.");
@@ -17540,7 +17559,7 @@ function extractHeaderPow(headerHex) {
   };
   var h = inspectBlockHeader(headerHex, "");
   if (!h.valid) return fail("That header does not inspect: " + h.reason);
-  var cleaned = String(headerHex).replace(/\s+/g, "");
+  var cleaned = String(headerHex).replace(/[\s\u0085]+/g, "");
   var bytes = hexToBytes(cleaned);
   if (!bytes || bytes.length !== h.byteLength) return fail("Internal error: the header bytes do not line up with the inspection — nothing was shown rather than an unverified split.");
   var withoutPowHex = bytesToHex(bytes.subarray(0, h.withoutPowLength));
@@ -17630,10 +17649,10 @@ function attachHeaderPow(withoutPowHex, solutionHex) {
   var fail = function (reason) {
     return { valid: false, reason: reason, headerHex: null, headerId: null, version: null, autolykosVersion: null, height: null, byteLength: null, withoutPowLength: null, solutionLength: null, minerPk: null, onetimePk: null, nonce: null, powDistance: null };
   };
-  if (typeof withoutPowHex !== "string" || withoutPowHex.replace(/\s+/g, "") === "") return fail("Paste the header-without-PoW bytes first — the first half tool 66 splits off, as hex.");
-  if (typeof solutionHex !== "string" || solutionHex.replace(/\s+/g, "") === "") return fail("Paste the Autolykos solution bytes — the second half tool 66 splits off, as hex.");
-  var wpClean = withoutPowHex.replace(/\s+/g, "").toLowerCase();
-  var solClean = solutionHex.replace(/\s+/g, "").toLowerCase();
+  if (typeof withoutPowHex !== "string" || withoutPowHex.replace(/[\s\u0085]+/g, "") === "") return fail("Paste the header-without-PoW bytes first — the first half tool 66 splits off, as hex.");
+  if (typeof solutionHex !== "string" || solutionHex.replace(/[\s\u0085]+/g, "") === "") return fail("Paste the Autolykos solution bytes — the second half tool 66 splits off, as hex.");
+  var wpClean = withoutPowHex.replace(/[\s\u0085]+/g, "").toLowerCase();
+  var solClean = solutionHex.replace(/[\s\u0085]+/g, "").toLowerCase();
   if (!/^[0-9a-f]+$/.test(wpClean) || wpClean.length % 2 !== 0) return fail("The without-PoW half is not even-length hex — it is a whole number of bytes written as hex.");
   if (!/^[0-9a-f]+$/.test(solClean) || solClean.length % 2 !== 0) return fail("The solution half is not even-length hex — it is a whole number of bytes written as hex.");
   var wp = hexToBytes(wpClean);
@@ -18019,17 +18038,17 @@ if (typeof document !== "undefined") {
       var ergVal = document.getElementById("erg").value;
       var nanoVal = document.getElementById("nanoerg").value;
       var result = document.getElementById("convert-result");
-      if (ergVal.trim() !== "") {
+      if (ergVal.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") {
         var nano = ergToNano(ergVal);
         result.textContent = nano === null
           ? "Enter an ERG amount (a whole number, or up to 9 decimal places — 1 nanoERG is the smallest unit)."
-          : ergVal.trim() + " ERG = " + nano + " nanoERG. Exact BigInt maths, done locally.";
+          : ergVal.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") + " ERG = " + nano + " nanoERG. Exact BigInt maths, done locally.";
         if (nano !== null) document.getElementById("nanoerg").value = nano;
-      } else if (nanoVal.trim() !== "") {
+      } else if (nanoVal.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") {
         var erg = nanoToErg(nanoVal);
         result.textContent = erg === null
           ? "Enter a nanoERG amount as a whole number (no decimals — nanoERG does not subdivide)."
-          : nanoVal.trim() + " nanoERG = " + erg + " ERG. Exact BigInt maths, done locally.";
+          : nanoVal.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") + " nanoERG = " + erg + " ERG. Exact BigInt maths, done locally.";
         if (erg !== null) document.getElementById("erg").value = erg;
       } else {
         result.textContent = "Fill in one side — ERG or nanoERG — and I will convert the other.";
@@ -18117,17 +18136,17 @@ if (typeof document !== "undefined") {
         out.textContent = "Enter the token's decimals first — a whole number from 0 to 18, exactly as listed for the token on the explorer. The conversion depends on it entirely.";
         return;
       }
-      if (rawVal.trim() !== "") {
+      if (rawVal.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") {
         var disp = tokenRawToDisplay(rawVal, decVal);
         out.textContent = disp === null
           ? "Enter the raw amount as a whole number — on-chain token amounts are integers, with no decimal point."
-          : rawVal.trim() + " raw = " + disp + " displayed, at " + decVal.trim() + " decimals. Exact maths, done locally.";
+          : rawVal.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") + " raw = " + disp + " displayed, at " + decVal.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") + " decimals. Exact maths, done locally.";
         if (disp !== null) document.getElementById("token-display").value = disp;
-      } else if (dispVal.trim() !== "") {
+      } else if (dispVal.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") {
         var raw = tokenDisplayToRaw(dispVal, decVal);
         out.textContent = raw === null
           ? "Enter a display amount with no more decimal places than the token's decimals — anything smaller than one raw unit cannot exist on-chain."
-          : dispVal.trim() + " displayed = " + raw + " raw, at " + decVal.trim() + " decimals. Exact maths, done locally.";
+          : dispVal.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") + " displayed = " + raw + " raw, at " + decVal.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") + " decimals. Exact maths, done locally.";
         if (raw !== null) document.getElementById("token-raw").value = raw;
       } else {
         out.textContent = "Fill in one side — the raw on-chain amount or the display amount — and I will convert the other.";
@@ -21106,7 +21125,7 @@ if (typeof document !== "undefined") {
         out.textContent = "✗ " + parsedTokens.reason;
         return;
       }
-      var registers = document.getElementById("boxbuild-registers").value.split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+      var registers = document.getElementById("boxbuild-registers").value.split(/(?:\r\n|\r|\n|\u000b|\u000c|\u0085|\u2028|\u2029)+/).map(function (l) { return l.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""); }).filter(function (l) { return l !== ""; });
       var res = buildErgoBox({
         valueNano: document.getElementById("boxbuild-value").value,
         ergoTree: document.getElementById("boxbuild-tree").value,
@@ -21134,7 +21153,7 @@ if (typeof document !== "undefined") {
       var out = document.getElementById("sigma-result");
       var hexVal = document.getElementById("sigma-hex").value;
       var specVal = document.getElementById("sigma-spec").value;
-      if (hexVal.trim() !== "") {
+      if (hexVal.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") {
         var dec = decodeSigmaConstant(hexVal);
         if (!dec.valid) {
           out.textContent = "✗ " + dec.reason;
@@ -21143,7 +21162,7 @@ if (typeof document !== "undefined") {
         out.textContent = "✓ That is one " + dec.type + " constant, " + dec.byteLength + (dec.byteLength === 1 ? " byte" : " bytes") + " — value: " + dec.value + ". Decoded locally with the same reader tool 15 uses for a box's registers, at the same integer widths, so what an explorer shows for a register (a babel box's R5 price, say) reads back as the value that was written. Decoding only: it shows what the constant holds, not what any script does with it.";
         return;
       }
-      if (specVal.trim() !== "") {
+      if (specVal.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") {
         var enc = encodeSigmaConstant(specVal);
         if (!enc.valid) {
           out.textContent = "✗ " + enc.reason;
@@ -21192,7 +21211,7 @@ if (typeof document !== "undefined") {
 
     /* --- copy donation address --- */
     document.getElementById("copy-address").addEventListener("click", function () {
-      var addr = document.getElementById("donation-address").textContent.trim();
+      var addr = document.getElementById("donation-address").textContent.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
       var done = function () { document.getElementById("copy-status").textContent = "ERG address copied."; };
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(addr).then(done, function () {

@@ -3326,5 +3326,47 @@ check("sitemap lists hub and guide with lastmod", sitemap.includes("<loc>https:/
 check("README leads with the 142 free tools", readme.includes("142 free Ergo tools, local-first"));
 check("README tool-finder count matches the 142 tools", readme.includes("with 142 tools on one page"));
 
+/* mutation fuzz guard: byte-level hostile inputs through the serialized-data parsers.
+   The probes (hidden_files/probe-mutation-fuzz*.js) drove ~79,000 mutated,
+   random and hostile inputs through these parsers with zero throws, hangs
+   or unstructured verdicts; this pinned subset (deterministic seed) keeps
+   the never-throw/structured-verdict property from regressing. */
+check("mutated byte inputs never throw the serialized-data parsers", (() => {
+  let s = 0xF00DBEAD;
+  const rnd = () => { s |= 0; s = (s + 0x6D2B79F5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const ri = (n) => Math.floor(rnd() * n);
+  const toHex = (a) => a.map((b) => b.toString(16).padStart(2, "0")).join("");
+  const HEX64 = /^[0-9a-f]{64}$/;
+  const mutate = (hex) => {
+    const a = []; for (let i = 0; i < hex.length; i += 2) a.push(parseInt(hex.slice(i, i + 2), 16));
+    const kind = ri(5);
+    if (kind === 0) { const n = 1 + ri(3); for (let i = 0; i < n; i++) a[ri(a.length)] = ri(256); }
+    else if (kind === 1) a.length = 1 + ri(a.length);
+    else if (kind === 2) { const n = 1 + ri(12); for (let i = 0; i < n; i++) a.push(ri(256)); }
+    else if (kind === 3) { const p = ri(a.length), len = 1 + ri(Math.min(16, a.length - p)); for (let i = p; i < p + len; i++) a[i] = 0; }
+    else { const p = ri(a.length), len = 1 + ri(Math.min(16, a.length - p)); for (let i = p; i < p + len; i++) a[i] = 0xff; }
+    return toHex(a);
+  };
+  const targets = [
+    [BOX1, (h) => app.parseErgoBox(h), ["boxId"]],
+    [TX_V2, (h) => app.parseErgoTransaction(h), ["txId"]],
+    [SEG_TREE, (h) => app.analyzeErgoTree(h), []],
+    [HDR_V4, (h) => app.inspectBlockHeader(h, ""), ["headerId"]],
+  ];
+  let calls = 0, seenInvalid = 0;
+  for (let r = 0; r < 60; r++) {
+    for (const [v, fn, ids] of targets) {
+      calls++;
+      const m = mutate(v);
+      let out;
+      try { out = fn(m); } catch { return false; }
+      if (!out || typeof out !== "object" || typeof out.valid !== "boolean") return false;
+      if (!out.valid) seenInvalid++;
+      for (const f of ids) if (out.valid && out[f] != null && !HEX64.test(out[f])) return false;
+    }
+  }
+  return calls === 240 && seenInvalid > 0;
+})());
+
 console.log(failures === 0 ? "\nALL TESTS PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

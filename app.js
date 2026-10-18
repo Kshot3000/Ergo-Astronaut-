@@ -9128,9 +9128,24 @@ function buildErgoBox(fields) {
      bytes were assembled and the re-parse refused them. */
   if (!Array.isArray(tokens) || tokens.length > 10000) return fail("A box carries at most 10,000 tokens" + (Array.isArray(tokens) ? " — " + tokens.length + " were given" : " — the tokens given are not a list") + ". The count is the one tool 15's parser accepts when it reads a box back, so a longer list could never be read back.");
   var tokenBytes = [];
+  var seenTokenIds = Object.create(null);
   for (var t = 0; t < tokens.length; t++) {
     var idBytes = hexToBytes(tokens[t] && tokens[t].tokenId);
     if (!idBytes || idBytes.length !== 32) return fail("Token " + (t + 1) + ": a token ID is 32 bytes, 64 hex characters — got \"" + boundedEcho(tokens[t] && tokens[t].tokenId) + "\".");
+    /* A box holds at most ONE entry per token ID: R2 is a set of
+       (tokenId -> amount) pairs, fleet-sdk's builder sums a repeat
+       into the first entry rather than ever emitting two, and this
+       hub's own token-payment planner refuses a repeated token
+       outright — so a repeat here is refused by name rather than
+       assembled into a box whose token list names the same asset
+       twice with two different amounts, leaving a reader (or a
+       script searching the list by ID) to find whichever entry
+       comes first. The comparison runs on the decoded ID, so a
+       repeat written in different hex case is still the same
+       token. Combine the amounts into one entry instead. */
+    var tokenHex = bytesToHex(idBytes);
+    if (seenTokenIds[tokenHex]) return fail("Token " + (t + 1) + " repeats token " + seenTokenIds[tokenHex] + " (token ID " + tokenHex + ") — a box holds one entry per token ID, so the repeat is refused rather than built with two amounts for the same token. Combine the amounts into a single entry for that token.");
+    seenTokenIds[tokenHex] = t + 1;
     if (!digits(tokens[t].amount)) return fail("Token " + (t + 1) + ": enter the amount as a whole raw integer (digits only — tool 6 converts display amounts to raw).");
     var amt = BigInt(tokens[t].amount.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
     if (amt < 1n || amt > 9223372036854775807n) return fail("Token " + (t + 1) + ": a token amount is a positive signed 64-bit raw integer.");
@@ -9206,7 +9221,9 @@ function buildErgoBox(fields) {
    merged. A repeated input box ID is refused too: one box can be
    spent only once in a transaction (upstream stateless validation
    rejects it as a double spend, and tool 38's audit names it in
-   any transaction it reads). The transaction ID is the Blake2b-256 of the unsigned
+   any transaction it reads). An output listing the same token ID
+   twice is refused too: one entry per token ID per box, as in
+   tool 17's builder. The transaction ID is the Blake2b-256 of the unsigned
    rewrite — proofs stripped, extensions kept — exactly as tool 29
    recomputes it. The assembled bytes are round-tripped through
    tool 29's parser before they are shown, and every field
@@ -9322,10 +9339,23 @@ function buildErgoTransaction(fields) {
     var tkFields = of.tokens || [];
     if (!Array.isArray(tkFields) || tkFields.length > 10000) return fail(oWhat + ": tokens are a list of token ID / amount pairs.");
     var oTokens = [];
+    var seenOutTokenIds = Object.create(null);
     for (var t = 0; t < tkFields.length; t++) {
       var tf = tkFields[t] || {};
       var tkId = hexId(tf.tokenId);
       if (!tkId) return fail(oWhat + ", token " + (t + 1) + ": a token ID is 32 bytes, 64 hex characters — got \"" + boundedEcho(tf.tokenId) + "\".");
+      /* One entry per token ID in ONE output, for the same reason
+         tool 17's box builder refuses a repeat: a box's token list
+         is a set of (tokenId -> amount) pairs — fleet-sdk sums a
+         repeat into the first entry rather than emitting two, and
+         this builder would otherwise write the same distinct-list
+         index twice with two amounts. The same token in a
+         DIFFERENT output is that output's own entry and stays
+         valid. The comparison runs on the decoded ID, so hex case
+         cannot hide a repeat. */
+      var tkHexEarly = bytesToHex(tkId);
+      if (seenOutTokenIds[tkHexEarly]) return fail(oWhat + ", token " + (t + 1) + " repeats token " + seenOutTokenIds[tkHexEarly] + " (token ID " + tkHexEarly + ") — one output holds one entry per token ID, so the repeat is refused rather than built with two amounts for the same token. Combine the amounts into a single entry for that token in this output.");
+      seenOutTokenIds[tkHexEarly] = t + 1;
       if (!digits(tf.amount)) return fail(oWhat + ", token " + (t + 1) + ": enter the amount as a whole raw integer (digits only — tool 6 converts display amounts to raw).");
       var tkAmt = BigInt(String(tf.amount).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
       if (tkAmt < 1n || tkAmt > 9223372036854775807n) return fail(oWhat + ", token " + (t + 1) + ": a token amount is a positive signed 64-bit raw integer.");

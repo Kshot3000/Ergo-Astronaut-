@@ -1164,7 +1164,7 @@ function buildSplitPayment(potStr, recipientsRaw, minerFeeStr) {
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var potNano = BigInt(pot);
   var minerNano = BigInt(miner);
-  var rawLines = (recipientsRaw == null ? "" : String(recipientsRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (recipientsRaw == null ? "" : String(recipientsRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -1305,7 +1305,7 @@ function buildMilestonePlan(sellerRaw, contractStr, milestonesRaw, minerFeeStr) 
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network, and every milestone is its own transaction.");
   var contractNano = BigInt(contract);
   var minerNano = BigInt(miner);
-  var rawLines = (milestonesRaw == null ? "" : String(milestonesRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (milestonesRaw == null ? "" : String(milestonesRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   var entries = [];
   var seenLabels = Object.create(null);
   for (var li = 0; li < rawLines.length; li++) {
@@ -1432,7 +1432,7 @@ function buildPayrollPlan(entriesRaw, minerFeeStr) {
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -2165,7 +2165,7 @@ function buildRewardPlan(poolStr, entriesRaw, minerFeeStr) {
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -2344,7 +2344,7 @@ function buildCrowdfundPlan(creatorRaw, labelRaw, goalStr, entriesRaw, minerFeeS
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -2568,7 +2568,7 @@ function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -2953,7 +2953,7 @@ function buildGroupExpensePlan(labelRaw, entriesRaw, minerFeeStr) {
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -3153,7 +3153,7 @@ function buildRoscaPlan(labelRaw, membersRaw, contributionStr, minerFeeStr) {
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var rawLines = (membersRaw == null ? "" : String(membersRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (membersRaw == null ? "" : String(membersRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -3315,7 +3315,7 @@ function buildWaterfallPlan(labelRaw, tiersRaw, revenueStr, minerFeeStr) {
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var rawLines = (tiersRaw == null ? "" : String(tiersRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (tiersRaw == null ? "" : String(tiersRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -3497,7 +3497,7 @@ function buildPrizeSplitPlan(labelRaw, winnersRaw, poolStr, minerFeeStr) {
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var rawLines = (winnersRaw == null ? "" : String(winnersRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (winnersRaw == null ? "" : String(winnersRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -3669,7 +3669,7 @@ function buildLoanSyndicatePlan(labelRaw, borrowerRaw, lendersRaw, repaymentStr,
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var rawLines = (lendersRaw == null ? "" : String(lendersRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (lendersRaw == null ? "" : String(lendersRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -3839,7 +3839,7 @@ function buildTieredCommissionPlan(labelRaw, sellerRaw, agentRaw, bracketsRaw, s
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var rawLines = (bracketsRaw == null ? "" : String(bracketsRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (bracketsRaw == null ? "" : String(bracketsRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   var entries = [];
   var prevCapNano = 0n;
   var restCount = 0;
@@ -4011,7 +4011,7 @@ function buildCascadingRoyaltyPlan(labelRaw, sellerRaw, recipientsRaw, priceStr,
   var scheck = checkErgoAddress(seller);
   if (!scheck.valid) return fail("The seller's address is refused: " + scheck.reason);
   var network = scheck.network;
-  var rawLines = (recipientsRaw == null ? "" : String(recipientsRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (recipientsRaw == null ? "" : String(recipientsRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -4294,7 +4294,7 @@ function buildVickreyPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -4548,7 +4548,7 @@ function buildLaunchpadPlan(projectRaw, labelRaw, capStr, entriesRaw, minerFeeSt
   var miner = ergToNano(minerFeeStr);
   if (miner === null || BigInt(miner) <= 0n) return fail("The miner fee must be an ERG amount above zero — a transaction with no miner fee is not accepted by the network.");
   var minerNano = BigInt(miner);
-  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -4767,7 +4767,7 @@ function buildReverseAuctionPlan(buyerRaw, labelRaw, budgetStr, entriesRaw, mine
   if (budget === null || BigInt(budget) <= 0n) return fail("The maximum budget must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit) — a procurement with no budget ceiling is not a reverse auction.");
   var budgetNano = BigInt(budget);
   if (budgetNano <= minerNano) return fail("The maximum budget of " + nanoToErg(budgetNano.toString()) + " ERG does not cover the " + nanoToErg(minerNano.toString()) + " ERG miner fee a refund transaction needs if no bid qualifies — that budget could never come back. Raise the budget or lower the miner fee.");
-  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (entriesRaw == null ? "" : String(entriesRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -5288,7 +5288,7 @@ function buildDepositPlan(tenantRaw, landlordRaw, labelRaw, depositStr, deductio
   var deposit = ergToNano(depositStr);
   if (deposit === null || BigInt(deposit) <= 0n) return fail("The deposit must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit).");
   var depositNano = BigInt(deposit);
-  var rawLines = (deductionsRaw == null ? "" : String(deductionsRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (deductionsRaw == null ? "" : String(deductionsRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   var entries = [];
   var seenNames = Object.create(null);
   for (var li = 0; li < rawLines.length; li++) {
@@ -5494,7 +5494,7 @@ function buildMatchPlan(charityRaw, matcherRaw, labelRaw, percentStr, capStr, do
   var cap = ergToNano(capStr);
   if (cap === null || BigInt(cap) <= 0n) return fail("The match cap must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit) — the cap is the most the matcher can be asked to pay, so a campaign without one is an open-ended pledge this builder will not write.");
   var capNano = BigInt(cap);
-  var rawLines = (donorsRaw == null ? "" : String(donorsRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (donorsRaw == null ? "" : String(donorsRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   var entries = [];
   var seenNames = Object.create(null);
   for (var li = 0; li < rawLines.length; li++) {
@@ -5724,7 +5724,7 @@ function buildGroupBuyPlan(sellerRaw, labelRaw, unitPriceStr, discountPercentStr
   if (bps === null) return fail("The discount percent is refused: give a percent above zero and below 100, with at most two decimal places (e.g. 10 for 10% off) — a zero discount never binds and a 100% discount makes the item free, neither of which is a group-buy price.");
   var threshold = parseGroupBuyCount(thresholdStr, GROUPBUY_MAX_THRESHOLD);
   if (threshold === null) return fail("The discount threshold is refused: give a whole number of units from 1 to 1000000000 — the threshold is the total quantity at which the discount unlocks.");
-  var rawLines = (buyersRaw == null ? "" : String(buyersRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (buyersRaw == null ? "" : String(buyersRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -5941,7 +5941,7 @@ function buildGiftFundPlan(sellerRaw, labelRaw, priceStr, contributorsRaw, miner
   var price = ergToNano(priceStr);
   if (price === null || BigInt(price) <= 0n) return fail("The gift price must be an ERG amount above zero, with at most 9 decimal places (nanoERG is the smallest unit) — a free gift has nothing to settle.");
   var priceNano = BigInt(price);
-  var rawLines = (contributorsRaw == null ? "" : String(contributorsRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (contributorsRaw == null ? "" : String(contributorsRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -6168,7 +6168,7 @@ function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersR
   if (pctRaw.length > 100) return fail("The withholding percent is refused: it is judged from its length before it is parsed — at most 100 digits, far beyond the 100% maximum (3 digits).");
   var pct = BigInt(pctRaw);
   if (pct > 100n) return fail("The withholding percent is " + pctRaw + "% — a withholding above 100% would take more than the pool itself.");
-  var rawLines = (holdersRaw == null ? "" : String(holdersRaw)).split(/\r\n|\r|\n/);
+  var rawLines = (holdersRaw == null ? "" : String(holdersRaw)).split(/\r\n|\r|\n|\u2028|\u2029/);
   /* The entry cap is judged from the non-empty line count BEFORE
      the loop below: the loop checksum-validates every address it
      reads (Base58 decode + Blake2b-256), so an over-cap paste
@@ -6922,7 +6922,7 @@ function buildSegregatedTree(templateHex, constantsText, sizeMode, networkStr) {
   var templateBytes = hexToBytes(templateHex == null ? "" : String(templateHex).trim().toLowerCase());
   if (!templateBytes) return fail("Give the proposition template as hex — the bytes tool 93 hands back from a segregated tree, or any proposition bytes you want carried as the template. A template is never empty: a segregated tree is constants plus the script that refers to them.");
   if (templateBytes.length > 100000) return fail("Implausible template (" + templateBytes.length + " bytes) — proposition templates are scripts, not data blobs.");
-  var lines = String(constantsText == null ? "" : constantsText).split(/\r\n|\r|\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = String(constantsText == null ? "" : constantsText).split(/\r\n|\r|\n|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("Give at least one constant, one per line — a segregated tree with no constants is not a segregated tree (tool 93 refuses to read one back, and so does the reference). For a tree with its constants inline, tools 10/16/19/92 build it directly.");
   if (lines.length > 10000) return fail("Implausible constant count (" + lines.length + ") — a template's constants are its parameters, not a data table.");
   var constants = [];
@@ -7039,7 +7039,7 @@ function analyzeMerkle(leavesText, indexText, expectedText) {
   var fail = function (reason) {
     return { valid: false, reason: reason, leafCount: null, leafHashes: null, rootHex: null, proofIndex: null, proofLevels: null, proofText: null, proofChecksOut: false, expectedRoot: null, matchesExpected: null, verdict: null };
   };
-  var lines = String(leavesText == null ? "" : leavesText).split(/\r\n|\r|\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = String(leavesText == null ? "" : leavesText).split(/\r\n|\r|\n|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("Give at least one leaf, one per line, as hex — for a block's transactions root each leaf is one transaction's 32-byte ID. An empty tree is not built here: the reference root for zero leaves is 32 zero bytes (and the genesis blocks' special empty root is Blake2b-256 of nothing, 0e5751c0…).");
   if (lines.length > 10000) return fail("Implausible leaf count (" + lines.length + ") — a Merkle tree over a pasted list is a checking tool, not a block builder.");
   var datas = [];
@@ -7103,7 +7103,7 @@ function verifyMerkleProof(leafText, levelsText, rootText) {
   if (!leaf) return fail("Give the leaf data as hex — for a block proof that is the transaction's 32-byte ID, exactly as it was a leaf of the tree.");
   var rootBytes = hexToBytes(rootText == null ? "" : String(rootText).trim());
   if (!rootBytes || rootBytes.length !== 32) return fail("Give the expected root as exactly 32 bytes of hex (64 characters) — a Merkle root is one Blake2b-256 digest.");
-  var lines = String(levelsText == null ? "" : levelsText).split(/\r\n|\r|\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = String(levelsText == null ? "" : levelsText).split(/\r\n|\r|\n|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("Give at least one proof level, one per line: \"L <sibling hash hex>\" when the proven node sits on the left, \"R <sibling hash hex>\" when it sits on the right, or EMPTY for a level whose sibling is the tree's empty slot.");
   if (lines.length > MERKLE_PROOF_MAX_LEVELS) return fail("Implausible proof length (" + lines.length + " levels) — a proof carries one level per doubling of the tree, so " + MERKLE_PROOF_MAX_LEVELS + " levels already span a tree of 2^64 leaves and no real proof comes close; check the paste is a single proof, one level per line.");
   var levels = [];
@@ -7364,7 +7364,7 @@ function summarizeAddressSet(addressesText) {
   var fail = function (reason) {
     return { valid: false, reason: reason, entries: null, invalid: null, lineCount: null, validCount: null, distinctCount: null, duplicateCount: null, invalidCount: null, mainnetCount: null, testnetCount: null, p2pkCount: null, p2shCount: null, p2sCount: null, mixedNetworks: null, crossNetworkPairs: null, verdict: null };
   };
-  var lines = (addressesText == null ? "" : String(addressesText)).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (addressesText == null ? "" : String(addressesText)).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste at least one Ergo address, one address per line — a payout list, an address-book export, or the addresses tool 31 derives. This summarizes the addresses you paste; it fetches nothing and says nothing about any address's balance.");
   if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool summarizes at most 100 addresses at a time, so a pasted list stays reviewable line by line.");
   var entries = [];
@@ -8970,7 +8970,7 @@ function encodeSigmaConstant(spec) {
    its count (6) before its own encode loop. */
 function parseBoxBuildTokens(text) {
   var fail = function (reason) { return { valid: false, reason: reason, tokens: null }; };
-  var lines = (text == null ? "" : String(text)).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (text == null ? "" : String(text)).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
   if (lines.length > 10000) return fail("A box carries at most 10,000 tokens — " + lines.length + " were given. The count is the one tool 15's parser accepts when it reads a box back, so a longer list could never be read back.");
   var tokens = [];
   for (var i = 0; i < lines.length; i++) {
@@ -8982,7 +8982,7 @@ function parseBoxBuildTokens(text) {
 }
 function parseTxBuildInputs(text) {
   var fail = function (reason) { return { valid: false, reason: reason, inputs: null }; };
-  var lines = (text == null ? "" : String(text)).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (text == null ? "" : String(text)).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
   if (lines.length > 10000) return fail("A transaction spends at least one input box — give between 1 and 10,000 inputs.");
   var inputs = [];
   for (var li = 0; li < lines.length; li++) {
@@ -9003,7 +9003,7 @@ function parseTxBuildInputs(text) {
 }
 function parseTxBuildDataInputs(text) {
   var fail = function (reason) { return { valid: false, reason: reason, dataInputs: null }; };
-  var lines = (text == null ? "" : String(text)).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (text == null ? "" : String(text)).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
   if (lines.length > 10000) return fail("Data inputs are a list of box IDs (boxes the scripts read but do not spend).");
   return { valid: true, reason: null, dataInputs: lines };
 }
@@ -9011,12 +9011,17 @@ function parseTxBuildOutputs(text) {
   var fail = function (reason) { return { valid: false, reason: reason, outputs: null }; };
   /* Line endings are normalized before the blank-line block split:
      a two-break pattern cannot count \r\n as two breaks (it is one
-     line ending), so CR and CRLF are folded to \n first. */
-  var blocks = (text == null ? "" : String(text)).replace(/\r\n|\r/g, "\n").split(/\n\s*\n/).map(function (b) { return b.trim(); }).filter(function (b) { return b !== ""; });
+     line ending), so CR and CRLF are folded to \n first. Every paste
+     split in this file treats all four ECMAScript line terminators
+     as line breaks — LF, CR, U+2028 and U+2029: a list separated by
+     LS/PS (PDF and rich-text copies produce them) otherwise arrived
+     as ONE line and was refused whole, and here two outputs joined
+     only by LS/PS silently merged into a single valid block. */
+  var blocks = (text == null ? "" : String(text)).replace(/\r\n|\r|\u2028|\u2029/g, "\n").split(/\n\s*\n/).map(function (b) { return b.trim(); }).filter(function (b) { return b !== ""; });
   if (blocks.length > 10000) return fail("A transaction creates at least one output box — give between 1 and 10,000 outputs.");
   var outputs = [];
   for (var bi = 0; bi < blocks.length; bi++) {
-    var blockLines = blocks[bi].split(/(?:\r\n|\r|\n)+/);
+    var blockLines = blocks[bi].split(/(?:\r\n|\r|\n|\u2028|\u2029)+/);
     /* This output's token and register counts are judged from a
        key-only scan of its lines before any line's value is split
        or stored — the builder judges the same counts (10,000 and
@@ -9844,7 +9849,7 @@ function aggregatePublicKeys(keysText) {
   var fail = function (reason) {
     return { valid: false, reason: reason, count: null, distinctCount: null, duplicates: null, keys: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
   };
-  var lines = (keysText == null ? "" : String(keysText)).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (keysText == null ? "" : String(keysText)).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste at least one compressed public key as hex, one key per line — the 33-byte keys (starting 02 or 03) that tools 8, 19 and 32 work with, from an address, a script or an explorer. This sums the keys you paste; it fetches nothing and proves no ownership of any of them.");
   if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool aggregates at most 100 keys at a time, so a pasted list stays reviewable line by line.");
   var keys = [];
@@ -9922,7 +9927,7 @@ function aggregateWeightedPublicKeys(termsText) {
   var fail = function (reason) {
     return { valid: false, reason: reason, count: null, distinctCount: null, duplicates: null, terms: null, zeroCount: null, infinity: null, compressed: null, x: null, y: null, yParity: null, uncompressedHex: null, sigmaConstantHex: null, mainnet: null, testnet: null };
   };
-  var lines = (termsText == null ? "" : String(termsText)).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (termsText == null ? "" : String(termsText)).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste at least one weighted term, one per line, written as a whole-number coefficient, a space, then a compressed public key in hex — for example \"2 0279be…f81798\". This computes the weighted sum of the terms you paste; it fetches nothing and proves no ownership of any key.");
   if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool sums at most 100 weighted terms at a time, so a pasted list stays reviewable line by line.");
   var terms = [];
@@ -10604,7 +10609,7 @@ function summarizeBoxSet(boxesText, currentHeightStr) {
   var fail = function (reason) {
     return { valid: false, reason: reason, boxes: null, boxCount: null, totalNano: null, totalErg: null, totalBytes: null, minTotalNano: null, minTotalErg: null, allMeetMinimum: null, belowMinimum: null, tokenTotals: null, distinctTokens: null, currentHeight: null, eligibleCount: null, eligibleNano: null, eligibleErg: null };
   };
-  var lines = (boxesText == null ? "" : String(boxesText)).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (boxesText == null ? "" : String(boxesText)).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste at least one full serialized box as hex, one box per line — SDKs and node APIs produce the bytes, and explorers link them from a box's page. This summarizes the boxes you paste; it fetches nothing and is not a live wallet balance.");
   if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool summarizes at most 100 boxes at a time, so a pasted set stays reviewable line by line.");
   var current = null;
@@ -10714,7 +10719,7 @@ function analyzeTxFee(txHex, boxesText) {
   };
   var tx = parseErgoTransaction(txHex);
   if (!tx.valid) return fail("The transaction bytes do not parse: " + tx.reason);
-  var lines = (boxesText == null ? "" : String(boxesText)).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (boxesText == null ? "" : String(boxesText)).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste the transaction's input boxes too, one full serialized box per line — a transaction's bytes carry its outputs but never its input values, so the fee and the balance can only be checked against the boxes it spends (explorers link each input's box from the transaction's page; tool 15 reads one box at a time).");
   if (lines.length > 100) return fail("That is " + lines.length + " lines — this tool checks at most 100 input boxes at a time, so a pasted set stays reviewable line by line.");
   var byId = {};
@@ -10822,7 +10827,7 @@ function planTokenPayment(boxesText, paymentStr, feeStr, tokensText) {
   var payNano = BigInt(payment);
   var feeNano = BigInt(fee);
   if (payNano <= 0n || feeNano < 0n) return fail("The payment must be above zero and the fee zero or above — a plan to pay nothing, or to be paid by the fee, is not a payment plan.");
-  var lines = (boxesText == null ? "" : String(boxesText)).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (boxesText == null ? "" : String(boxesText)).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste the boxes the payment may spend, one full serialized box per line (the bytes tool 15 reads — explorers link each box from an address's page). Token needs live inside specific boxes, so a plan over values alone cannot say which boxes carry them.");
   if (lines.length > 100) return fail("That is " + lines.length + " lines — this planner takes at most 100 boxes at a time, so a pasted set stays reviewable line by line.");
   var boxes = [];
@@ -10836,7 +10841,7 @@ function planTokenPayment(boxesText, paymentStr, feeStr, tokensText) {
   }
   var requirements = [];
   var reqSeen = {};
-  var tokLines = (tokensText == null ? "" : String(tokensText)).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var tokLines = (tokensText == null ? "" : String(tokensText)).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
   if (tokLines.length > 100) return fail("That is " + tokLines.length + " token lines — at most 100 token requirements at a time.");
   for (var r = 0; r < tokLines.length; r++) {
     var parts = tokLines[r].split(/\s+/);
@@ -12059,7 +12064,7 @@ function mergeBoxSets(aText, bText) {
   if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
   var hexOf = function (text) {
     var map = {};
-    String(text).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
+    String(text).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
       var parsed = parseErgoBox(line);
       if (parsed.valid) map[parsed.boxId] = line.replace(/\s+/g, "").toLowerCase();
     });
@@ -12140,7 +12145,7 @@ function intersectBoxSets(aText, bText) {
   if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
   var hexOf = function (text) {
     var map = {};
-    String(text).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
+    String(text).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
       var parsed = parseErgoBox(line);
       if (parsed.valid) map[parsed.boxId] = line.replace(/\s+/g, "").toLowerCase();
     });
@@ -12229,7 +12234,7 @@ function xorBoxSets(aText, bText) {
   if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
   var hexOf = function (text) {
     var map = {};
-    String(text).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
+    String(text).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
       var parsed = parseErgoBox(line);
       if (parsed.valid) map[parsed.boxId] = line.replace(/\s+/g, "").toLowerCase();
     });
@@ -12325,7 +12330,7 @@ function subtractBoxSets(aText, bText) {
   if (!b.valid) return fail("The SECOND set is refused: " + b.reason);
   var hexOf = function (text) {
     var map = {};
-    String(text).split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
+    String(text).split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; }).forEach(function (line) {
       var parsed = parseErgoBox(line);
       if (parsed.valid) map[parsed.boxId] = line.replace(/\s+/g, "").toLowerCase();
     });
@@ -12466,7 +12471,7 @@ function attachTxProofs(txHex, proofsText) {
     var signedIdx = tx.inputs.filter(function (inp) { return inp.proofLength > 0; }).map(function (inp, i) { return tx.inputs.indexOf(inp) + 1; });
     return fail("This transaction already carries a spending proof (on input(s) " + signedIdx.join(", ") + ") — attaching here would silently replace proofs, which this tool does not do. Work from its unsigned form instead: tool 45 extracts it, and tool 40 compares a before/after pair.");
   }
-  var lines = (proofsText == null ? "" : String(proofsText)).split(/\r\n|\r|\n/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = (proofsText == null ? "" : String(proofsText)).split(/\r\n|\r|\n|\u2028|\u2029/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
   if (lines.length !== tx.inputs.length) return fail("This transaction has " + tx.inputs.length + " input(s), so paste exactly " + tx.inputs.length + " proof line(s) — one per input, in input order, each either the proof bytes as hex or a single dash (-) to leave that input unsigned. Got " + lines.length + " line(s); nothing was attached rather than guess which input a proof belongs to.");
   var wanted = [];
   for (var w = 0; w < lines.length; w++) {
@@ -14908,7 +14913,7 @@ function summarizeTxSet(text) {
     return { valid: false, reason: reason, txCount: null, entries: null, totalInputs: null, totalDataInputs: null, totalOutputs: null, distinctInputCount: null, sharedInputs: null, distinctDataInputCount: null, totalOutputNano: null, totalOutputErg: null, totalBytes: null, minBytes: null, maxBytes: null, meanBytes: null, signedCount: null, unsignedCount: null, tokenEntryCount: null, distinctTokenCount: null, tokenTotals: null, mintingTxCount: null, mintedTokenIds: null };
   };
   if (typeof text !== "string") return fail("Paste the serialized transactions first — one complete transaction per line, exactly as tool 29 takes them.");
-  var lines = text.split(/\r\n|\r|\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
   if (lines.length < 2) return fail("A set summary needs at least two transactions — paste one complete serialized transaction per line. For a single transaction, tool 29 parses it on its own.");
   if (lines.length > TX_SET_MAX_LINES) return fail("That is " + lines.length + " lines — this tool summarizes at most " + TX_SET_MAX_LINES + " transactions at a time, so a pasted set stays reviewable line by line.");
   var seen = {};
@@ -15033,7 +15038,7 @@ function summarizeTxSet(text) {
 function parseTxSetSide(text, sideLabel) {
   var fail = function (reason) { return { valid: false, reason: reason, entries: null }; };
   if (typeof text !== "string") return fail("Paste the " + sideLabel + " set of serialized transactions first — one complete transaction per line, exactly as tool 29 takes them.");
-  var lines = text.split(/\r\n|\r|\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("The " + sideLabel + " set is empty — paste at least one complete serialized transaction, one per line.");
   if (lines.length > TX_SET_MAX_LINES) return fail("That is " + lines.length + " lines — a set here holds at most " + TX_SET_MAX_LINES + " transactions at a time, so a pasted set stays reviewable line by line.");
   var seen = {};
@@ -15138,7 +15143,7 @@ function compareTxSets(aText, bText) {
 function parseTxSetSideFull(text, sideLabel) {
   var fail = function (reason) { return { valid: false, reason: reason, entries: null }; };
   if (typeof text !== "string") return fail("Paste the " + sideLabel + " set of serialized transactions first — one complete transaction per line, exactly as tool 29 takes them.");
-  var lines = text.split(/\r\n|\r|\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("The " + sideLabel + " set is empty — paste at least one complete serialized transaction, one per line.");
   if (lines.length > TX_SET_MAX_LINES) return fail("That is " + lines.length + " lines — a set here holds at most " + TX_SET_MAX_LINES + " transactions at a time, so a pasted set stays reviewable line by line.");
   var seen = {};
@@ -15814,7 +15819,7 @@ function analyzeNextDifficulty(inputStr) {
     return { valid: false, reason: reason, mode: null, targetHeight: null, epochLength: null, boundaryHeights: null, parentDifficulty: null, predictive: null, predictiveUncompressed: null, perEpoch: null, fallback: null, limitedPredictive: null, classic: null, average: null, uncompressed: null, clampedPredictive: null, clampedFinal: null, difficulty: null, nBits: null, nBitsHex: null, target: null, targetHex: null, nextEpochStart: null };
   };
   if (typeof inputStr !== "string") return fail("Paste the epoch-boundary blocks first — one per line as height, timestamp (milliseconds), difficulty.");
-  var lines = inputStr.split(/\r\n|\r|\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = inputStr.split(/\r\n|\r|\n|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
   if (lines.length === 0) return fail("Paste the epoch-boundary blocks first — one per line as height, timestamp (milliseconds), difficulty.");
   /* The line count is judged BEFORE the parse loop below, like every
      other pasted list on this hub — this was the one list with no
@@ -16060,7 +16065,7 @@ function tallyHeaderVotes(text) {
     return { valid: false, reason: reason, headerCount: null, entries: null, minHeight: null, maxHeight: null, headersWithVotes: null, tallies: null, softForkCount: null, unknownCount: null, noneCount: null, totalVoteBytes: null, approvedChanges: null, softForkApproved: null };
   };
   if (typeof text !== "string") return fail("Paste the serialized block headers first — one complete header per line, exactly as tool 62 takes them.");
-  var lines = text.split(/\r\n|\r|\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
   if (lines.length < 2) return fail("A tally needs at least two headers — paste one complete serialized header per line. For a single header, tool 71 decodes its ballot on its own.");
   if (lines.length > VOTE_TALLY_MAX_HEADERS) return fail("That is " + lines.length + " lines — this tally counts at most " + VOTE_TALLY_MAX_HEADERS + " headers at a time (a voting epoch is 1,024), so a pasted set stays reviewable.");
   var seen = {};
@@ -16144,7 +16149,7 @@ function summarizeHeaderSet(text) {
     return { valid: false, reason: reason, headerCount: null, entries: null, minHeight: null, maxHeight: null, heightSpan: null, distinctHeights: null, missingHeights: null, forkHeights: null, versions: null, totalDifficulty: null, minDifficulty: null, maxDifficulty: null, meanDifficulty: null, earliestTimestampMs: null, latestTimestampMs: null, timestampSpanMs: null, adjacentPairs: null, linkedPairs: null, timestampRegressions: null, endpointMeanIntervalMs: null };
   };
   if (typeof text !== "string") return fail("Paste the serialized block headers first — one complete header per line, exactly as tool 62 takes them.");
-  var lines = text.split(/\r\n|\r|\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
   if (lines.length < 2) return fail("A set summary needs at least two headers — paste one complete serialized header per line. For a single header, tool 62 inspects it on its own.");
   if (lines.length > HEADER_SET_MAX_LINES) return fail("That is " + lines.length + " lines — this tool summarizes at most " + HEADER_SET_MAX_LINES + " headers at a time, so a pasted set stays reviewable line by line.");
   var seen = {};
@@ -16450,7 +16455,7 @@ function analyzeHeaderSize(headerHex) {
 function parseHeaderSetSide(text, sideLabel) {
   var fail = function (reason) { return { valid: false, reason: reason, entries: null }; };
   if (typeof text !== "string") return fail("Paste the " + sideLabel + " set of serialized block headers first — one complete header per line, exactly as tool 62 takes them.");
-  var lines = text.split(/\r\n|\r|\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("The " + sideLabel + " set is empty — paste at least one complete serialized header, one per line.");
   if (lines.length > HEADER_SET_MAX_LINES) return fail("That is " + lines.length + " lines — a set here holds at most " + HEADER_SET_MAX_LINES + " headers at a time, so a pasted set stays reviewable line by line.");
   var seen = {};
@@ -16549,7 +16554,7 @@ function compareHeaderSets(aText, bText) {
 function parseHeaderSetSideFull(text, sideLabel) {
   var fail = function (reason) { return { valid: false, reason: reason, entries: null }; };
   if (typeof text !== "string") return fail("Paste the " + sideLabel + " set of serialized block headers first — one complete header per line, exactly as tool 62 takes them.");
-  var lines = text.split(/\r\n|\r|\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
+  var lines = text.split(/\r\n|\r|\n|\u2028|\u2029/).map(function (s) { return s.trim(); }).filter(function (s) { return s !== ""; });
   if (lines.length < 1) return fail("The " + sideLabel + " set is empty — paste at least one complete serialized header, one per line.");
   if (lines.length > HEADER_SET_MAX_LINES) return fail("That is " + lines.length + " lines — a set here holds at most " + HEADER_SET_MAX_LINES + " headers at a time, so a pasted set stays reviewable line by line.");
   var seen = {};
@@ -17425,7 +17430,7 @@ function checkHeaderChain(text) {
     return { valid: false, reason: reason, verdict: null, count: null, entries: null, links: null, allLinked: null, allSequential: null, breaks: null, heightGaps: null, timestampRegressions: null, duplicates: null, firstHeaderId: null, lastHeaderId: null, firstHeight: null, lastHeight: null, totalHeightDelta: null, totalTimestampDeltaMs: null };
   };
   if (typeof text !== "string") return fail("Paste the serialized block headers first — one header per line, in chain order, each the full serialized bytes as hex.");
-  var lines = text.split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  var lines = text.split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
   if (lines.length === 0) return fail("Paste the serialized block headers first — one header per line, in chain order, each the full serialized bytes as hex.");
   if (lines.length === 1) return fail("A chain needs at least two headers — paste a second serialized header on the next line so there is a link to check. For a single header, tool 62 inspects it on its own.");
   if (lines.length > HEADER_SET_MAX_LINES) return fail("That is " + lines.length + " lines — this tool checks a chain of at most " + HEADER_SET_MAX_LINES + " headers at a time, so a pasted chain stays reviewable line by line.");
@@ -21081,7 +21086,7 @@ if (typeof document !== "undefined") {
         out.textContent = "✗ " + parsedTokens.reason;
         return;
       }
-      var registers = document.getElementById("boxbuild-registers").value.split(/(?:\r\n|\r|\n)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+      var registers = document.getElementById("boxbuild-registers").value.split(/(?:\r\n|\r|\n|\u2028|\u2029)+/).map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
       var res = buildErgoBox({
         valueNano: document.getElementById("boxbuild-value").value,
         ergoTree: document.getElementById("boxbuild-tree").value,

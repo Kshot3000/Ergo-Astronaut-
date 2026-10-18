@@ -11676,9 +11676,10 @@ function compareTransactions(aHex, bHex) {
    through tool 29's parser before anything is shown; an "id" the
    pasted JSON carries is checked against the computed transaction
    ID and a mismatch is reported, never hidden. List counts —
-   inputs, data inputs, outputs, and the assets and extension
-   entries inside one entry — are judged against tool 30's
-   10,000-entry caps BEFORE any entry is checked, so an over-cap
+   inputs, data inputs, outputs, and the assets, extension and
+   register entries inside one entry — are judged against their
+   caps (tool 30's 10,000-entry caps; six registers, R4–R9)
+   BEFORE any entry is checked, so an over-cap
    paste is refused from its count rather than after the
    validation loops have paid their per-entry cost for a paste
    that cannot assemble. Bytes -> JSON is
@@ -11809,15 +11810,24 @@ function convertTxJson(direction, text) {
     if (jout.additionalRegisters != null) {
       if (typeof jout.additionalRegisters !== "object" || Array.isArray(jout.additionalRegisters)) return fail(oWhat + ": \"additionalRegisters\" maps register names to Sigma constants in hex, e.g. {\"R4\": \"0e04deadbeef\"}.");
       var rKeys = Object.keys(jout.additionalRegisters);
+      /* The register count is judged BEFORE the key loop, against
+         the six registers a box can carry (R4–R9): this map was the
+         one list in this converter the earlier count sweep missed,
+         and its loop re-sorted the whole key list on every key and
+         joined it into the gap message, so a paste carrying R4–R9
+         plus 200,000 junk keys paid six full sorts and built a
+         ~1.7 MB joined string (only bounded after the fact by
+         boundedEcho) for a refusal its count alone decides. The
+         sort itself is now computed once, before the loop. */
+      if (rKeys.length > 6) return fail(oWhat + " lists " + rKeys.length + " register keys — at most 6 registers ride in one output (R4–R9); the count is refused before any key is checked.");
+      var sorted = rKeys.slice().sort(function (a, b) { return Number(a.slice(1)) - Number(b.slice(1)); });
       for (var r = 0; r < rKeys.length; r++) {
         if (!/^R[4-9]$/.test(rKeys[r])) return fail(oWhat + ": register key \"" + boundedEcho(rKeys[r]) + "\" is not one of R4–R9 — a box's non-mandatory registers are exactly R4 through R9.");
         var expect = "R" + (4 + r);
-        var sorted = rKeys.slice().sort(function (a, b) { return Number(a.slice(1)) - Number(b.slice(1)); });
         if (sorted[r] !== expect) return fail(oWhat + ": registers are positional and must start at R4 with no gaps — got " + boundedEcho(sorted.join(", ")) + ", so " + expect + " is missing. A register cannot be skipped: R5's bytes would be read as R4.");
         if (typeof jout.additionalRegisters[rKeys[r]] !== "string") return fail(oWhat + ", register " + boundedEcho(rKeys[r]) + ": the value is one Sigma constant as a hex string (tool 18 reads them).");
       }
-      var ordered = rKeys.slice().sort(function (a, b) { return Number(a.slice(1)) - Number(b.slice(1)); });
-      oRegs = ordered.map(function (k) { return jout.additionalRegisters[k]; });
+      oRegs = sorted.map(function (k) { return jout.additionalRegisters[k]; });
     }
     outFields.push({ valueNano: oVal, ergoTree: jout.ergoTree.trim(), creationHeight: oHeight, tokens: oTokens, registers: oRegs });
   }

@@ -9203,7 +9203,10 @@ function buildErgoBox(fields) {
    registers are tuples). Extension entries are written in
    ascending key order, the order fleet's own writer emits for a
    key record, and duplicate keys are refused rather than silently
-   merged. The transaction ID is the Blake2b-256 of the unsigned
+   merged. A repeated input box ID is refused too: one box can be
+   spent only once in a transaction (upstream stateless validation
+   rejects it as a double spend, and tool 38's audit names it in
+   any transaction it reads). The transaction ID is the Blake2b-256 of the unsigned
    rewrite — proofs stripped, extensions kept — exactly as tool 29
    recomputes it. The assembled bytes are round-tripped through
    tool 29's parser before they are shown, and every field
@@ -9248,10 +9251,25 @@ function buildErgoTransaction(fields) {
   var inFields = fields.inputs || [];
   if (!Array.isArray(inFields) || inFields.length < 1 || inFields.length > 10000) return fail("A transaction spends at least one input box — give between 1 and 10,000 inputs.");
   var inputs = [];
+  var seenInputIds = Object.create(null);
   for (var i = 0; i < inFields.length; i++) {
     var inf = inFields[i] || {};
     var inId = hexId(inf.boxId);
     if (!inId) return fail("Input " + (i + 1) + ": a box ID is 32 bytes, 64 hex characters — got \"" + boundedEcho(inf.boxId) + "\".");
+    /* A box can be spent only once in one transaction: upstream
+       stateless validation rejects a repeated input box ID as a
+       double spend (sigma-rust's TxValidationError::DoubleSpend),
+       and this hub's own input audit (tool 38) names duplicate
+       inputs in any transaction it reads — so the builder refuses
+       the repeat here rather than assembling bytes no node would
+       accept and its own audit would flag. The comparison runs on
+       the decoded ID, so a repeat written in different hex case is
+       still the same box. Data inputs are deliberately NOT judged
+       here: stateless validation checks the spent inputs only,
+       and a data input is read, not spent. */
+    var inIdHex = bytesToHex(inId);
+    if (seenInputIds[inIdHex]) return fail("Input " + (i + 1) + " spends the same box as input " + seenInputIds[inIdHex] + " (box ID " + inIdHex + ") — a box can only be spent once in a transaction, so the duplicate spend is refused rather than built. Remove the repeat so each input spends a different box.");
+    seenInputIds[inIdHex] = i + 1;
     var proofBytes = null;
     if (inf.proofHex != null && String(inf.proofHex).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") {
       proofBytes = hexToBytes(String(inf.proofHex).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase());

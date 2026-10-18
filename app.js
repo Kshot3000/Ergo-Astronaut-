@@ -11572,7 +11572,13 @@ function compareTransactions(aHex, bHex) {
    assembled by tool 30's builder, which round-trips its own output
    through tool 29's parser before anything is shown; an "id" the
    pasted JSON carries is checked against the computed transaction
-   ID and a mismatch is reported, never hidden. Bytes -> JSON is
+   ID and a mismatch is reported, never hidden. List counts —
+   inputs, data inputs, outputs, and the assets and extension
+   entries inside one entry — are judged against tool 30's
+   10,000-entry caps BEFORE any entry is checked, so an over-cap
+   paste is refused from its count rather than after the
+   validation loops have paid their per-entry cost for a paste
+   that cannot assemble. Bytes -> JSON is
    tool 29's parse re-emitted in the dialect. Verified in the tests
    against an independent Python build (oracle-txjson.py) whose
    box IDs were asserted against the fleet-recorded ones before its
@@ -11633,6 +11639,13 @@ function convertTxJson(direction, text) {
     return null;
   };
   if (!Array.isArray(doc.inputs)) return fail("The JSON carries no \"inputs\" list — the dialect is {inputs: [{boxId, extension?}], dataInputs?, outputs: [...]}.");
+  /* List counts are judged BEFORE the validation loops below,
+     against the same 10,000-entry caps tool 30's builder enforces:
+     the loops validate every entry they read, so an over-cap paste
+     is refused from its count here rather than after paying that
+     cost for every listed entry — the count-before-loop rule the
+     plan builders state at their own entry caps. */
+  if (doc.inputs.length > 10000) return fail("This converter takes at most 10,000 inputs (you listed " + doc.inputs.length + ") — tool 30's builder cap; the count is refused before any entry is checked.");
   var inFields = [];
   for (var i = 0; i < doc.inputs.length; i++) {
     var jin = doc.inputs[i] || {};
@@ -11645,6 +11658,7 @@ function convertTxJson(direction, text) {
     if (jin.extension != null) {
       if (typeof jin.extension !== "object" || Array.isArray(jin.extension)) return fail(iWhat + ": \"extension\" maps numeric-string keys to Sigma constants in hex, e.g. {\"0\": \"0e02cafe\"}.");
       var eKeys = Object.keys(jin.extension);
+      if (eKeys.length > 10000) return fail(iWhat + "'s extension lists " + eKeys.length + " keys — at most 10,000 entries ride in one input's context extension (tool 30's builder cap); the count is refused before any key is checked.");
       for (var e = 0; e < eKeys.length; e++) {
         if (!/^\d+$/.test(eKeys[e])) return fail(iWhat + ": extension key \"" + boundedEcho(eKeys[e]) + "\" is not a number — keys are numeric strings (\"0\", \"1\", …).");
         if (typeof jin.extension[eKeys[e]] !== "string") return fail(iWhat + ", extension key " + boundedEcho(eKeys[e]) + ": the value is one Sigma constant as a hex string (tool 18 reads them).");
@@ -11656,6 +11670,7 @@ function convertTxJson(direction, text) {
   var diFields = [];
   if (doc.dataInputs != null) {
     if (!Array.isArray(doc.dataInputs)) return fail("\"dataInputs\" is a list of {boxId} objects (boxes the scripts read but do not spend).");
+    if (doc.dataInputs.length > 10000) return fail("This converter takes at most 10,000 data inputs (you listed " + doc.dataInputs.length + ") — tool 30's builder cap; the count is refused before any entry is checked.");
     for (var d = 0; d < doc.dataInputs.length; d++) {
       var jdi = doc.dataInputs[d];
       var diId = typeof jdi === "string" ? jdi : (jdi && typeof jdi === "object" ? jdi.boxId : null);
@@ -11664,6 +11679,7 @@ function convertTxJson(direction, text) {
     }
   }
   if (!Array.isArray(doc.outputs)) return fail("The JSON carries no \"outputs\" list — each output is {value, ergoTree, creationHeight, assets?, additionalRegisters?}.");
+  if (doc.outputs.length > 10000) return fail("This converter takes at most 10,000 outputs (you listed " + doc.outputs.length + ") — tool 30's builder cap; the count is refused before any entry is checked.");
   var outFields = [];
   for (var o = 0; o < doc.outputs.length; o++) {
     var jout = doc.outputs[o] || {};
@@ -11677,6 +11693,7 @@ function convertTxJson(direction, text) {
     var oTokens = [];
     if (jout.assets != null) {
       if (!Array.isArray(jout.assets)) return fail(oWhat + ": \"assets\" is a list of {tokenId, amount} pairs.");
+      if (jout.assets.length > 10000) return fail(oWhat + " lists " + jout.assets.length + " assets — at most 10,000 assets ride in one output (tool 30's builder cap); the count is refused before any asset is checked.");
       for (var t = 0; t < jout.assets.length; t++) {
         var ja = jout.assets[t] || {};
         if (typeof ja.tokenId !== "string" || !/^[0-9a-fA-F]{64}$/.test(ja.tokenId.trim())) return fail(oWhat + ", asset " + (t + 1) + ": a token ID is 64 hex characters.");

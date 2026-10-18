@@ -1059,7 +1059,17 @@ function planText(raw) {
    that keeps anyone from being paid twice by accident. The key folds
    case and canonical form (NFC); compatibility equivalents (fullwidth
    letters, ligatures) render visibly differently and stay distinct,
-   exactly as typed. */
+   exactly as typed. The maps keyed by this judge in every list
+   builder are Object.create(null), never plain {}: a plain object
+   inherits Object.prototype, so a FIRST entry whose folded key is
+   "constructor" or "__proto__" (the two inherited member names that
+   survive case folding) read back a truthy inherited value and was
+   refused as a repeat of a line that does not exist — the refusal
+   even named "line function Object() { [native code] }". A
+   null-prototype map has no inherited keys, so only a name actually
+   listed before can read as a repeat, and assigning "__proto__"
+   stores an ordinary entry instead of hitting the prototype
+   setter. */
 function planNameKey(raw) {
   return (raw == null ? "" : String(raw)).normalize("NFC").toLowerCase();
 }
@@ -1297,7 +1307,7 @@ function buildMilestonePlan(sellerRaw, contractStr, milestonesRaw, minerFeeStr) 
   var minerNano = BigInt(miner);
   var rawLines = (milestonesRaw == null ? "" : String(milestonesRaw)).split(/\r?\n/);
   var entries = [];
-  var seenLabels = {};
+  var seenLabels = Object.create(null);
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
     if (line === "") continue;
@@ -1434,7 +1444,7 @@ function buildPayrollPlan(entriesRaw, minerFeeStr) {
   if (listedCount > PAYROLL_MAX_EMPLOYEES) return fail("This builder takes at most " + PAYROLL_MAX_EMPLOYEES + " employees (you listed " + listedCount + ") — a payroll with more outputs than that belongs in a dedicated wallet flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var network = null;
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
@@ -2167,7 +2177,7 @@ function buildRewardPlan(poolStr, entriesRaw, minerFeeStr) {
   if (listedCount > REWARD_MAX_STAKERS) return fail("This builder takes at most " + REWARD_MAX_STAKERS + " stakers (you listed " + listedCount + ") — a distribution with more outputs than that belongs in a dedicated pool flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var network = null;
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
@@ -2346,7 +2356,7 @@ function buildCrowdfundPlan(creatorRaw, labelRaw, goalStr, entriesRaw, minerFeeS
   if (listedCount > CROWDFUND_MAX_BACKERS) return fail("This builder takes at most " + CROWDFUND_MAX_BACKERS + " backers (you listed " + listedCount + ") — a campaign with more backers than that belongs in a dedicated crowdfunding contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var network = creatorCheck.network;
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
@@ -2570,7 +2580,7 @@ function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
   if (listedCount > AUCTION_MAX_BIDDERS) return fail("This builder takes at most " + AUCTION_MAX_BIDDERS + " bidders (you listed " + listedCount + ") — an auction with more bidders than that belongs in a dedicated auction contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var network = sellerCheck.network;
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
@@ -2955,7 +2965,7 @@ function buildGroupExpensePlan(labelRaw, entriesRaw, minerFeeStr) {
   if (listedCount > GROUPXP_MAX_PEOPLE) return fail("This builder takes at most " + GROUPXP_MAX_PEOPLE + " people (you listed " + listedCount + ") — a settlement with more people than that belongs in a dedicated group flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var network = null;
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
@@ -3155,7 +3165,7 @@ function buildRoscaPlan(labelRaw, membersRaw, contributionStr, minerFeeStr) {
   if (listedCount > ROSCA_MAX_MEMBERS) return fail("This builder takes at most " + ROSCA_MAX_MEMBERS + " members (you listed " + listedCount + ") — a circle with more members than that belongs in a dedicated group flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var network = null;
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
@@ -3317,7 +3327,7 @@ function buildWaterfallPlan(labelRaw, tiersRaw, revenueStr, minerFeeStr) {
   if (listedCount > WATERFALL_MAX_TIERS) return fail("This builder takes at most " + WATERFALL_MAX_TIERS + " tiers (you listed " + listedCount + ") — a waterfall with more tiers than that belongs in a dedicated contract flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var network = null;
   var restCount = 0;
   var restIndex = -1;
@@ -3499,7 +3509,7 @@ function buildPrizeSplitPlan(labelRaw, winnersRaw, poolStr, minerFeeStr) {
   if (listedCount > PRIZESPLIT_MAX_WINNERS) return fail("This builder takes at most " + PRIZESPLIT_MAX_WINNERS + " places (you listed " + listedCount + ") — a prize table with more places than that belongs in a dedicated contract flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var network = null;
   var shareTotalBps = 0n;
   for (var li = 0; li < rawLines.length; li++) {
@@ -3671,7 +3681,7 @@ function buildLoanSyndicatePlan(labelRaw, borrowerRaw, lendersRaw, repaymentStr,
   if (listedCount > SYNDICATE_MAX_LENDERS) return fail("This builder takes at most " + SYNDICATE_MAX_LENDERS + " lenders (you listed " + listedCount + ") — a syndicate with more lenders than that belongs in a dedicated contract flow, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var network = null;
   var totalFundedNano = 0n;
   for (var li = 0; li < rawLines.length; li++) {
@@ -4012,7 +4022,7 @@ function buildCascadingRoyaltyPlan(labelRaw, sellerRaw, recipientsRaw, priceStr,
   for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
   if (listedCount > CASROY_MAX_RECIPIENTS) return fail("This builder takes at most " + CASROY_MAX_RECIPIENTS + " recipients (you listed " + listedCount + ") — a royalty chain longer than that belongs in a dedicated contract flow, not a copyable plan.");
   var entries = [];
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var seenAddrs = {};
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
@@ -4296,7 +4306,7 @@ function buildVickreyPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
   if (listedCount > VICKREY_MAX_BIDDERS) return fail("This builder takes at most " + VICKREY_MAX_BIDDERS + " bidders (you listed " + listedCount + ") — an auction with more bidders than that belongs in a dedicated auction contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var network = sellerCheck.network;
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
@@ -4550,7 +4560,7 @@ function buildLaunchpadPlan(projectRaw, labelRaw, capStr, entriesRaw, minerFeeSt
   if (listedCount > LAUNCHPAD_MAX_SUBSCRIBERS) return fail("This builder takes at most " + LAUNCHPAD_MAX_SUBSCRIBERS + " subscribers (you listed " + listedCount + ") — a sale with more subscribers than that belongs in a dedicated launchpad contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var network = projectCheck.network;
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
@@ -4769,7 +4779,7 @@ function buildReverseAuctionPlan(buyerRaw, labelRaw, budgetStr, entriesRaw, mine
   if (listedCount > REVAUCTION_MAX_BIDDERS) return fail("This builder takes at most " + REVAUCTION_MAX_BIDDERS + " bidders (you listed " + listedCount + ") — a procurement with more bidders than that belongs in a dedicated procurement contract, not a copyable plan.");
   var entries = [];
   var seenAddr = {};
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var network = buyerCheck.network;
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
@@ -5280,7 +5290,7 @@ function buildDepositPlan(tenantRaw, landlordRaw, labelRaw, depositStr, deductio
   var depositNano = BigInt(deposit);
   var rawLines = (deductionsRaw == null ? "" : String(deductionsRaw)).split(/\r?\n/);
   var entries = [];
-  var seenNames = {};
+  var seenNames = Object.create(null);
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
     if (line === "") continue;
@@ -5486,7 +5496,7 @@ function buildMatchPlan(charityRaw, matcherRaw, labelRaw, percentStr, capStr, do
   var capNano = BigInt(cap);
   var rawLines = (donorsRaw == null ? "" : String(donorsRaw)).split(/\r?\n/);
   var entries = [];
-  var seenNames = {};
+  var seenNames = Object.create(null);
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
     if (line === "") continue;
@@ -5725,7 +5735,7 @@ function buildGroupBuyPlan(sellerRaw, labelRaw, unitPriceStr, discountPercentStr
   for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
   if (listedCount > GROUPBUY_MAX_BUYERS) return fail("This builder takes at most " + GROUPBUY_MAX_BUYERS + " buyers (you listed " + listedCount + ") — a larger group belongs in a dedicated storefront flow, not a copyable plan.");
   var entries = [];
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var seenAddresses = {};
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
@@ -5942,7 +5952,7 @@ function buildGiftFundPlan(sellerRaw, labelRaw, priceStr, contributorsRaw, miner
   for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
   if (listedCount > GIFTFUND_MAX_CONTRIBUTORS) return fail("This builder takes at most " + GIFTFUND_MAX_CONTRIBUTORS + " contributors (you listed " + listedCount + ") — a larger group belongs in a dedicated registry flow, not a copyable plan.");
   var entries = [];
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var seenAddresses = {};
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();
@@ -6169,7 +6179,7 @@ function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersR
   for (var nli = 0; nli < rawLines.length; nli++) if (rawLines[nli].trim() !== "") listedCount++;
   if (listedCount > DIVIDEND_MAX_HOLDERS) return fail("This builder takes at most " + DIVIDEND_MAX_HOLDERS + " holders (you listed " + listedCount + ") — a larger register belongs in a dedicated distribution flow, not a copyable plan.");
   var entries = [];
-  var seenNames = {};
+  var seenNames = Object.create(null);
   var seenAddresses = {};
   for (var li = 0; li < rawLines.length; li++) {
     var line = rawLines[li].trim();

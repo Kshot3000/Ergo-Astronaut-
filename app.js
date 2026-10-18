@@ -9075,16 +9075,32 @@ function parseTxBuildOutputs(text) {
     if (tokenCount > 10000) return fail("Output " + (bi + 1) + ": tokens are a list of token ID / amount pairs.");
     if (registerCount > 6) return fail("Output " + (bi + 1) + ": a box carries at most the six non-mandatory registers R4–R9.");
     var o = { valueNano: "", ergoTree: "", creationHeight: "", tokens: [], registers: [] };
-    blockLines.forEach(function (line) {
-      var m = line.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").match(/^([a-z]+)\s*:\s*(.*)$/);
-      if (!m) return;
+    /* The scalar keys (value, tree, height) name the ONE value, tree
+       and height a box carries, so a repeat inside one block is
+       refused by name rather than silently overwritten: this loop
+       used to assign each repeat over the previous line, so a block
+       whose first "value" line read 6.8 ERG and whose second read
+       1 nanoERG built the 1-nanoERG output while a reader scanning
+       the pasted text saw the 6.8 first — the pasted text and the
+       built bytes disagreed, invisibly (the same defect class the
+       tx JSON converter's repeated-key refusal closes for JSON).
+       token and register lines are lists and still repeat freely,
+       and the same key in a DIFFERENT block is that block's own. */
+    var seenScalars = Object.create(null);
+    for (var li = 0; li < blockLines.length; li++) {
+      var m = blockLines[li].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").match(/^([a-z]+)\s*:\s*(.*)$/);
+      if (!m) continue;
       var k = m[1].toLowerCase(), v = m[2].replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
+      if (k === "value" || k === "tree" || k === "height") {
+        if (seenScalars[k]) return fail("Output " + (bi + 1) + " repeats the \"" + k + "\" line — a box carries exactly one " + k + " field, so the repeat is refused rather than built from whichever line came last, which could differ from the line a reader sees first. Remove the repeat so the block says exactly one thing.");
+        seenScalars[k] = true;
+      }
       if (k === "value") o.valueNano = v;
       else if (k === "tree") o.ergoTree = v;
       else if (k === "height") o.creationHeight = v;
       else if (k === "token") { var tp = v.split(/[\s\u0085]+/); o.tokens.push({ tokenId: tp[0] || "", amount: tp[1] || "" }); }
       else if (k === "register") o.registers.push(v);
-    });
+    }
     outputs.push(o);
   }
   return { valid: true, reason: null, outputs: outputs };

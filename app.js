@@ -1048,6 +1048,21 @@ function hasLoneSurrogate(s) {
 function planText(raw) {
   return stripLoneSurrogates(raw == null ? "" : String(raw)).replace(/(?:[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u00ad\u034f\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u2800\u115f\u1160\u3164\uffa0\ufeff\ufff0-\ufff8\ufff9-\ufffb\ufdd0-\ufdef\ufffe\uffff]|[\ud83f\ud87f\ud8bf\ud8ff\ud93f\ud97f\ud9bf\ud9ff\uda3f\uda7f\udabf\udaff\udb3f\udb7f\udbbf\udbff][\udffe\udfff]|\ud804[\udcbd\udccd]|\ud80d[\udc30-\udc3f]|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|\udb40[\udc01\udc20-\udc7f]|\udb40[\udc00\udc02-\udc1f\udc80-\udcff\uddf0-\udfff]|[\udb41-\udb43][\udc00-\udfff])/g, "").replace(/\s+/g, " ").trim();
 }
+/* The duplicate judge for plan display names and labels. Display text
+   itself is never rewritten (planText above preserves a genuine
+   decomposed sequence byte-identically), but two spellings that render
+   as the SAME name must count as one name here: Unicode canonical
+   equivalence means "Café" written with U+00E9 and "Café" written as
+   e + U+0301 are the same text to every reader and every font, yet
+   differ as JS strings, so a plain toLowerCase() key let both into one
+   plan as two different people — defeating the duplicate-name refusal
+   that keeps anyone from being paid twice by accident. The key folds
+   case and canonical form (NFC); compatibility equivalents (fullwidth
+   letters, ligatures) render visibly differently and stay distinct,
+   exactly as typed. */
+function planNameKey(raw) {
+  return (raw == null ? "" : String(raw)).normalize("NFC").toLowerCase();
+}
 var SERVICE_FEE_ADDRESS = "9fcM5RWnAjmP4vx5bnW6yohB6H9bLq8sJbaPLHtwZLtQPB32Pvy";
 var SERVICE_FEE_BPS = 100n; /* 100 basis points = 1% */
 var SERVICE_FEE_MIN_NANO = 1000000n; /* 0.001 ERG */
@@ -1293,7 +1308,7 @@ function buildMilestonePlan(sellerRaw, contractStr, milestonesRaw, minerFeeStr) 
     var shareStr = parts[1].trim();
     if (label === "") return fail("Line " + lineNo + " is refused: give the milestone a name before the comma, so the plan says what each payment is for.");
     if (label.length > MILESTONE_MAX_LABEL_CHARS) return fail("Line " + lineNo + "'s name is " + label.length + " characters — keep milestone names to " + MILESTONE_MAX_LABEL_CHARS + " or fewer so the plan stays a single copyable block.");
-    var labelKey = label.toLowerCase();
+    var labelKey = planNameKey(label);
     if (seenLabels[labelKey]) return fail("The milestone name on line " + lineNo + " repeats line " + seenLabels[labelKey] + " — name each milestone once and combine its shares into one line, so each stage is paid exactly once.");
     seenLabels[labelKey] = lineNo;
     if (!/^\d+$/.test(shareStr)) return fail("Line " + lineNo + " is refused: shares must be a whole number of parts (no decimals, no percent signs) — use 2 and 1 for a two-to-one split, not 66.7 and 33.3.");
@@ -1432,7 +1447,7 @@ function buildPayrollPlan(entriesRaw, minerFeeStr) {
     var amountStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the employee a name before the first comma, so the plan says who each payment is for.");
     if (name.length > PAYROLL_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + PAYROLL_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each employee once, so nobody is paid twice by accident.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addr);
@@ -2165,7 +2180,7 @@ function buildRewardPlan(poolStr, entriesRaw, minerFeeStr) {
     var stakeStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the staker a name before the first comma, so the plan says who each reward is for.");
     if (name.length > REWARD_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + REWARD_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each staker once, so nobody is paid twice by accident.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addr);
@@ -2344,7 +2359,7 @@ function buildCrowdfundPlan(creatorRaw, labelRaw, goalStr, entriesRaw, minerFeeS
     var pledgeStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the backer a name before the first comma, so the plan says who each pledge is from.");
     if (name.length > CROWDFUND_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + CROWDFUND_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each backer once, so nobody is counted twice by accident.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addr);
@@ -2568,7 +2583,7 @@ function buildAuctionPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
     var bidStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the bidder a name before the first comma, so the plan says who each bid is from.");
     if (name.length > AUCTION_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + AUCTION_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each bidder once, so nobody is counted twice by accident.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addr);
@@ -2953,7 +2968,7 @@ function buildGroupExpensePlan(labelRaw, entriesRaw, minerFeeStr) {
     var paidStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the person a name before the first comma, so the plan says who each balance belongs to.");
     if (name.length > GROUPXP_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + GROUPXP_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each person once, with everything they fronted added into one line.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addr);
@@ -3152,7 +3167,7 @@ function buildRoscaPlan(labelRaw, membersRaw, contributionStr, minerFeeStr) {
     var addr = parts[1].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the member a name before the comma, so the plan says whose payout round each round is.");
     if (name.length > ROSCA_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + ROSCA_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each member once; every member gets exactly one payout round.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addr);
@@ -3317,7 +3332,7 @@ function buildWaterfallPlan(labelRaw, tiersRaw, revenueStr, minerFeeStr) {
     var capRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the tier a name before the first comma, so the plan says who each tier pays.");
     if (name.length > WATERFALL_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + WATERFALL_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each tier once; a recipient who takes two tiers gets two differently named lines only if they really are two tiers.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addr);
@@ -3498,7 +3513,7 @@ function buildPrizeSplitPlan(labelRaw, winnersRaw, poolStr, minerFeeStr) {
     var pctRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the place a name before the first comma, so the plan says who each share pays.");
     if (name.length > PRIZESPLIT_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + PRIZESPLIT_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each place once; a winner who takes two places gets two differently named lines only if they really are two places.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addr);
@@ -3670,7 +3685,7 @@ function buildLoanSyndicatePlan(labelRaw, borrowerRaw, lendersRaw, repaymentStr,
     var amtRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the lender a name before the first comma, so the plan says who funded what.");
     if (name.length > SYNDICATE_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + SYNDICATE_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each lender once; combine one person's funding into a single line so their share is computed once.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addr);
@@ -4010,7 +4025,7 @@ function buildCascadingRoyaltyPlan(labelRaw, sellerRaw, recipientsRaw, priceStr,
     var rateRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " has no name — every royalty recipient needs a name so the plan can be checked against your records.");
     if (name.length > CASROY_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + CASROY_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("Line " + lineNo + " reuses the name \"" + name + "\" — two recipients with one name cannot be told apart in the plan; give each recipient a distinct name.");
     seenNames[nameKey] = true;
     var acheck = checkErgoAddress(addr);
@@ -4294,7 +4309,7 @@ function buildVickreyPlan(sellerRaw, labelRaw, reserveStr, entriesRaw, minerFeeS
     var bidStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the bidder a name before the first comma, so the plan says who each bid is from.");
     if (name.length > VICKREY_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + VICKREY_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each bidder once, so nobody is counted twice by accident.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addr);
@@ -4548,7 +4563,7 @@ function buildLaunchpadPlan(projectRaw, labelRaw, capStr, entriesRaw, minerFeeSt
     var pledgeStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the subscriber a name before the first comma, so the plan says who each pledge is from.");
     if (name.length > LAUNCHPAD_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + LAUNCHPAD_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each subscriber once, so nobody is counted twice by accident.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addr);
@@ -4767,7 +4782,7 @@ function buildReverseAuctionPlan(buyerRaw, labelRaw, budgetStr, entriesRaw, mine
     var bidStr = parts[2].trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the provider a name before the first comma, so the plan says who each bid is from.");
     if (name.length > REVAUCTION_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + REVAUCTION_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each provider once, so nobody is counted twice by accident.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addr);
@@ -5276,7 +5291,7 @@ function buildDepositPlan(tenantRaw, landlordRaw, labelRaw, depositStr, deductio
     var amtRaw = parts[1].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the deduction a name before the comma, so the plan says what each deduction is for.");
     if (name.length > DEPOSIT_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + DEPOSIT_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The deduction name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each deduction once; combine same-named charges into one line so the itemization stays exact.");
     seenNames[nameKey] = lineNo;
     var amtParsed = ergToNano(amtRaw);
@@ -5482,7 +5497,7 @@ function buildMatchPlan(charityRaw, matcherRaw, labelRaw, percentStr, capStr, do
     var amtRaw = parts[1].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the donor a name before the comma, so the plan says whose gift unlocked each part of the match.");
     if (name.length > MATCH_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + MATCH_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The donor name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each donor once; combine one donor's gifts into a single line so the pro-rata shares stay exact.");
     seenNames[nameKey] = lineNo;
     var amtParsed = ergToNano(amtRaw);
@@ -5723,7 +5738,7 @@ function buildGroupBuyPlan(sellerRaw, labelRaw, unitPriceStr, discountPercentStr
     var qtyRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the buyer a name before the first comma, so the plan says who ordered each quantity.");
     if (name.length > GROUPBUY_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + GROUPBUY_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The buyer name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each buyer once; combine one buyer's orders into a single line so the pro-rata shares stay exact.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addrRaw);
@@ -5940,7 +5955,7 @@ function buildGiftFundPlan(sellerRaw, labelRaw, priceStr, contributorsRaw, miner
     var amtRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the contributor a name before the first comma, so the plan says who chipped in each amount.");
     if (name.length > GIFTFUND_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + GIFTFUND_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The contributor name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each contributor once; combine one person's contributions into a single line so the pro-rata shares stay exact.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addrRaw);
@@ -6167,7 +6182,7 @@ function buildDividendPlan(payerRaw, labelRaw, poolStr, withholdingStr, holdersR
     var sharesRaw = parts[2].replace(/\s+/g, " ").trim();
     if (name === "") return fail("Line " + lineNo + " is refused: give the holder a name before the first comma, so the plan says who receives each payout.");
     if (name.length > DIVIDEND_MAX_NAME_CHARS) return fail("Line " + lineNo + "'s name is " + name.length + " characters — keep names to " + DIVIDEND_MAX_NAME_CHARS + " or fewer so the plan stays a single copyable block.");
-    var nameKey = name.toLowerCase();
+    var nameKey = planNameKey(name);
     if (seenNames[nameKey]) return fail("The holder name on line " + lineNo + " repeats line " + seenNames[nameKey] + " — list each holder once; combine one person's shares into a single line so the pro-rata shares stay exact.");
     seenNames[nameKey] = lineNo;
     var check = checkErgoAddress(addrRaw);
@@ -17760,7 +17775,7 @@ function toolMatchesFilter(toolFamily, toolText, activeFamily, needle) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, MERKLE_PROOF_MAX_LEVELS, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, SIGMA_TYPE_MAX_DEPTH, SIGMA_COLLECTION_MAX_COUNT, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, boundedEcho, planText, stripLoneSurrogates, hasLoneSurrogate, txIndexTarget, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, TX_SET_MAX_LINES, HEADER_SET_MAX_LINES, VOTE_TALLY_MAX_HEADERS, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
+  module.exports = { blake2b256, base58Decode, base58Encode, MAX_BASE58_LENGTH, MAX_BASE58_BYTES, p2pkAddressFromPublicKey, checkErgoAddress, ergToNano, nanoToErg, NANO_PER_ERG, ADDRESS_TYPES, storageRentNano, analyzeStorageRent, STORAGE_FEE_FACTOR_NANO_PER_BYTE, STORAGE_PERIOD_BLOCKS, minBoxValueNano, analyzeMinBoxValue, MIN_VALUE_PER_BYTE_NANO, SAFE_USER_MIN_BOX_NANO, BLOCKS_PER_DAY, HASHRATE_UNITS, hashrateToHps, estimateMining, fmtEstimate, TOKEN_MAX_DECIMALS, parseTokenDecimals, tokenRawToDisplay, tokenDisplayToRaw, parseChainHeight, analyzeRentCountdown, parseBoxList, planPayment, buildErgoInvoice, buildSplitPayment, SPLIT_MAX_RECIPIENTS, buildMilestonePlan, MILESTONE_MAX_COUNT, buildPayrollPlan, PAYROLL_MAX_EMPLOYEES, buildSaleSplitPlan, SALESPLIT_MAX_ITEM_CHARS, buildVestingPlan, VESTING_MAX_PERIODS, VESTING_MAX_LABEL_CHARS, buildSubscriptionPlan, SUBSCRIPTION_MAX_PERIODS, SUBSCRIPTION_MAX_LABEL_CHARS, buildLoanPlan, LOAN_MAX_PERIODS, LOAN_MAX_LABEL_CHARS, LOAN_MAX_RATE_BPS, buildSavingsPlan, SAVINGS_MAX_PERIODS, SAVINGS_MAX_LABEL_CHARS, buildRewardPlan, REWARD_MAX_STAKERS, REWARD_MAX_NAME_CHARS, buildCrowdfundPlan, CROWDFUND_MAX_BACKERS, CROWDFUND_MAX_NAME_CHARS, CROWDFUND_MAX_LABEL_CHARS, buildAuctionPlan, AUCTION_MAX_BIDDERS, AUCTION_MAX_NAME_CHARS, AUCTION_MAX_LABEL_CHARS, buildEscrowPlan, ESCROW_MAX_LABEL_CHARS, parseEscrowSplitBps, formatEscrowPercent, buildGroupExpensePlan, GROUPXP_MAX_PEOPLE, GROUPXP_MAX_NAME_CHARS, GROUPXP_MAX_LABEL_CHARS, buildRoscaPlan, ROSCA_MAX_MEMBERS, ROSCA_MAX_NAME_CHARS, ROSCA_MAX_LABEL_CHARS, buildWaterfallPlan, WATERFALL_MAX_TIERS, WATERFALL_MAX_NAME_CHARS, WATERFALL_MAX_LABEL_CHARS, buildPrizeSplitPlan, PRIZESPLIT_MAX_WINNERS, PRIZESPLIT_MAX_NAME_CHARS, PRIZESPLIT_MAX_LABEL_CHARS, parsePrizePercentBps, formatPrizePercent, buildLoanSyndicatePlan, SYNDICATE_MAX_LENDERS, SYNDICATE_MAX_NAME_CHARS, SYNDICATE_MAX_LABEL_CHARS, formatSignedNano, buildTieredCommissionPlan, TIERCOMM_MAX_BRACKETS, TIERCOMM_MAX_LABEL_CHARS, buildCascadingRoyaltyPlan, CASROY_MAX_RECIPIENTS, CASROY_MAX_NAME_CHARS, CASROY_MAX_LABEL_CHARS, buildDutchAuctionPlan, DUTCH_MAX_STEPS, DUTCH_MAX_LABEL_CHARS, buildVickreyPlan, VICKREY_MAX_BIDDERS, VICKREY_MAX_NAME_CHARS, VICKREY_MAX_LABEL_CHARS, buildLaunchpadPlan, LAUNCHPAD_MAX_SUBSCRIBERS, LAUNCHPAD_MAX_NAME_CHARS, LAUNCHPAD_MAX_LABEL_CHARS, buildReverseAuctionPlan, REVAUCTION_MAX_BIDDERS, REVAUCTION_MAX_NAME_CHARS, REVAUCTION_MAX_LABEL_CHARS, buildFactoringPlan, FACTORING_MAX_LABEL_CHARS, buildClaimPlan, CLAIM_MAX_LABEL_CHARS, buildDepositPlan, DEPOSIT_MAX_DEDUCTIONS, DEPOSIT_MAX_NAME_CHARS, DEPOSIT_MAX_LABEL_CHARS, buildMatchPlan, MATCH_MAX_DONORS, MATCH_MAX_NAME_CHARS, MATCH_MAX_LABEL_CHARS, MATCH_MAX_BPS, parseMatchBps, buildGroupBuyPlan, GROUPBUY_MAX_BUYERS, GROUPBUY_MAX_NAME_CHARS, GROUPBUY_MAX_LABEL_CHARS, GROUPBUY_MAX_QTY, parseGroupBuyBps, parseGroupBuyCount, buildGiftFundPlan, GIFTFUND_MAX_CONTRIBUTORS, GIFTFUND_MAX_NAME_CHARS, GIFTFUND_MAX_LABEL_CHARS, buildDividendPlan, DIVIDEND_MAX_HOLDERS, DIVIDEND_MAX_NAME_CHARS, DIVIDEND_MAX_LABEL_CHARS, SERVICE_FEE_ADDRESS, SERVICE_FEE_BPS, SERVICE_FEE_MIN_NANO, hexToBytes, bytesToHex, readVlqSize, addressFromContent, analyzeErgoTree, explainErgoTreeGuard, buildErgoTreeGuard, extractErgoTreeConstants, replaceErgoTreeConstant, buildSegregatedTree, buildMerkleTree, foldMerkleProof, analyzeMerkle, verifyMerkleProof, MERKLE_PROOF_MAX_LEVELS, decodeErgoAddress, buildP2SAddress, convertAddressNetwork, ERGOTREE_SIZE_FLAG, ERGOTREE_SEGREGATION_FLAG, P2SH_HASH_BYTES, parseBabelPrice, analyzeBabelFee, analyzeBoxId, FEE_CONTRACT_HEX, SIGMA_PRIMITIVE_NAMES, readVlqBig, zigzagDecode, zigzagDecode32, sigmaTypeName, parseSigmaType, SIGMA_TYPE_MAX_DEPTH, SIGMA_COLLECTION_MAX_COUNT, parseSigmaData, parseErgoBox, writeVlqBig, zigzagEncode, sigmaIntZigzag, bigIntToSigmaBytes, encodeSigmaConstant, buildErgoBox, decodeSigmaConstant, buildP2PKTree, buildP2SHAddress, utf8Bytes, analyzeBlake2b, analyzeBase58, analyzeVlq, analyzeZigZag, analyzeBoxHealth, EMISSION_FIXED_RATE_PERIOD, EMISSION_FIXED_RATE_NANO, EMISSION_EPOCH_LENGTH, EMISSION_ONE_EPOCH_REDUCTION_NANO, EMISSION_TOTAL_NANO, EIP27_ACTIVATION_HEIGHT, EIP27_REEMISSION_START_HEIGHT, emissionAtHeight, foundationRewardAtHeight, minersRewardAtHeight, issuedAfterHeight, analyzeEmission, EIP4_ASSET_TYPES, EIP4_ASSET_LABELS, buildEip4Registers, decodeEip4Registers, ADH_TYPE_CODE, buildAdhRepresentation, decodeAdhRepresentation, parseErgoTransaction, sigmaConstantBytes, buildErgoTransaction, sha512, hmacSha512, secp256k1PublicKey, deriveHdAddresses, HD_COIN_TYPE, inspectPublicKey, calculateGroupElement, GROUP_OPS, aggregatePublicKeys, aggregateWeightedPublicKeys, comparePublicKeyLists, scalePublicKeyList, shiftPublicKeyList, diffPublicKeyPairs, addPublicKeyPairs, verifySigmaProof, SIGMA_GENERATOR, summarizeBoxSet, summarizeAddressSet, subtractAddressSets, intersectAddressSets, xorAddressSets, mergeAddressSets, convertAddressListNetwork, analyzeTxFee, planTokenPayment, convertTxJson, planTokenMint, auditTxOutputs, auditTxInputs, compareTxSigning, compareErgoBoxes, analyzeTxSize, compareTransactions, compareBoxSets, mergeBoxSets, intersectBoxSets, xorBoxSets, subtractBoxSets, extractUnsignedTx, attachTxProofs, boundedEcho, planText, planNameKey, stripLoneSurrogates, hasLoneSurrogate, txIndexTarget, extractTxOutputBox, extractTxInputProof, extractTxDataInput, extractTxToken, extractTxRegister, extractTxExtension, extractTxTree, extractTxOutToken, extractTxOutputRegisters, extractTxExtensionSet, extractTxOutputTokenSet, extractTxDataInputSet, extractTxInputSet, extractTxOutputSet, extractTxDistinctTokenSet, decodeCompactBits, encodeCompactBits, analyzeCompactBits, analyzeNextDifficulty, diffPredictive, inspectBlockHeader, buildBlockHeader, compareBlockHeaders, checkHeaderChain, extractHeaderPow, attachHeaderPow, verifyHeaderPow, decodeHeaderVotes, tallyHeaderVotes, summarizeHeaderSet, extractHeaderField, analyzeHeaderSize, compareHeaderSets, mergeHeaderSets, intersectHeaderSets, xorHeaderSets, subtractHeaderSets, summarizeTxSet, compareTxSets, mergeTxSets, intersectTxSets, xorTxSets, subtractTxSets, TX_SET_MAX_LINES, HEADER_SET_MAX_LINES, VOTE_TALLY_MAX_HEADERS, HEADER_FIELD_LABELS, VOTE_PARAM_APPROVAL_MIN, VOTE_SOFT_FORK_APPROVAL_MIN, autolykosTableSize, toolMatchesFilter };
 }
 
 if (typeof document !== "undefined") {

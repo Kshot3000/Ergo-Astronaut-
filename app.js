@@ -9237,7 +9237,11 @@ function buildErgoBox(fields) {
    tool 17's builder. And the outputs' combined value is refused
    once it passes the signed 64-bit maximum — the other stateless
    check in that same upstream function, an overflowing output
-   sum (OutputSumOverflow). An output whose standalone box would
+   sum (OutputSumOverflow). A token whose amounts across the
+   outputs sum past the same bound is refused too — upstream
+   verification folds the outputs' tokens per ID with checked
+   addition (a TokenAmount overflow) before any conservation
+   check. An output whose standalone box would
    pass the 4,096-byte maximum box size is refused too (upstream
    verify_output's BoxSizeExceeded — the embedded candidate
    understates that size, so it is rebuilt field by field). The transaction ID is the Blake2b-256 of the unsigned
@@ -9343,6 +9347,7 @@ function buildErgoTransaction(fields) {
   var tokenIndex = {};
   var outputs = [];
   var outputTotal = 0n;
+  var tokenTotals = Object.create(null);
   for (var o = 0; o < outFields.length; o++) {
     var of = outFields[o] || {};
     var oWhat = "Output " + (o + 1);
@@ -9360,10 +9365,16 @@ function buildErgoTransaction(fields) {
        a transaction totalling 2^64 − 2 nanoERG that no node
        accepts, so the running total is refused at the output that
        first pushes it past the bound, naming that output and the
-       total it would reach. Token amounts are deliberately NOT
-       summed here: stateless validation checks the ERG sum only —
-       token conservation is a stateful check against the input
-       boxes, which this builder never sees. */
+       total it would reach. Token CONSERVATION is deliberately NOT
+       judged here: whether the outputs of a token exceed what the
+       inputs carry is a stateful check against the input boxes,
+       which this builder never sees. But each token's total across
+       the outputs IS judged in the token loop below: upstream
+       verification folds the outputs' tokens per token ID with
+       checked signed-64-bit addition before any conservation
+       comparison (extract_assets in sigma-rust's tx_context, a
+       TokenAmount overflow surfacing as a validation error), and
+       that fold runs over the outputs alone. */
     outputTotal += oValue;
     if (outputTotal > 9223372036854775807n) return fail(oWhat + " makes the outputs total " + outputTotal.toString() + " nanoERG — more than the signed 64-bit maximum (9,223,372,036,854,775,807) one transaction's outputs may sum to, so the build is refused rather than assembled into a transaction upstream validation rejects for an overflowing output sum. Lower an output value so the outputs together stay within the bound.");
     var oTree = hexToBytes(of.ergoTree == null ? "" : String(of.ergoTree));
@@ -9395,6 +9406,24 @@ function buildErgoTransaction(fields) {
       var tkAmt = BigInt(String(tf.amount).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
       if (tkAmt < 1n || tkAmt > 9223372036854775807n) return fail(oWhat + ", token " + (t + 1) + ": a token amount is a positive signed 64-bit raw integer.");
       var tkHex = bytesToHex(tkId);
+      /* The token's total across ALL outputs is judged too, not
+         just this entry on its own: upstream verification folds
+         every output's tokens into one amount per token ID with
+         checked signed-64-bit addition (extract_assets in
+         sigma-rust's wallet/tx_context.rs, over
+         TokenAmount::checked_add) and rejects the transaction when
+         that fold overflows, before token conservation against the
+         inputs is ever compared — so two outputs carrying the same
+         token at the per-entry maximum each passed every check here
+         and built a transaction no node accepts. The running total
+         is refused at the entry that first pushes it past the
+         bound, naming the output, the token and the total it would
+         reach. Different tokens fold separately and never interact;
+         a single box cannot overflow its own fold (tool 17 and this
+         builder both refuse a repeated token ID within one box, so
+         each box contributes at most one bounded entry per token). */
+      tokenTotals[tkHex] = (tokenTotals[tkHex] || 0n) + tkAmt;
+      if (tokenTotals[tkHex] > 9223372036854775807n) return fail(oWhat + ", token " + (t + 1) + " (token ID " + tkHex + ") makes that token's total across the outputs " + tokenTotals[tkHex].toString() + " — more than the signed 64-bit maximum (9,223,372,036,854,775,807) one token's amounts may sum to, so the build is refused rather than assembled into a transaction upstream validation rejects when it folds the outputs' tokens by ID. Lower an amount of this token so its outputs together stay within the bound.");
       if (!(tkHex in tokenIndex)) { tokenIndex[tkHex] = tokenIds.length; tokenIds.push(tkHex); }
       oTokens.push({ tokenId: tkHex, amount: tkAmt, index: tokenIndex[tkHex] });
     }

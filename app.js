@@ -8932,6 +8932,18 @@ function encodeSigmaConstant(spec) {
   if (kind === "group" || kind === "dlog") {
     var gb = hexToBytes(val.toLowerCase());
     if (!gb || gb.length !== 33 || (gb[0] !== 0x02 && gb[0] !== 0x03)) return fail("A " + kind + " register is a compressed group element: 33 bytes, 66 hex characters, starting 02 or 03 — got \"" + boundedEcho(s) + "\".");
+    /* The 33 bytes must also BE a point on secp256k1, not just carry
+       a 02/03 prefix: upstream parses a group element through
+       EcPoint::sigma_parse, which runs PublicKey::from_sec1_bytes
+       over the bytes and rejects an x at or above the field prime
+       and an x whose x^3 + 7 has no square root (about half of all
+       x values) — so a constant built from such bytes does not
+       parse back in any box or transaction a node reads, exactly
+       the trap tool 32 exists to catch for keys and the guard
+       builder already refuses for its keys. Tool 32's full curve
+       check is run here too, and its reason is carried through. */
+    var gp = inspectPublicKey(bytesToHex(gb));
+    if (!gp.valid) return fail("A " + kind + " register's bytes are not a point on secp256k1, so the constant is refused rather than encoded into bytes no node can parse back: " + gp.reason);
     if (kind === "group") return done(7, Array.from(gb), "SGroupElement", bytesToHex(gb));
     return done(8, [0xcd].concat(Array.from(gb)), "SSigmaProp", "proveDlog(" + bytesToHex(gb) + ")");
   }
@@ -9262,7 +9274,12 @@ function buildErgoBox(fields) {
    understates that size, so it is rebuilt field by field). An
    output creation height with bit 31 set is refused too (upstream
    verify_output's NegativeHeight, on every block version past
-   version 1), as it is in tool 17's box builder. The transaction ID is the Blake2b-256 of the unsigned
+   version 1), as it is in tool 17's box builder. A register or
+   extension constant carrying a group element that is not a point
+   on secp256k1 is refused too (upstream EcPoint parsing rejects
+   such bytes outright), whether it arrives as a typed group:/dlog:
+   spec or as raw hex, at the top level or nested in a collection
+   or tuple. The transaction ID is the Blake2b-256 of the unsigned
    rewrite — proofs stripped, extensions kept — exactly as tool 29
    recomputes it. The assembled bytes are round-tripped through
    tool 29's parser before they are shown, and every field
@@ -9280,6 +9297,58 @@ function buildErgoBox(fields) {
    2026-10-08. A built transaction is just bytes: nothing here
    signs (a proof field is data the user pastes, never a signature
    this tool makes), broadcasts or spends anything. */
+/* The group-element leaves of one decoded constant, walked in the
+   shape parseSigmaData walks them (a primitive SGroupElement, a
+   ProveDlog SigmaProp, or either nested inside a collection or a
+   tuple — the forms a raw-hex register can carry that a typed spec
+   cannot express): returns the first leaf whose 33 bytes are not a
+   point on secp256k1, as tool 32 judges a point, or null when every
+   leaf is a real point. The walk advances with parseSigmaData's own
+   lengths, so it visits exactly the leaves the decoder read. */
+function invalidGroupPointInConstant(node, bytes, offset) {
+  var check = function (pointBytes) {
+    var ph = bytesToHex(pointBytes);
+    var ip = inspectPublicKey(ph);
+    return ip.valid ? null : { point: ph, reason: ip.reason };
+  };
+  if (node.kind === "prim") {
+    if (node.code === 7) {
+      if (offset + 33 > bytes.length) return null;
+      return check(bytes.subarray(offset, offset + 33));
+    }
+    if (node.code === 8) {
+      if (offset + 34 > bytes.length || bytes[offset] !== 0xcd) return null;
+      return check(bytes.subarray(offset + 1, offset + 34));
+    }
+    return null;
+  }
+  if (node.kind === "coll") {
+    var v = readVlqBig(bytes, offset);
+    if (!v) return null;
+    var count = Number(v.value);
+    if (count > SIGMA_COLLECTION_MAX_COUNT) return null;
+    var elem = node.elem;
+    if (elem.kind === "prim" && (elem.code === 1 || elem.code === 2)) return null;
+    var off = offset + v.length;
+    for (var i = 0; i < count; i++) {
+      var sub = parseSigmaData(elem, bytes, off);
+      if (!sub) return null;
+      var badColl = invalidGroupPointInConstant(elem, bytes, off);
+      if (badColl) return badColl;
+      off += sub.length;
+    }
+    return null;
+  }
+  var off2 = offset;
+  for (var j = 0; j < node.elems.length; j++) {
+    var sub2 = parseSigmaData(node.elems[j], bytes, off2);
+    if (!sub2) return null;
+    var badTuple = invalidGroupPointInConstant(node.elems[j], bytes, off2);
+    if (badTuple) return badTuple;
+    off2 += sub2.length;
+  }
+  return null;
+}
 function sigmaConstantBytes(entry) {
   var fail = function (reason) { return { valid: false, reason: reason }; };
   var s = entry == null ? "" : String(entry).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
@@ -9294,6 +9363,19 @@ function sigmaConstantBytes(entry) {
   if (!bytes) return fail("\"" + boundedEcho(s) + "\" is neither a typed spec (kind:value — tool 18 lists the kinds) nor one Sigma constant in hex.");
   var dec = decodeSigmaConstant(s);
   if (!dec.valid) return fail("\"" + boundedEcho(s) + "\" is not one complete Sigma constant: " + dec.reason);
+  /* A raw-hex constant is judged for its group elements too, the
+     same check the typed-spec path runs in encodeSigmaConstant: a
+     group element or ProveDlog point that is not on secp256k1 —
+     at the top level, or nested in a collection or tuple — is one
+     upstream's EcPoint parsing rejects, so embedding it would
+     assemble a register or extension no node can parse back. The
+     decoder alone is a permissive reader and stays one; this is
+     the encode-side gate every builder path passes through. */
+  var rawType = parseSigmaType(bytes, 0);
+  if (rawType) {
+    var badPoint = invalidGroupPointInConstant(rawType.node, bytes, rawType.length);
+    if (badPoint) return fail("\"" + boundedEcho(s) + "\" carries a group element that is not a point on secp256k1 (" + badPoint.point + "), so it is refused rather than embedded in bytes no node can parse back: " + badPoint.reason);
+  }
   return { valid: true, bytes: Array.from(bytes), rawHex: dec.rawHex, typeName: dec.type, value: dec.value };
 }
 function buildErgoTransaction(fields) {

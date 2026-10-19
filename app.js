@@ -9119,6 +9119,16 @@ function buildErgoBox(fields) {
   if (!digits(fields.creationHeight)) return fail("Enter the creation height as a whole block number (digits only). It is normally the height of the block the creating transaction is mined in.");
   var height = Number(fields.creationHeight.replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
   if (!Number.isSafeInteger(height) || height > 4294967295) return fail("A creation height is an unsigned 32-bit block number (0 to 4,294,967,295).");
+  /* A height with bit 31 set (2,147,483,648 and above) is refused
+     too: upstream validation reads a creation height as a signed
+     32-bit value in this check and rejects any output whose height
+     has that bit set as a negative height (sigma-rust's
+     verify_output, TxValidationError::NegativeHeight) on every
+     block version except version 1 — negative heights were a
+     version-1 allowance, and the live chain has run version 2+
+     for years — so the unsigned range alone would assemble a box
+     no current node accepts as a transaction output. */
+  if (height > 2147483647) return fail("Creation height " + height + " has the top bit of a 32-bit height set — upstream validation reads such a height as negative and refuses the output (NegativeHeight) on every block version past version 1, so the build is refused rather than assembled into a box no current node accepts. Give a height up to 2,147,483,647.");
   var tokens = fields.tokens || [];
   /* The token count is judged BEFORE the loop below, against the
      same 10,000 bound tool 15's parser judges before its own token
@@ -9249,7 +9259,10 @@ function buildErgoBox(fields) {
    check. An output whose standalone box would
    pass the 4,096-byte maximum box size is refused too (upstream
    verify_output's BoxSizeExceeded — the embedded candidate
-   understates that size, so it is rebuilt field by field). The transaction ID is the Blake2b-256 of the unsigned
+   understates that size, so it is rebuilt field by field). An
+   output creation height with bit 31 set is refused too (upstream
+   verify_output's NegativeHeight, on every block version past
+   version 1), as it is in tool 17's box builder. The transaction ID is the Blake2b-256 of the unsigned
    rewrite — proofs stripped, extensions kept — exactly as tool 29
    recomputes it. The assembled bytes are round-tripped through
    tool 29's parser before they are shown, and every field
@@ -9406,6 +9419,12 @@ function buildErgoTransaction(fields) {
     if (!digits(of.creationHeight)) return fail(oWhat + ": enter the creation height as a whole block number (digits only). It is normally the height of the block the transaction is mined in.");
     var oHeight = Number(String(of.creationHeight).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
     if (!Number.isSafeInteger(oHeight) || oHeight > 4294967295) return fail(oWhat + ": a creation height is an unsigned 32-bit block number (0 to 4,294,967,295).");
+    /* A height with bit 31 set is refused too, for the same reason
+       tool 17's box builder refuses it: upstream verify_output
+       rejects such an output as a negative height
+       (TxValidationError::NegativeHeight) on every block version
+       except version 1, and the live chain is past version 1. */
+    if (oHeight > 2147483647) return fail(oWhat + ": creation height " + oHeight + " has the top bit of a 32-bit height set — upstream validation reads such a height as negative and refuses the output (NegativeHeight) on every block version past version 1, so the build is refused rather than assembled into a transaction no current node accepts. Give a height up to 2,147,483,647.");
     var tkFields = of.tokens || [];
     if (!Array.isArray(tkFields) || tkFields.length > 10000) return fail(oWhat + ": tokens are a list of token ID / amount pairs.");
     var oTokens = [];

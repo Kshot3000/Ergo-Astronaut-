@@ -193,7 +193,13 @@ function base58Encode(bytes) {
    Verified against the documented mainnet/testnet P2PK vectors in the
    tests, cross-checked with an independent Python (hashlib) build.
    This builds an address from a PUBLIC key only — never a private key
-   or seed phrase; construction proves nothing about who owns the key. */
+   or seed phrase; construction proves nothing about who owns the key.
+   This helper is the bare encoding primitive the parsers and fixtures
+   also use, so it judges the key's form only; the tool 8 form runs
+   tool 32's full curve check first and refuses a key that is not a
+   point on secp256k1 before calling it — no private key exists for
+   such bytes, so an address formatted around them could never be
+   spent from. */
 function p2pkAddressFromPublicKey(pubkeyHex, networkStr) {
   var s = (pubkeyHex == null ? "" : String(pubkeyHex)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
   var net = (networkStr == null ? "" : String(networkStr)).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase();
@@ -220,7 +226,12 @@ function p2pkAddressFromPublicKey(pubkeyHex, networkStr) {
    the network only picks which addresses are derived alongside it.
    The built tree is round-tripped through tool 10's parser and the
    P2PK address through tool 11's decoder before anything is shown:
-   both must read back this exact key, tree and address. Verified
+   both must read back this exact key, tree and address. The key is
+   run through tool 32's full curve check before anything is built:
+   a 02/03 prefix alone does not make a point, and a tree carrying
+   a non-point key does not parse upstream — and no private key
+   exists for it, so a box guarded by it could never be spent.
+   Verified
    against the documented P2PK vectors and the fleet-sdk/fleet#219
    reference P2SH addresses in the tests. Public keys only — never a
    private key or seed phrase; a tree proves nothing about who can
@@ -235,6 +246,8 @@ function buildP2PKTree(pubkeyHex, networkStr) {
   if (s.indexOf("0x") === 0) s = s.slice(2);
   if (!/^[0-9a-f]{66}$/.test(s)) return fail("Enter a compressed public key as 66 hex characters (33 bytes) starting 02 or 03 — public keys only: never enter a private key or seed phrase anywhere, including here.");
   if (s.slice(0, 2) !== "02" && s.slice(0, 2) !== "03") return fail("That is not a compressed public key: a compressed secp256k1 key is 33 bytes and starts 02 or 03 (this starts " + s.slice(0, 2) + "). An uncompressed key (65 bytes, starting 04) is not what Ergo P2PK scripts carry.");
+  var keyPoint = inspectPublicKey(s);
+  if (!keyPoint.valid) return fail("That key is not a point on secp256k1, so no P2PK tree is built for it: " + keyPoint.reason);
   var treeHex = "0008cd" + s;
   var network = net === "mainnet" ? "Mainnet" : "Testnet";
   var info = analyzeErgoTree(treeHex, net);
@@ -17553,7 +17566,12 @@ function inspectBlockHeader(headerHex, expectedStr) {
    where d serializes as its minimal big-endian bytes and 0 as
    the single byte 0x00; version 2+: miner key and nonce only —
    v2+ fields like the one-time key are refused, not silently
-   dropped, because they are not serialized). The header ID is
+   dropped, because they are not serialized). The miner key and
+   the version 1 one-time key are run through tool 32's full
+   curve check before anything is assembled: a 02/03 prefix
+   alone does not make a point, and a solution carrying a
+   non-point key does not parse upstream as an Autolykos
+   solution at all. The header ID is
    Blake2b-256 over the assembled bytes, and the difficulty is
    decoded from nBits by the exact compact-bits algorithm. The
    build is verified before anything is shown: the assembled
@@ -17611,12 +17629,16 @@ function buildBlockHeader(fields) {
   }
   var minerPk = hexField("minerPk", 66); if (minerPk === null) return fail("The miner public key must be 66 hex characters (33 bytes — a compressed secp256k1 point).");
   if (minerPk.slice(0, 2) !== "02" && minerPk.slice(0, 2) !== "03") return fail("The miner public key must start with a compressed-point prefix (02 or 03).");
+  var minerPoint = inspectPublicKey(minerPk);
+  if (!minerPoint.valid) return fail("The miner public key is not a point on secp256k1, so no header is built with it: " + minerPoint.reason);
   var nonce = hexField("nonce", 16); if (nonce === null) return fail("The Autolykos nonce must be 16 hex characters (8 bytes).");
   var onetimePk = null;
   var powDistance = null;
   if (version === 1) {
     onetimePk = hexField("onetimePk", 66); if (onetimePk === null) return fail("Version 1 (Autolykos v1) solutions carry a one-time public key — 66 hex characters (33 bytes). Supply it, or build a version 2+ header.");
     if (onetimePk.slice(0, 2) !== "02" && onetimePk.slice(0, 2) !== "03") return fail("The one-time public key must start with a compressed-point prefix (02 or 03).");
+    var onetimePoint = inspectPublicKey(onetimePk);
+    if (!onetimePoint.valid) return fail("The one-time public key is not a point on secp256k1, so no header is built with it: " + onetimePoint.reason);
     if (!/^\d+$/.test(get("powDistance"))) return fail("Version 1 (Autolykos v1) solutions carry the distance d as a whole number — supply it, or build a version 2+ header.");
     if (get("powDistance").length > 1000) return fail("The distance d is refused: it is judged from its length before it is parsed or assembled — at most 1,000 digits. On the wire d is a length-prefixed byte array of at most 255 bytes (about 614 digits), so no header this builder could assemble carries more."); /* the sigma-proof scalar cap is the in-module precedent for the 1,000-digit bound */
     powDistance = get("powDistance");
@@ -18044,10 +18066,12 @@ function attachHeaderPow(withoutPowHex, solutionHex) {
   };
   var minerPk = sTake(33, "the Autolykos miner public key");
   if (!serr && minerPk[0] !== 0x02 && minerPk[0] !== 0x03) return fail("The solution's miner public key does not start with a compressed-point prefix (02 or 03) — these are not Autolykos solution bytes for this header.");
+  if (!serr) { var joinMinerPoint = inspectPublicKey(bytesToHex(minerPk)); if (!joinMinerPoint.valid) return fail("The solution's miner public key is not a point on secp256k1, so the halves are not joined: " + joinMinerPoint.reason); }
   var onetimePk = null, powDistance = null, nonce = null;
   if (!serr && version === 1) {
     onetimePk = sTake(33, "the Autolykos v1 one-time public key");
     if (!serr && onetimePk[0] !== 0x02 && onetimePk[0] !== 0x03) return fail("The solution's one-time public key does not start with a compressed-point prefix (02 or 03) — these are not Autolykos v1 solution bytes.");
+    if (!serr) { var joinOnetimePoint = inspectPublicKey(bytesToHex(onetimePk)); if (!joinOnetimePoint.valid) return fail("The solution's one-time public key is not a point on secp256k1, so the halves are not joined: " + joinOnetimePoint.reason); }
     nonce = sTake(8, "the Autolykos nonce");
     var dlB = sTake(1, "the Autolykos v1 distance length");
     if (!serr) {
@@ -18610,7 +18634,12 @@ if (typeof document !== "undefined") {
       ev.preventDefault();
       var out = document.getElementById("p2pk-result");
       var netLabel = document.getElementById("p2pk-network").value;
-      var addr = p2pkAddressFromPublicKey(document.getElementById("p2pk-pubkey").value, netLabel);
+      var keyCheck = inspectPublicKey(document.getElementById("p2pk-pubkey").value);
+      if (!keyCheck.valid) {
+        out.textContent = "✗ No address is built for that key: " + keyCheck.reason;
+        return;
+      }
+      var addr = p2pkAddressFromPublicKey(keyCheck.publicKey, netLabel);
       if (addr === null) {
         out.textContent = "Enter a compressed public key as 66 hex characters starting 02 or 03 — public keys only: never enter a private key or seed phrase anywhere, including here.";
         return;

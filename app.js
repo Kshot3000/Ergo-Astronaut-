@@ -9223,7 +9223,10 @@ function buildErgoBox(fields) {
    rejects it as a double spend, and tool 38's audit names it in
    any transaction it reads). An output listing the same token ID
    twice is refused too: one entry per token ID per box, as in
-   tool 17's builder. The transaction ID is the Blake2b-256 of the unsigned
+   tool 17's builder. And the outputs' combined value is refused
+   once it passes the signed 64-bit maximum — the other stateless
+   check in that same upstream function, an overflowing output
+   sum (OutputSumOverflow). The transaction ID is the Blake2b-256 of the unsigned
    rewrite — proofs stripped, extensions kept — exactly as tool 29
    recomputes it. The assembled bytes are round-tripped through
    tool 29's parser before they are shown, and every field
@@ -9325,12 +9328,30 @@ function buildErgoTransaction(fields) {
   var tokenIds = [];
   var tokenIndex = {};
   var outputs = [];
+  var outputTotal = 0n;
   for (var o = 0; o < outFields.length; o++) {
     var of = outFields[o] || {};
     var oWhat = "Output " + (o + 1);
     if (!digits(of.valueNano)) return fail(oWhat + ": enter the value as a whole number of nanoERG (digits only — tool 1 converts ERG to nanoERG).");
     var oValue = BigInt(String(of.valueNano).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
     if (oValue < 1n || oValue > 9223372036854775807n) return fail(oWhat + ": a box value is a positive signed 64-bit amount of nanoERG (1 to 9,223,372,036,854,775,807) — and a spendable box must also clear the minimum-value rule in tool 5.");
+    /* The outputs' TOTAL is judged too, not just each value on its
+       own: upstream stateless validation folds the output values
+       with checked signed-64-bit addition and rejects the whole
+       transaction when the sum overflows (sigma-rust's
+       TxValidationError::OutputSumOverflow) — the other check in
+       that same validate_stateless beside the double-spend check
+       this builder already mirrors for its inputs. Two outputs of
+       the per-box maximum each passed every check here and built
+       a transaction totalling 2^64 − 2 nanoERG that no node
+       accepts, so the running total is refused at the output that
+       first pushes it past the bound, naming that output and the
+       total it would reach. Token amounts are deliberately NOT
+       summed here: stateless validation checks the ERG sum only —
+       token conservation is a stateful check against the input
+       boxes, which this builder never sees. */
+    outputTotal += oValue;
+    if (outputTotal > 9223372036854775807n) return fail(oWhat + " makes the outputs total " + outputTotal.toString() + " nanoERG — more than the signed 64-bit maximum (9,223,372,036,854,775,807) one transaction's outputs may sum to, so the build is refused rather than assembled into a transaction upstream validation rejects for an overflowing output sum. Lower an output value so the outputs together stay within the bound.");
     var oTree = hexToBytes(of.ergoTree == null ? "" : String(of.ergoTree));
     if (!oTree) return fail(oWhat + ": enter the guarding script's ErgoTree as hex (an even number of 0-9/a-f characters, with or without a 0x prefix) — tools 19, 16 and 11 produce trees from keys, scripts and addresses.");
     if (!digits(of.creationHeight)) return fail(oWhat + ": enter the creation height as a whole block number (digits only). It is normally the height of the block the transaction is mined in.");

@@ -9229,7 +9229,12 @@ function buildErgoBox(fields) {
    registers are tuples). Extension entries are written in
    ascending key order, the order fleet's own writer emits for a
    key record, and duplicate keys are refused rather than silently
-   merged. A repeated input box ID is refused too: one box can be
+   merged. An extension key above 127, or more than 127 extension
+   entries on one input, is refused too: the reference serializer
+   stores both the key and the entry count in one signed byte and
+   rejects anything above 127, so a larger key or count (written
+   here as a VLQ, byte-identical below 128) assembles bytes no
+   node can read back. A repeated input box ID is refused too: one box can be
    spent only once in a transaction (upstream stateless validation
    rejects it as a double spend, and tool 38's audit names it in
    any transaction it reads). An output listing the same token ID
@@ -9314,14 +9319,33 @@ function buildErgoTransaction(fields) {
       if (!proofBytes) return fail("Input " + (i + 1) + ": the spending proof must be hex (an even number of 0-9/a-f characters) — leave it empty for an unsigned input.");
     }
     var extFields = inf.extension || [];
-    if (!Array.isArray(extFields) || extFields.length > 10000) return fail("Input " + (i + 1) + ": the context extension is a list of key / constant entries.");
+    if (!Array.isArray(extFields)) return fail("Input " + (i + 1) + ": the context extension is a list of key / constant entries.");
+    /* An input's context extension holds at most 127 entries: the
+       reference serializer stores the entry count in ONE signed
+       byte and rejects a count above Byte.MAX_VALUE (127), and its
+       parser rejects a count byte of 128..=255 as negative (the
+       limit sigma-rust's ContextExtension mirrors). This builder
+       previously allowed 10,000 entries and wrote the count as a
+       VLQ — byte-identical below 128, but at 128 the VLQ is two
+       bytes where a node reads one, so the built bytes desync every
+       field after the count and no node reads them back. */
+    if (extFields.length > 127) return fail("Input " + (i + 1) + ": a context extension holds at most 127 entries — " + extFields.length + " were given. The count is stored in one signed byte by the reference serializer, which rejects a count above 127, so the build is refused rather than assembled into bytes no node can read back. Split the entries across the inputs that use them, or drop the ones the scripts do not read.");
     var ext = [];
     var seenKeys = {};
     for (var e = 0; e < extFields.length; e++) {
       var ef = extFields[e] || {};
       if (!digits(ef.key == null ? "" : String(ef.key))) return fail("Input " + (i + 1) + ", extension entry " + (e + 1) + ": the key is a whole number (digits only).");
       var keyNum = Number(String(ef.key).replace(/^[\s\u0085]+|[\s\u0085]+$/g, ""));
-      if (!Number.isSafeInteger(keyNum) || keyNum > 4294967295) return fail("Input " + (i + 1) + ", extension entry " + (e + 1) + ": a context extension key is an unsigned 32-bit number (0 to 4,294,967,295).");
+      /* A context extension key is a variable ID stored in ONE
+         signed byte: the reference serializer rejects an ID above
+         127 and its parser rejects an ID byte of 128..=255 as
+         negative (the limit sigma-rust's ContextExtension
+         mirrors). This builder previously allowed any unsigned
+         32-bit key and wrote it as a VLQ — byte-identical below
+         128, but at 128 the VLQ is two bytes where a node reads
+         one byte as the ID, so the constant after it is read from
+         the wrong offset and no node accepts the input. */
+      if (!Number.isSafeInteger(keyNum) || keyNum > 127) return fail("Input " + (i + 1) + ", extension entry " + (e + 1) + ": a context extension key is a variable ID from 0 to 127 — key " + keyNum + " does not fit the one signed byte the reference serializer stores an ID in (it rejects an ID above 127), so the entry is refused rather than written in a form no node accepts. Renumber the variable to an ID in 0–127.");
       if (seenKeys[keyNum]) return fail("Input " + (i + 1) + ": extension key " + keyNum + " is given twice — one key holds one constant, so the duplicate is refused rather than merged.");
       seenKeys[keyNum] = true;
       var ec = sigmaConstantBytes(ef.value);

@@ -17661,6 +17661,10 @@ function buildBlockHeader(fields) {
     if (!/^\d+$/.test(get("powDistance"))) return fail("Version 1 (Autolykos v1) solutions carry the distance d as a whole number — supply it, or build a version 2+ header.");
     if (get("powDistance").length > 1000) return fail("The distance d is refused: it is judged from its length before it is parsed or assembled — at most 1,000 digits. On the wire d is a length-prefixed byte array of at most 255 bytes (about 614 digits), so no header this builder could assemble carries more."); /* the sigma-proof scalar cap is the in-module precedent for the 1,000-digit bound */
     powDistance = get("powDistance");
+    var dValue = BigInt(powDistance);
+    var dByteLength = 1;
+    for (var dTmp = dValue; dTmp > 0xffn; dTmp >>= 8n) dByteLength++;
+    if (dByteLength > 255) return fail("The distance d is refused: the value supplied needs " + dByteLength + " bytes, but on the wire d is a length-prefixed byte array whose length prefix is a single byte (sigma-rust reads it with get_u8), so it can carry at most 255 bytes — about 614 digits. No node could read a longer distance back as the value supplied.");
   } else {
     if (get("onetimePk") !== "" || get("powDistance") !== "") return fail("Version 2+ solutions serialize only the miner key and the nonce — the one-time key and distance exist in JSON displays but are NOT serialized, so they are refused here rather than silently dropped. Clear them, or build a version 1 header.");
   }
@@ -17675,7 +17679,7 @@ function buildBlockHeader(fields) {
   var withoutPowLength = bytes.length;
   bytes = bytes.concat(Array.from(hexToBytes(minerPk)));
   if (version === 1) {
-    var dv = BigInt(powDistance);
+    var dv = dValue;
     var dArr = [];
     if (dv === 0n) dArr = [0];
     else { while (dv > 0n) { dArr.unshift(Number(dv & 0xffn)); dv >>= 8n; } }

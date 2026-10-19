@@ -9292,7 +9292,10 @@ function buildErgoBox(fields) {
    on secp256k1 is refused too (upstream EcPoint parsing rejects
    such bytes outright), whether it arrives as a typed group:/dlog:
    spec or as raw hex, at the top level or nested in a collection
-   or tuple. The transaction ID is the Blake2b-256 of the unsigned
+   or tuple. A spending proof past 65,535 bytes is refused too:
+   upstream reads a proof's length as an unsigned 16-bit value
+   (ProofBytes::sigma_parse), so a longer proof's length VLQ
+   assembles a transaction no node can read back. The transaction ID is the Blake2b-256 of the unsigned
    rewrite — proofs stripped, extensions kept — exactly as tool 29
    recomputes it. The assembled bytes are round-tripped through
    tool 29's parser before they are shown, and every field
@@ -9425,6 +9428,17 @@ function buildErgoTransaction(fields) {
     if (inf.proofHex != null && String(inf.proofHex).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "") !== "") {
       proofBytes = hexToBytes(String(inf.proofHex).replace(/^[\s\u0085]+|[\s\u0085]+$/g, "").toLowerCase());
       if (!proofBytes) return fail("Input " + (i + 1) + ": the spending proof must be hex (an even number of 0-9/a-f characters) — leave it empty for an unsigned input.");
+      /* A spending proof is at most 65,535 bytes: upstream reads
+         the proof length as an unsigned 16-bit value (sigma-rust's
+         ProofBytes::sigma_parse decodes the length VLQ and then
+         converts it with u16::try_from, rejecting any length above
+         65,535), while this builder wrote the length as an
+         unbounded VLQ — so a 65,536-byte proof built a valid
+         transaction here whose length no node can even read back,
+         desyncing every field after the proof. Real sigma proofs
+         are a few hundred bytes; a proof past the bound is a
+         paste error, not a proof. */
+      if (proofBytes.length > 65535) return fail("Input " + (i + 1) + ": a spending proof is at most 65,535 bytes — this one is " + proofBytes.length + " bytes. Upstream reads a proof's length as an unsigned 16-bit value and rejects a longer proof outright, so the build is refused rather than assembled into a transaction no node can read back. A real spending proof is a few hundred bytes — check the paste for extra data.");
     }
     var extFields = inf.extension || [];
     if (!Array.isArray(extFields)) return fail("Input " + (i + 1) + ": the context extension is a list of key / constant entries.");
@@ -12851,6 +12865,11 @@ function attachTxProofs(txHex, proofsText) {
     if (lines[w] === "-") { wanted.push(null); continue; }
     var pb = hexToBytes(lines[w].replace(/[\s\u0085]+/g, ""));
     if (!pb || pb.length === 0) return fail("Proof line " + (w + 1) + " (for input " + (w + 1) + ") is not valid hex — a proof is bytes, pasted as an even number of 0-9/a-f characters, or a single dash (-) to leave that input unsigned. Nothing was attached.");
+    /* The same 65,535-byte proof bound tool 30's builder enforces:
+       upstream reads a proof's length as an unsigned 16-bit value
+       (ProofBytes::sigma_parse), so a longer proof assembled here
+       would write a length no node can read back. */
+    if (pb.length > 65535) return fail("Proof line " + (w + 1) + " (for input " + (w + 1) + ") is " + pb.length + " bytes — a spending proof is at most 65,535 bytes, because upstream reads a proof's length as an unsigned 16-bit value and rejects a longer proof outright. Nothing was attached. A real spending proof is a few hundred bytes — check the paste for extra data.");
     wanted.push(bytesToHex(pb));
   }
   var cleaned = String(txHex).replace(/[\s\u0085]+/g, "");

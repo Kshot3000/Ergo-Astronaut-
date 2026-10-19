@@ -9175,6 +9175,17 @@ function buildErgoBox(fields) {
   regBytes.forEach(function (rg) { push(rg.bytes); });
   push(Array.from(txBytes));
   push(writeVlqBig(BigInt(index)));
+  /* The serialized size is judged too: upstream validation refuses
+     an output box past ErgoBox::MAX_BOX_SIZE (4,096 bytes —
+     sigma-rust's verify_output, TxValidationError::BoxSizeExceeded),
+     and a box's script past the same 4,096 bound (ScriptSizeExceeded)
+     — a tree alone past the bound necessarily pushes the whole box
+     past it, so this one check covers both, and it is also where the
+     122-token safe maximum comes from: 123 minimal token entries
+     (32-byte ID + 1-byte amount each) plus the fixed fields can
+     never fit in 4,096 bytes. A 4,100-byte box and a 123-token box
+     both built valid here before this check. */
+  if (bytes.length > 4096) return fail("This box serializes to " + bytes.length + " bytes — more than the 4,096-byte maximum one box may occupy (the limit upstream validation enforces as BoxSizeExceeded), so it is refused rather than assembled into a box no node accepts. Shrink the ErgoTree, the token list or the registers so the serialized box fits in 4,096 bytes.");
   var boxHex = bytesToHex(Uint8Array.from(bytes));
   var parsed = parseErgoBox(boxHex);
   if (!parsed.valid) return fail("These fields assemble, but the result does not read back through the box parser (tool 15): " + parsed.reason + " The bytes are refused rather than shown unverified.");
@@ -9226,7 +9237,10 @@ function buildErgoBox(fields) {
    tool 17's builder. And the outputs' combined value is refused
    once it passes the signed 64-bit maximum — the other stateless
    check in that same upstream function, an overflowing output
-   sum (OutputSumOverflow). The transaction ID is the Blake2b-256 of the unsigned
+   sum (OutputSumOverflow). An output whose standalone box would
+   pass the 4,096-byte maximum box size is refused too (upstream
+   verify_output's BoxSizeExceeded — the embedded candidate
+   understates that size, so it is rebuilt field by field). The transaction ID is the Blake2b-256 of the unsigned
    rewrite — proofs stripped, extensions kept — exactly as tool 29
    recomputes it. The assembled bytes are round-tripped through
    tool 29's parser before they are shown, and every field
@@ -9392,6 +9406,26 @@ function buildErgoTransaction(fields) {
       if (!rc.valid) return fail(oWhat + ", register R" + (4 + r) + ": " + rc.reason);
       oRegs.push(rc);
     }
+    /* The output's STANDALONE size is judged too, the size the box
+       will have once this transaction creates it: upstream
+       validation refuses an output past ErgoBox::MAX_BOX_SIZE
+       (4,096 serialized bytes — sigma-rust's verify_output,
+       TxValidationError::BoxSizeExceeded; the script bound is the
+       same 4,096 and a tree past it pushes the box past it too).
+       The embedded candidate understates that size — its tokens are
+       named by a small index into the distinct-ID list where the
+       standalone box repeats each full 32-byte ID, and the creating
+       transaction's ID (32 bytes) and this output's index are not
+       in the candidate at all — so the standalone length is rebuilt
+       field by field exactly as tool 17's builder serializes a box
+       (the tests cross-check it against that builder's byteLength).
+       Tool 17's builder refuses the same bound for a standalone box. */
+    var standaloneSize = writeVlqBig(oValue).length + oTree.length + writeVlqBig(BigInt(oHeight)).length + writeVlqBig(BigInt(oTokens.length)).length;
+    oTokens.forEach(function (tk) { standaloneSize += 32 + writeVlqBig(tk.amount).length; });
+    standaloneSize += writeVlqBig(BigInt(oRegs.length)).length;
+    oRegs.forEach(function (rg) { standaloneSize += rg.bytes.length; });
+    standaloneSize += 32 + writeVlqBig(BigInt(o)).length;
+    if (standaloneSize > 4096) return fail(oWhat + "'s box would serialize to " + standaloneSize + " bytes once it carries this transaction's ID and its output index — more than the 4,096-byte maximum one box may occupy (the limit upstream validation enforces as BoxSizeExceeded), so the build is refused rather than assembled into a transaction creating a box no node accepts. Shrink that output's ErgoTree, token list or registers so its box fits in 4,096 bytes.");
     outputs.push({ value: oValue, treeBytes: oTree, treeHex: bytesToHex(oTree), height: oHeight, tokens: oTokens, registers: oRegs });
   }
   /* --- serialize --- */
